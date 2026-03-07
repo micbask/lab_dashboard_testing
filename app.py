@@ -100,6 +100,7 @@ DRIVE_CONFIGURED = (
     "gcp_service_account" in st.secrets and
     "google_drive" in st.secrets
 )
+GITHUB_CONFIGURED = "github" in st.secrets
 
 def _get_creds():
     """Build and refresh service account credentials with full Drive scope."""
@@ -133,6 +134,71 @@ def _get_authed_session():
 
 
 PARQUET_FILENAME = "lab_data.parquet"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GitHub storage helpers (used to read/write the master parquet file)
+# ─────────────────────────────────────────────────────────────────────────────
+def _gh_headers() -> dict:
+    token = st.secrets["github"]["token"]
+    return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+
+
+def _gh_coords() -> tuple[str, str, str]:
+    """Return (owner, repo, path) from secrets."""
+    repo  = st.secrets["github"]["repo"]          # e.g. "michaelbask/lab-dashboard"
+    path  = st.secrets["github"].get("data_path", "data/lab_data.parquet")
+    owner, repo_name = repo.split("/", 1)
+    return owner, repo_name, path
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def get_github_file_sha() -> str | None:
+    """Return the current blob SHA of the parquet file, or None if it doesn't exist."""
+    import requests as _r
+    owner, repo, path = _gh_coords()
+    resp = _r.get(
+        f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
+        headers=_gh_headers(), timeout=15,
+    )
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json()["sha"]
+
+
+def read_parquet_from_github() -> bytes:
+    """Download the parquet file bytes from GitHub."""
+    import requests as _r, base64
+    owner, repo, path = _gh_coords()
+    resp = _r.get(
+        f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
+        headers=_gh_headers(), timeout=30,
+    )
+    resp.raise_for_status()
+    return base64.b64decode(resp.json()["content"])
+
+
+def write_parquet_to_github(parquet_bytes: bytes):
+    """Create or update the parquet file in the GitHub repo."""
+    import requests as _r, base64
+    owner, repo, path = _gh_coords()
+    sha = get_github_file_sha()
+    payload = {
+        "message": "Update lab_data.parquet via dashboard",
+        "content": base64.b64encode(parquet_bytes).decode(),
+    }
+    if sha:
+        payload["sha"] = sha
+    resp = _r.put(
+        f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
+        headers=_gh_headers(),
+        json=payload,
+        timeout=60,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"GitHub write failed {resp.status_code}: {resp.text[:400]}")
+    # Bust the SHA cache so next read gets the new SHA
+    get_github_file_sha.clear()
 
 
 def get_parquet_file_meta(folder_id: str) -> dict | None:
@@ -376,22 +442,9 @@ def df_to_parquet_bytes(df: pd.DataFrame) -> bytes:
 # ─────────────────────────────────────────────────────────────────────────────
 # Auto-load from Google Drive (cached by the list of file IDs + modifiedTimes)
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(show_spinner="Loading data from Google Drive…", ttl=300)
-def load_from_drive(folder_id: str, parquet_modified_time: str) -> tuple[pd.DataFrame, list]:
-    """
-    Downloads the single pre-processed lab_data.parquet file from Drive.
-    parquet_modified_time is used as the cache key — the data is only
-    re-downloaded when the file actually changes on Drive.
-    """
-    meta = get_parquet_file_meta(folder_id)
-    if meta is None:
-        raise FileNotFoundError(
-            f"'{PARQUET_FILENAME}' not found in Drive folder.\n\n"
-            "Use the Data Management panel in the sidebar to upload your first XLSX file."
-        )
-    raw   = download_drive_file(meta["id"])
-    df    = pd.read_parquet(io.BytesIO(raw))
-    # Ensure date column is correct type after parquet round-trip
+def _parquet_bytes_to_df(raw: bytes) -> tuple[pd.DataFrame, list]:
+    """Convert raw parquet bytes to DataFrame + summary."""
+    df = pd.read_parquet(io.BytesIO(raw))
     if "complete_date" not in df.columns:
         df["complete_date"] = pd.to_datetime(df["Date/Time - Complete"]).dt.date
     if "hour" not in df.columns:
@@ -402,6 +455,22 @@ def load_from_drive(folder_id: str, parquet_modified_time: str) -> tuple[pd.Data
         "Date range": f"{df['complete_date'].min()} → {df['complete_date'].max()}",
     }]
     return df, summary
+
+
+@st.cache_data(show_spinner="Loading data…", ttl=300)
+def load_master_data(cache_key: str) -> tuple[pd.DataFrame, list]:
+    """Load master parquet — from GitHub if configured, else from Drive.
+    cache_key changes when the underlying file changes, busting the cache.
+    """
+    if GITHUB_CONFIGURED:
+        raw = read_parquet_from_github()
+    else:
+        folder_id = st.secrets["google_drive"]["folder_id"]
+        meta = get_parquet_file_meta(folder_id)
+        if meta is None:
+            raise FileNotFoundError("No data file found. Use Data Management to upload.")
+        raw = download_drive_file(meta["id"])
+    return _parquet_bytes_to_df(raw)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -613,12 +682,26 @@ with st.sidebar:
                             f"({len(new_df):,} rows)"
                         )
 
-                        existing_meta = get_parquet_file_meta(folder_id)
-                        if existing_meta:
-                            with st.spinner("Loading existing master dataset..."):
-                                existing_bytes = download_drive_file(existing_meta["id"])
-                                existing_df    = pd.read_parquet(io.BytesIO(existing_bytes))
-                        else:
+                        # Load existing master dataset
+                        try:
+                            if GITHUB_CONFIGURED:
+                                sha = get_github_file_sha()
+                                if sha:
+                                    with st.spinner("Loading existing master dataset..."):
+                                        existing_bytes = read_parquet_from_github()
+                                        existing_df = pd.read_parquet(io.BytesIO(existing_bytes))
+                                else:
+                                    existing_df = pd.DataFrame()
+                            else:
+                                folder_id_inner = st.secrets["google_drive"]["folder_id"]
+                                existing_meta = get_parquet_file_meta(folder_id_inner)
+                                if existing_meta:
+                                    with st.spinner("Loading existing master dataset..."):
+                                        existing_bytes = download_drive_file(existing_meta["id"])
+                                        existing_df    = pd.read_parquet(io.BytesIO(existing_bytes))
+                                else:
+                                    existing_df = pd.DataFrame()
+                        except Exception:
                             existing_df = pd.DataFrame()
 
                         with st.spinner("Merging and deduplicating..."):
@@ -631,14 +714,18 @@ with st.sidebar:
                                 rows_added  = stats["rows_added"]
                                 rows_before = stats["rows_before"]
 
-                        with st.spinner("Uploading updated master dataset to Drive..."):
+                        with st.spinner("Saving updated master dataset..."):
                             parquet_bytes = df_to_parquet_bytes(merged_df)
                             size_mb = len(parquet_bytes) / 1024 / 1024
-                            st.caption(f"Uploading {size_mb:.1f} MB parquet file...")
+                            st.caption(f"Saving {size_mb:.1f} MB...")
                             try:
-                                upload_parquet_to_drive(folder_id, parquet_bytes)
+                                if GITHUB_CONFIGURED:
+                                    write_parquet_to_github(parquet_bytes)
+                                else:
+                                    folder_id = st.secrets["google_drive"]["folder_id"]
+                                    upload_parquet_to_drive(folder_id, parquet_bytes)
                             except Exception as upload_err:
-                                st.error(f"Upload failed: {upload_err}")
+                                st.error(f"Save failed: {upload_err}")
                                 st.stop()
 
                         st.success(
