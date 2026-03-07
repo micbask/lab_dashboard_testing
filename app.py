@@ -182,7 +182,24 @@ def write_parquet_to_github(parquet_bytes: bytes):
     """Create or update the parquet file in the GitHub repo."""
     import requests as _r, base64
     owner, repo, path = _gh_coords()
+
+    # Verify the repo is accessible before trying to write
+    check = _r.get(
+        f"https://api.github.com/repos/{owner}/{repo}",
+        headers=_gh_headers(), timeout=15,
+    )
+    if check.status_code == 404:
+        raise RuntimeError(
+            f"Repo not found: '{owner}/{repo}'.\n\n"
+            f"Check that the 'repo' value in your Streamlit secrets exactly matches "
+            f"your GitHub repo name (it's case-sensitive).\n"
+            f"It should look like: username/repo-name"
+        )
+    check.raise_for_status()
+
     sha = get_github_file_sha()
+    # Strip any leading slash from path
+    clean_path = path.lstrip("/")
     payload = {
         "message": "Update lab_data.parquet via dashboard",
         "content": base64.b64encode(parquet_bytes).decode(),
@@ -190,14 +207,18 @@ def write_parquet_to_github(parquet_bytes: bytes):
     if sha:
         payload["sha"] = sha
     resp = _r.put(
-        f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
+        f"https://api.github.com/repos/{owner}/{repo}/contents/{clean_path}",
         headers=_gh_headers(),
         json=payload,
         timeout=60,
     )
     if not resp.ok:
-        raise RuntimeError(f"GitHub write failed {resp.status_code}: {resp.text[:400]}")
-    # Bust the SHA cache so next read gets the new SHA
+        raise RuntimeError(
+            f"GitHub write failed {resp.status_code}:\n"
+            f"Repo: {owner}/{repo}\n"
+            f"Path: {clean_path}\n"
+            f"Response: {resp.text[:300]}"
+        )
     get_github_file_sha.clear()
 
 
@@ -622,37 +643,90 @@ with st.sidebar:
     raw_df    = None
     merge_log = []
 
-    if DRIVE_CONFIGURED:
-        folder_id = st.secrets["google_drive"]["folder_id"]
-        st.markdown("**Data source:** Google Drive folder")
-
-        if st.button("Refresh data from Drive", use_container_width=True):
-            st.cache_data.clear()
-
+    # ── Handle pending upload (must run before any st.stop / cache calls) ──
+    if "pending_upload" in st.session_state:
+        pending = st.session_state.pop("pending_upload")
+        with st.spinner(f"Processing {pending['name']}..."):
+            new_df = parse_single_file(pending["bytes"], filename=pending["name"])
+        st.caption(
+            f"New file: {new_df['complete_date'].min()} → {new_df['complete_date'].max()} "
+            f"({len(new_df):,} rows)"
+        )
+        # Load existing master
         try:
-            meta = get_parquet_file_meta(folder_id)
-            if meta is None:
-                st.warning(
-                    f"No '{PARQUET_FILENAME}' found in Drive folder.\n\n"
-                    "Use the **Data Management** panel below to upload your first XLSX file."
-                )
+            if GITHUB_CONFIGURED:
+                sha = get_github_file_sha()
+                existing_df = pd.read_parquet(io.BytesIO(read_parquet_from_github())) if sha else pd.DataFrame()
             else:
-                modified = meta["modifiedTime"]
-                st.caption(f"Data file last updated: {modified[:10]}")
-                raw_df, merge_log = load_from_drive(folder_id, modified)
-        except Exception as e:
-            st.error(f"Drive error: {e}")
-            meta = None
+                folder_id_e = st.secrets["google_drive"]["folder_id"]
+                em = get_parquet_file_meta(folder_id_e)
+                existing_df = pd.read_parquet(io.BytesIO(download_drive_file(em["id"]))) if em else pd.DataFrame()
+        except Exception:
+            existing_df = pd.DataFrame()
 
-        # ── Data Management ───────────────────────────────────────────────
+        with st.spinner("Merging and deduplicating..."):
+            if existing_df.empty:
+                merged_df   = new_df
+                rows_before = 0
+            else:
+                merged_df, _stats = merge_new_into_parquet(existing_df, new_df)
+                rows_before = _stats["rows_before"]
+
+        with st.spinner("Saving master dataset..."):
+            pq_bytes = df_to_parquet_bytes(merged_df)
+            try:
+                if GITHUB_CONFIGURED:
+                    write_parquet_to_github(pq_bytes)
+                else:
+                    upload_parquet_to_drive(st.secrets["google_drive"]["folder_id"], pq_bytes)
+                st.success(
+                    f"Saved! {rows_before:,} → {len(merged_df):,} rows "
+                    f"(+{len(merged_df)-rows_before:,} new)"
+                )
+            except Exception as ue:
+                st.error(f"Save failed: {ue}")
+        st.cache_data.clear()
+
+    # ── Load master data ───────────────────────────────────────────────────
+    if GITHUB_CONFIGURED or DRIVE_CONFIGURED:
+        if GITHUB_CONFIGURED:
+            st.markdown("**Data source:** GitHub")
+        else:
+            st.markdown("**Data source:** Google Drive")
+
+        if st.button("Refresh data", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+
+        _data_exists = False
+        try:
+            if GITHUB_CONFIGURED:
+                _sha = get_github_file_sha()
+                _data_exists = _sha is not None
+                if _data_exists:
+                    st.caption("Data file ready")
+                    raw_df, merge_log = load_master_data(_sha)
+                else:
+                    st.warning("No data yet. Use **Data Management** below.")
+            else:
+                _folder_id = st.secrets["google_drive"]["folder_id"]
+                _meta = get_parquet_file_meta(_folder_id)
+                _data_exists = _meta is not None
+                if _data_exists:
+                    st.caption(f"Data last updated: {_meta['modifiedTime'][:10]}")
+                    raw_df, merge_log = load_master_data(_meta["modifiedTime"])
+                else:
+                    st.warning("No data yet. Use **Data Management** below.")
+        except Exception as e:
+            st.error(f"Error loading data: {e}")
+
+        # ── Data Management expander ───────────────────────────────────────
         st.markdown("---")
-        _no_data = (meta is None) if "meta" in dir() else True
-        with st.expander("Data Management", expanded=_no_data):
+        with st.expander("Data Management", expanded=not _data_exists):
             st.markdown(
                 "Upload a new XLSX export to add it to the master dataset. "
                 "Overlapping date ranges are handled automatically."
             )
-
             admin_pw = st.secrets.get("admin_password", None)
             if admin_pw:
                 entered_pw = st.text_input("Admin password", type="password", key="admin_pw")
@@ -669,83 +743,27 @@ with st.sidebar:
                     key="admin_upload",
                 )
                 if new_file is not None:
-                    new_bytes = new_file.read()
-                    st.caption(f"File: {new_file.name}")
-
+                    # Save bytes immediately — file_uploader loses state on button click rerun
+                    if "staged_bytes" not in st.session_state or st.session_state.get("staged_name") != new_file.name:
+                        st.session_state["staged_bytes"] = new_file.read()
+                        st.session_state["staged_name"]  = new_file.name
+                    st.caption(f"Ready: {new_file.name}")
                     if st.button("Process and add to master dataset",
                                  type="primary", use_container_width=True):
-                        with st.spinner("Parsing new file..."):
-                            new_df = parse_single_file(new_bytes, filename=new_file.name)
-                        st.caption(
-                            f"New file: {new_df['complete_date'].min()} → "
-                            f"{new_df['complete_date'].max()}  "
-                            f"({len(new_df):,} rows)"
-                        )
-
-                        # Load existing master dataset
-                        try:
-                            if GITHUB_CONFIGURED:
-                                sha = get_github_file_sha()
-                                if sha:
-                                    with st.spinner("Loading existing master dataset..."):
-                                        existing_bytes = read_parquet_from_github()
-                                        existing_df = pd.read_parquet(io.BytesIO(existing_bytes))
-                                else:
-                                    existing_df = pd.DataFrame()
-                            else:
-                                folder_id_inner = st.secrets["google_drive"]["folder_id"]
-                                existing_meta = get_parquet_file_meta(folder_id_inner)
-                                if existing_meta:
-                                    with st.spinner("Loading existing master dataset..."):
-                                        existing_bytes = download_drive_file(existing_meta["id"])
-                                        existing_df    = pd.read_parquet(io.BytesIO(existing_bytes))
-                                else:
-                                    existing_df = pd.DataFrame()
-                        except Exception:
-                            existing_df = pd.DataFrame()
-
-                        with st.spinner("Merging and deduplicating..."):
-                            if existing_df.empty:
-                                merged_df = new_df
-                                rows_added = len(new_df)
-                                rows_before = 0
-                            else:
-                                merged_df, stats = merge_new_into_parquet(existing_df, new_df)
-                                rows_added  = stats["rows_added"]
-                                rows_before = stats["rows_before"]
-
-                        with st.spinner("Saving updated master dataset..."):
-                            parquet_bytes = df_to_parquet_bytes(merged_df)
-                            size_mb = len(parquet_bytes) / 1024 / 1024
-                            st.caption(f"Saving {size_mb:.1f} MB...")
-                            try:
-                                if GITHUB_CONFIGURED:
-                                    write_parquet_to_github(parquet_bytes)
-                                else:
-                                    folder_id = st.secrets["google_drive"]["folder_id"]
-                                    upload_parquet_to_drive(folder_id, parquet_bytes)
-                            except Exception as upload_err:
-                                st.error(f"Save failed: {upload_err}")
-                                st.stop()
-
-                        st.success(
-                            f"Done! Added {rows_added:,} rows "
-                            f"(total: {rows_before:,} → {len(merged_df):,})"
-                        )
-                        st.cache_data.clear()
+                        st.session_state["pending_upload"] = {
+                            "bytes": st.session_state["staged_bytes"],
+                            "name":  st.session_state["staged_name"],
+                        }
+                        st.session_state.pop("staged_bytes", None)
+                        st.session_state.pop("staged_name",  None)
                         st.rerun()
 
     else:
         st.markdown("**Data source:** File upload")
-        st.caption(
-            "Google Drive is not configured. "
-            "Upload one or more Excel files below."
-        )
+        st.caption("Configure Google Drive or GitHub in secrets to enable auto-loading.")
         uploaded_files = st.file_uploader(
-            "Upload Excel file(s)",
-            type=["xlsx", "xls"],
+            "Upload Excel file(s)", type=["xlsx", "xls"],
             accept_multiple_files=True,
-            help="Upload multiple files — overlapping date ranges are handled automatically.",
         )
         if uploaded_files:
             files_bytes = [(f.name, f.read()) for f in uploaded_files]
@@ -833,6 +851,78 @@ with st.sidebar:
                     st.cache_data.clear()
                     st.rerun()
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Process pending upload (runs in main panel where st.status is fully visible)
+# ─────────────────────────────────────────────────────────────────────────────
+if "pending_upload" in st.session_state and st.session_state["pending_upload"]:
+    upload_info = st.session_state["pending_upload"]
+    st.markdown("## Processing new data file...")
+
+    with st.status("Processing...", expanded=True) as status:
+        st.write(f"Parsing **{upload_info['name']}**...")
+        try:
+            new_df = parse_single_file(upload_info["bytes"], filename=upload_info["name"])
+            st.write(f"Parsed {len(new_df):,} rows "
+                     f"({new_df['complete_date'].min()} → {new_df['complete_date'].max()})")
+
+            st.write("Loading existing master dataset...")
+            try:
+                if GITHUB_CONFIGURED:
+                    sha = get_github_file_sha()
+                    if sha:
+                        existing_bytes = read_parquet_from_github()
+                        existing_df = pd.read_parquet(io.BytesIO(existing_bytes))
+                        st.write(f"Existing dataset: {len(existing_df):,} rows")
+                    else:
+                        existing_df = pd.DataFrame()
+                        st.write("No existing dataset — creating new master.")
+                else:
+                    folder_id_up = st.secrets["google_drive"]["folder_id"]
+                    existing_meta = get_parquet_file_meta(folder_id_up)
+                    if existing_meta:
+                        existing_bytes = download_drive_file(existing_meta["id"])
+                        existing_df = pd.read_parquet(io.BytesIO(existing_bytes))
+                        st.write(f"Existing dataset: {len(existing_df):,} rows")
+                    else:
+                        existing_df = pd.DataFrame()
+                        st.write("No existing dataset — creating new master.")
+            except Exception:
+                existing_df = pd.DataFrame()
+                st.write("No existing dataset — creating new master.")
+
+            st.write("Merging and deduplicating...")
+            if existing_df.empty:
+                merged_df   = new_df
+                rows_before = 0
+                rows_added  = len(new_df)
+            else:
+                merged_df, _stats = merge_new_into_parquet(existing_df, new_df)
+                rows_before = _stats["rows_before"]
+                rows_added  = _stats["rows_added"]
+            st.write(f"Merged: {rows_before:,} → {len(merged_df):,} rows (+{rows_added:,})")
+
+            st.write("Saving to GitHub...")
+            parquet_bytes_up = df_to_parquet_bytes(merged_df)
+            size_mb = len(parquet_bytes_up) / 1024 / 1024
+            st.write(f"File size: {size_mb:.2f} MB")
+            if GITHUB_CONFIGURED:
+                write_parquet_to_github(parquet_bytes_up)
+            else:
+                folder_id_up = st.secrets["google_drive"]["folder_id"]
+                upload_parquet_to_drive(folder_id_up, parquet_bytes_up)
+
+            status.update(label=f"Done! Added {rows_added:,} rows to master dataset.",
+                          state="complete")
+            st.session_state.pop("pending_upload", None)
+            st.cache_data.clear()
+            st.rerun()
+
+        except Exception as proc_err:
+            status.update(label="Processing failed.", state="error")
+            st.error(str(proc_err))
+            st.session_state.pop("pending_upload", None)
+    st.stop()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main panel
