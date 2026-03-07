@@ -113,9 +113,26 @@ def get_drive_service():
 
 
 def list_drive_files(folder_id: str) -> list[dict]:
-    """Return list of xlsx/xls file metadata in the given Drive folder.
-    Supports both personal My Drive folders and Shared/Team Drives."""
+    """Return list of xlsx/xls file metadata in the given Drive folder."""
     service = get_drive_service()
+
+    # Step 1: Verify the folder is accessible at all
+    try:
+        service.files().get(
+            fileId=folder_id,
+            supportsAllDrives=True,
+            fields="id, name",
+        ).execute()
+    except Exception as e:
+        raise PermissionError(
+            f"Cannot access folder '{folder_id}'.\n\n"
+            f"Most likely cause: the folder has not been shared with the service account.\n\n"
+            f"Fix: In Google Drive, right-click the folder → Share → add this email as Viewer:\n"
+            f"  {st.secrets['gcp_service_account']['client_email']}\n\n"
+            f"Original error: {e}"
+        )
+
+    # Step 2: List Excel files inside it
     query = (
         f"'{folder_id}' in parents and trashed = false and "
         "(mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' "
@@ -125,8 +142,8 @@ def list_drive_files(folder_id: str) -> list[dict]:
         q=query,
         fields="files(id, name, modifiedTime)",
         orderBy="name",
-        includeItemsFromAllDrives=True,
         supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
     ).execute()
     return result.get("files", [])
 
@@ -417,6 +434,8 @@ with st.sidebar:
             else:
                 st.caption(f"{len(file_list)} file(s) found in Drive folder")
                 raw_df, merge_log = load_from_drive(folder_id, file_manifest)
+        except PermissionError as e:
+            st.error(str(e))
         except Exception as e:
             st.error(f"Drive error: {e}")
 
