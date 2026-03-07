@@ -150,39 +150,104 @@ def download_drive_file(file_id: str, retries: int = 4) -> bytes:
             time.sleep(wait)
     raise RuntimeError(f"Failed to download file after {retries} attempts: {last_err}")
 
-def upload_parquet_to_drive(folder_id: str, parquet_bytes: bytes):
-    """Upload or overwrite lab_data.parquet using simple (non-resumable) multipart upload."""
-    import httplib2
-    from googleapiclient.http import MediaIoBaseUpload as _Upload
-
-    service = get_drive_service()
-
-    existing = service.files().list(
-        q=f"'{folder_id}' in parents and name='{PARQUET_FILENAME}' and trashed=false",
-        fields="files(id)",
-        supportsAllDrives=True,
-        includeItemsFromAllDrives=True,
-    ).execute().get("files", [])
-
-    # Non-resumable upload — more reliable on cloud environments
-    media = _Upload(
-        io.BytesIO(parquet_bytes),
-        mimetype="application/octet-stream",
-        resumable=False,
+def _get_access_token() -> str:
+    """Get a fresh OAuth2 access token from the service account credentials."""
+    import google.auth.transport.requests as ga_requests
+    creds_info = dict(st.secrets["gcp_service_account"])
+    if "private_key" in creds_info:
+        creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
+    creds = service_account.Credentials.from_service_account_info(
+        creds_info,
+        scopes=["https://www.googleapis.com/auth/drive"],
     )
-    if existing:
-        service.files().update(
-            fileId=existing[0]["id"],
-            media_body=media,
-            supportsAllDrives=True,
-        ).execute()
+    creds.refresh(ga_requests.Request())
+    return creds.token
+
+
+def upload_parquet_to_drive(folder_id: str, parquet_bytes: bytes):
+    """Upload or overwrite lab_data.parquet using direct HTTP requests.
+    Bypasses the googleapiclient upload which is unreliable on Streamlit Cloud.
+    """
+    import requests as _req
+
+    token = _get_access_token()
+    headers_auth = {"Authorization": f"Bearer {token}"}
+    size_mb = len(parquet_bytes) / 1024 / 1024
+
+    # Find existing file ID if any
+    list_resp = _req.get(
+        "https://www.googleapis.com/drive/v3/files",
+        headers=headers_auth,
+        params={
+            "q": f"'{folder_id}' in parents and name='{PARQUET_FILENAME}' and trashed=false",
+            "fields": "files(id)",
+            "supportsAllDrives": "true",
+            "includeItemsFromAllDrives": "true",
+        },
+        timeout=30,
+    )
+    list_resp.raise_for_status()
+    existing = list_resp.json().get("files", [])
+
+    if size_mb <= 4:
+        # Small file — simple multipart upload
+        import email.mime.multipart, email.mime.base, email.mime.application
+        meta = json.dumps(
+            {"name": PARQUET_FILENAME}
+            if existing else
+            {"name": PARQUET_FILENAME, "parents": [folder_id]}
+        ).encode()
+        boundary = "lab_heatmap_boundary"
+        body = (
+            f"--{boundary}\r\n"
+            f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
+        ).encode() + meta + (
+            f"\r\n--{boundary}\r\n"
+            f"Content-Type: application/octet-stream\r\n\r\n"
+        ).encode() + parquet_bytes + f"\r\n--{boundary}--".encode()
+
+        if existing:
+            url = f"https://www.googleapis.com/upload/drive/v3/files/{existing[0]['id']}?uploadType=multipart&supportsAllDrives=true"
+            resp = _req.patch(url, headers={**headers_auth, "Content-Type": f"multipart/related; boundary={boundary}"}, data=body, timeout=60)
+        else:
+            url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true"
+            resp = _req.post(url, headers={**headers_auth, "Content-Type": f"multipart/related; boundary={boundary}"}, data=body, timeout=60)
+        resp.raise_for_status()
+
     else:
-        service.files().create(
-            body={"name": PARQUET_FILENAME, "parents": [folder_id]},
-            media_body=media,
-            fields="id",
-            supportsAllDrives=True,
-        ).execute()
+        # Large file — resumable upload via direct HTTP
+        meta = json.dumps(
+            {"name": PARQUET_FILENAME}
+            if existing else
+            {"name": PARQUET_FILENAME, "parents": [folder_id]}
+        )
+        if existing:
+            init_url = f"https://www.googleapis.com/upload/drive/v3/files/{existing[0]['id']}?uploadType=resumable&supportsAllDrives=true"
+            init_resp = _req.patch(init_url, headers={**headers_auth, "Content-Type": "application/json", "X-Upload-Content-Type": "application/octet-stream", "X-Upload-Content-Length": str(len(parquet_bytes))}, data=meta, timeout=30)
+        else:
+            init_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
+            init_resp = _req.post(init_url, headers={**headers_auth, "Content-Type": "application/json", "X-Upload-Content-Type": "application/octet-stream", "X-Upload-Content-Length": str(len(parquet_bytes))}, data=meta, timeout=30)
+        init_resp.raise_for_status()
+        session_url = init_resp.headers["Location"]
+
+        # Upload in 4MB chunks
+        chunk = 4 * 1024 * 1024
+        offset = 0
+        while offset < len(parquet_bytes):
+            end = min(offset + chunk, len(parquet_bytes))
+            chunk_data = parquet_bytes[offset:end]
+            chunk_resp = _req.put(
+                session_url,
+                headers={
+                    "Content-Range": f"bytes {offset}-{end-1}/{len(parquet_bytes)}",
+                    "Content-Type": "application/octet-stream",
+                },
+                data=chunk_data,
+                timeout=120,
+            )
+            if chunk_resp.status_code not in (200, 201, 308):
+                chunk_resp.raise_for_status()
+            offset = end
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -586,7 +651,13 @@ with st.sidebar:
 
                         with st.spinner("Uploading updated master dataset to Drive..."):
                             parquet_bytes = df_to_parquet_bytes(merged_df)
-                            upload_parquet_to_drive(folder_id, parquet_bytes)
+                            size_mb = len(parquet_bytes) / 1024 / 1024
+                            st.caption(f"Uploading {size_mb:.1f} MB parquet file...")
+                            try:
+                                upload_parquet_to_drive(folder_id, parquet_bytes)
+                            except Exception as upload_err:
+                                st.error(f"Upload failed: {upload_err}")
+                                st.stop()
 
                         st.success(
                             f"Done! Added {rows_added:,} rows "
