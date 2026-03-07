@@ -151,9 +151,12 @@ def download_drive_file(file_id: str, retries: int = 4) -> bytes:
     raise RuntimeError(f"Failed to download file after {retries} attempts: {last_err}")
 
 def upload_parquet_to_drive(folder_id: str, parquet_bytes: bytes):
-    """Upload or overwrite lab_data.parquet in the Drive folder."""
-    service = get_drive_service()
+    """Upload or overwrite lab_data.parquet using simple (non-resumable) multipart upload."""
+    import httplib2
     from googleapiclient.http import MediaIoBaseUpload as _Upload
+
+    service = get_drive_service()
+
     existing = service.files().list(
         q=f"'{folder_id}' in parents and name='{PARQUET_FILENAME}' and trashed=false",
         fields="files(id)",
@@ -161,11 +164,11 @@ def upload_parquet_to_drive(folder_id: str, parquet_bytes: bytes):
         includeItemsFromAllDrives=True,
     ).execute().get("files", [])
 
+    # Non-resumable upload — more reliable on cloud environments
     media = _Upload(
         io.BytesIO(parquet_bytes),
         mimetype="application/octet-stream",
-        chunksize=8 * 1024 * 1024,
-        resumable=True,
+        resumable=False,
     )
     if existing:
         service.files().update(
