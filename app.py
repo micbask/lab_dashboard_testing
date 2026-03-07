@@ -1,11 +1,7 @@
 import io
 import json
-import hashlib
-import pickle
-import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -159,16 +155,6 @@ REQUIRED_COLS = {
     "Complete Volume",
 }
 
-# Disk cache directory for processed files (persists across Streamlit reruns)
-_CACHE_DIR = Path(tempfile.gettempdir()) / "lab_heatmap_cache"
-_CACHE_DIR.mkdir(exist_ok=True)
-
-
-def _file_cache_path(file_id: str, modified_time: str) -> Path:
-    key = hashlib.md5(f"{file_id}_{modified_time}".encode()).hexdigest()
-    return _CACHE_DIR / f"{key}.pkl"
-
-
 def parse_single_file(file_bytes: bytes, filename: str = "") -> pd.DataFrame:
     """Parse CSV or Excel file into a clean DataFrame, loading only needed columns."""
     fname = filename.lower()
@@ -278,15 +264,9 @@ def deduplicate_and_merge(frames: list[tuple[str, pd.DataFrame]]) -> pd.DataFram
 # Auto-load from Google Drive (cached by the list of file IDs + modifiedTimes)
 # ─────────────────────────────────────────────────────────────────────────────
 def _load_one_file(f: dict) -> tuple[str, pd.DataFrame]:
-    """Download and parse a single Drive file, using disk cache if unchanged."""
-    cache_path = _file_cache_path(f["id"], f["modifiedTime"])
-    if cache_path.exists():
-        with open(cache_path, "rb") as fh:
-            return f["name"], pickle.load(fh)
+    """Download and parse a single Drive file."""
     raw = download_drive_file(f["id"])
     df  = parse_single_file(raw, filename=f["name"])
-    with open(cache_path, "wb") as fh:
-        pickle.dump(df, fh)
     return f["name"], df
 
 
