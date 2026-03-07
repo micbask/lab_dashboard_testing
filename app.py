@@ -101,17 +101,30 @@ DRIVE_CONFIGURED = (
     "google_drive" in st.secrets
 )
 
-@st.cache_resource(show_spinner=False)
-def get_drive_service():
+def _build_creds():
+    """Build service account credentials with full Drive scope."""
+    import google.auth.transport.requests as _ga_req
     creds_info = dict(st.secrets["gcp_service_account"])
-    # Streamlit stores the private key with literal \n — convert to real newlines
     if "private_key" in creds_info:
         creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
     creds = service_account.Credentials.from_service_account_info(
         creds_info,
         scopes=["https://www.googleapis.com/auth/drive"],
     )
+    creds.refresh(_ga_req.Request())
+    return creds
+
+
+@st.cache_resource(show_spinner=False)
+def get_drive_service():
+    """Cached Drive API service for read operations (list, download)."""
+    creds = _build_creds()
     return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+
+def get_fresh_token() -> str:
+    """Always get a fresh token for write operations — never use cached credentials."""
+    return _build_creds().token
 
 
 PARQUET_FILENAME = "lab_data.parquet"
@@ -150,27 +163,13 @@ def download_drive_file(file_id: str, retries: int = 4) -> bytes:
             time.sleep(wait)
     raise RuntimeError(f"Failed to download file after {retries} attempts: {last_err}")
 
-def _get_access_token() -> str:
-    """Get a fresh OAuth2 access token from the service account credentials."""
-    import google.auth.transport.requests as ga_requests
-    creds_info = dict(st.secrets["gcp_service_account"])
-    if "private_key" in creds_info:
-        creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
-    creds = service_account.Credentials.from_service_account_info(
-        creds_info,
-        scopes=["https://www.googleapis.com/auth/drive"],
-    )
-    creds.refresh(ga_requests.Request())
-    return creds.token
-
-
 def upload_parquet_to_drive(folder_id: str, parquet_bytes: bytes):
     """Upload or overwrite lab_data.parquet using direct HTTP requests.
     Bypasses the googleapiclient upload which is unreliable on Streamlit Cloud.
     """
     import requests as _req
 
-    token = _get_access_token()
+    token = get_fresh_token()
     headers_auth = {"Authorization": f"Bearer {token}"}
     size_mb = len(parquet_bytes) / 1024 / 1024
 
