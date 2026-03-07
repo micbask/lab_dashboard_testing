@@ -101,30 +101,35 @@ DRIVE_CONFIGURED = (
     "google_drive" in st.secrets
 )
 
-def _build_creds():
-    """Build service account credentials with full Drive scope."""
-    import google.auth.transport.requests as _ga_req
+def _get_creds():
+    """Build and refresh service account credentials with full Drive scope."""
+    from google.auth.transport.requests import Request as _GReq
     creds_info = dict(st.secrets["gcp_service_account"])
-    if "private_key" in creds_info:
-        creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
+    # Normalise private key — Streamlit TOML may store \n as literal backslash-n
+    pk = creds_info.get("private_key", "")
+    if "\\n" in pk:
+        pk = pk.replace("\\n", "\n")
+    creds_info["private_key"] = pk
     creds = service_account.Credentials.from_service_account_info(
         creds_info,
         scopes=["https://www.googleapis.com/auth/drive"],
     )
-    creds.refresh(_ga_req.Request())
+    creds.refresh(_GReq())
     return creds
 
 
 @st.cache_resource(show_spinner=False)
 def get_drive_service():
-    """Cached Drive API service for read operations (list, download)."""
-    creds = _build_creds()
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+    """Cached Drive API service (uses full drive scope)."""
+    return build("drive", "v3", credentials=_get_creds(), cache_discovery=False)
 
 
-def get_fresh_token() -> str:
-    """Always get a fresh token for write operations — never use cached credentials."""
-    return _build_creds().token
+def _get_authed_session():
+    """Return a requests.Session pre-authorised with fresh Drive credentials.
+    Never cached — always fresh for write operations.
+    """
+    from google.auth.transport.requests import AuthorizedSession
+    return AuthorizedSession(_get_creds())
 
 
 PARQUET_FILENAME = "lab_data.parquet"
@@ -164,19 +169,14 @@ def download_drive_file(file_id: str, retries: int = 4) -> bytes:
     raise RuntimeError(f"Failed to download file after {retries} attempts: {last_err}")
 
 def upload_parquet_to_drive(folder_id: str, parquet_bytes: bytes):
-    """Upload or overwrite lab_data.parquet using direct HTTP requests.
-    Bypasses the googleapiclient upload which is unreliable on Streamlit Cloud.
+    """Upload or overwrite lab_data.parquet in Drive using AuthorizedSession.
+    AuthorizedSession handles token injection automatically — no manual auth headers.
     """
-    import requests as _req
+    session = _get_authed_session()
 
-    token = get_fresh_token()
-    headers_auth = {"Authorization": f"Bearer {token}"}
-    size_mb = len(parquet_bytes) / 1024 / 1024
-
-    # Find existing file ID if any
-    list_resp = _req.get(
+    # Step 1 — check if file already exists
+    list_resp = session.get(
         "https://www.googleapis.com/drive/v3/files",
-        headers=headers_auth,
         params={
             "q": f"'{folder_id}' in parents and name='{PARQUET_FILENAME}' and trashed=false",
             "fields": "files(id)",
@@ -188,65 +188,48 @@ def upload_parquet_to_drive(folder_id: str, parquet_bytes: bytes):
     list_resp.raise_for_status()
     existing = list_resp.json().get("files", [])
 
-    if size_mb <= 4:
-        # Small file — simple multipart upload
-        import email.mime.multipart, email.mime.base, email.mime.application
-        meta = json.dumps(
-            {"name": PARQUET_FILENAME}
-            if existing else
-            {"name": PARQUET_FILENAME, "parents": [folder_id]}
-        ).encode()
-        boundary = "lab_heatmap_boundary"
-        body = (
-            f"--{boundary}\r\n"
-            f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
-        ).encode() + meta + (
-            f"\r\n--{boundary}\r\n"
-            f"Content-Type: application/octet-stream\r\n\r\n"
-        ).encode() + parquet_bytes + f"\r\n--{boundary}--".encode()
+    # Step 2 — build multipart body
+    boundary = "lab_heatmap_upload_boundary"
+    meta_json = json.dumps(
+        {"name": PARQUET_FILENAME} if existing
+        else {"name": PARQUET_FILENAME, "parents": [folder_id]}
+    ).encode("utf-8")
+    sep = b"\r\n"
+    body = (
+        b"--" + boundary.encode() + sep
+        + b"Content-Type: application/json; charset=UTF-8" + sep + sep
+        + meta_json + sep
+        + b"--" + boundary.encode() + sep
+        + b"Content-Type: application/octet-stream" + sep + sep
+        + parquet_bytes + sep
+        + b"--" + boundary.encode() + b"--" + sep
+    )
 
-        if existing:
-            url = f"https://www.googleapis.com/upload/drive/v3/files/{existing[0]['id']}?uploadType=multipart&supportsAllDrives=true"
-            resp = _req.patch(url, headers={**headers_auth, "Content-Type": f"multipart/related; boundary={boundary}"}, data=body, timeout=60)
-        else:
-            url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true"
-            resp = _req.post(url, headers={**headers_auth, "Content-Type": f"multipart/related; boundary={boundary}"}, data=body, timeout=60)
-        resp.raise_for_status()
+    headers = {"Content-Type": f"multipart/related; boundary={boundary}"}
 
-    else:
-        # Large file — resumable upload via direct HTTP
-        meta = json.dumps(
-            {"name": PARQUET_FILENAME}
-            if existing else
-            {"name": PARQUET_FILENAME, "parents": [folder_id]}
+    # Step 3 — upload
+    if existing:
+        file_id = existing[0]["id"]
+        resp = session.patch(
+            f"https://www.googleapis.com/upload/drive/v3/files/{file_id}",
+            params={"uploadType": "multipart", "supportsAllDrives": "true"},
+            headers=headers,
+            data=body,
+            timeout=120,
         )
-        if existing:
-            init_url = f"https://www.googleapis.com/upload/drive/v3/files/{existing[0]['id']}?uploadType=resumable&supportsAllDrives=true"
-            init_resp = _req.patch(init_url, headers={**headers_auth, "Content-Type": "application/json", "X-Upload-Content-Type": "application/octet-stream", "X-Upload-Content-Length": str(len(parquet_bytes))}, data=meta, timeout=30)
-        else:
-            init_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
-            init_resp = _req.post(init_url, headers={**headers_auth, "Content-Type": "application/json", "X-Upload-Content-Type": "application/octet-stream", "X-Upload-Content-Length": str(len(parquet_bytes))}, data=meta, timeout=30)
-        init_resp.raise_for_status()
-        session_url = init_resp.headers["Location"]
+    else:
+        resp = session.post(
+            "https://www.googleapis.com/upload/drive/v3/files",
+            params={"uploadType": "multipart", "supportsAllDrives": "true"},
+            headers=headers,
+            data=body,
+            timeout=120,
+        )
 
-        # Upload in 4MB chunks
-        chunk = 4 * 1024 * 1024
-        offset = 0
-        while offset < len(parquet_bytes):
-            end = min(offset + chunk, len(parquet_bytes))
-            chunk_data = parquet_bytes[offset:end]
-            chunk_resp = _req.put(
-                session_url,
-                headers={
-                    "Content-Range": f"bytes {offset}-{end-1}/{len(parquet_bytes)}",
-                    "Content-Type": "application/octet-stream",
-                },
-                data=chunk_data,
-                timeout=120,
-            )
-            if chunk_resp.status_code not in (200, 201, 308):
-                chunk_resp.raise_for_status()
-            offset = end
+    if not resp.ok:
+        raise RuntimeError(
+            f"Upload failed {resp.status_code}: {resp.text[:500]}"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
