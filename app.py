@@ -113,7 +113,8 @@ def get_drive_service():
 
 
 def list_drive_files(folder_id: str) -> list[dict]:
-    """Return list of xlsx/xls file metadata in the given Drive folder."""
+    """Return list of xlsx/xls file metadata in the given Drive folder.
+    Supports both personal My Drive folders and Shared/Team Drives."""
     service = get_drive_service()
     query = (
         f"'{folder_id}' in parents and trashed = false and "
@@ -124,6 +125,8 @@ def list_drive_files(folder_id: str) -> list[dict]:
         q=query,
         fields="files(id, name, modifiedTime)",
         orderBy="name",
+        includeItemsFromAllDrives=True,
+        supportsAllDrives=True,
     ).execute()
     return result.get("files", [])
 
@@ -131,7 +134,10 @@ def list_drive_files(folder_id: str) -> list[dict]:
 def download_drive_file(file_id: str) -> bytes:
     """Download a file from Drive and return its raw bytes."""
     service = get_drive_service()
-    request = service.files().get_media(fileId=file_id)
+    request = service.files().get_media(
+        fileId=file_id,
+        supportsAllDrives=True,
+    )
     buf = io.BytesIO()
     downloader = MediaIoBaseDownload(buf, request)
     done = False
