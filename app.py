@@ -175,13 +175,20 @@ def read_parquet_from_github() -> bytes:
         headers=_gh_headers(), timeout=30,
     )
     resp.raise_for_status()
-    return base64.b64decode(resp.json()["content"])
+    raw = base64.b64decode(resp.json()["content"])
+    if len(raw) == 0:
+        raise ValueError("Parquet file in GitHub is empty (0 bytes). Use Data Management to re-upload your data.")
+    return raw
 
 
 def write_parquet_to_github(parquet_bytes: bytes):
     """Create or update the parquet file in the GitHub repo."""
     import requests as _r, base64
     owner, repo, path = _gh_coords()
+
+    # Safety check — never write empty or tiny files
+    if len(parquet_bytes) < 100:
+        raise ValueError(f"Refusing to write {len(parquet_bytes)}-byte file — data appears empty.")
 
     # Verify the repo is accessible before trying to write
     check = _r.get(
@@ -643,6 +650,26 @@ with st.sidebar:
     raw_df    = None
     merge_log = []
 
+    # ── Handle pending reset ──────────────────────────────────────────────
+    if st.session_state.pop("pending_reset", False):
+        import requests as _rr, base64 as _b64
+        try:
+            if GITHUB_CONFIGURED:
+                owner, repo, path = _gh_coords()
+                sha = get_github_file_sha()
+                if sha:
+                    _rr.delete(
+                        f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
+                        headers=_gh_headers(),
+                        json={"message": "Reset master dataset", "sha": sha},
+                        timeout=15,
+                    )
+                    get_github_file_sha.clear()
+                    st.cache_data.clear()
+            st.success("Master dataset cleared.")
+        except Exception as re:
+            st.error(f"Reset failed: {re}")
+
     # ── Handle pending upload (must run before any st.stop / cache calls) ──
     if "pending_upload" in st.session_state:
         pending = st.session_state.pop("pending_upload")
@@ -737,6 +764,12 @@ with st.sidebar:
                 authorized = True
 
             if authorized:
+                # Reset button — clears corrupt or unwanted master data
+                if st.button("Reset master dataset", use_container_width=True):
+                    st.session_state["pending_reset"] = True
+                    st.rerun()
+
+                st.markdown("---")
                 new_file = st.file_uploader(
                     "Upload new XLSX file",
                     type=["xlsx", "xls"],
