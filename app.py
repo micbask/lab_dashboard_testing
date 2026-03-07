@@ -710,6 +710,9 @@ with st.sidebar:
                     f"Saved! {rows_before:,} → {len(merged_df):,} rows "
                     f"(+{len(merged_df)-rows_before:,} new)"
                 )
+                # Keep merged data in session so we don't re-fetch immediately
+                # (GitHub CDN may serve stale data for a few seconds after write)
+                st.session_state["fresh_df"] = merged_df
             except Exception as ue:
                 st.error(f"Save failed: {ue}")
         st.cache_data.clear()
@@ -727,7 +730,13 @@ with st.sidebar:
 
         _data_exists = False
         try:
-            if GITHUB_CONFIGURED:
+            # Use in-memory data if we just did an upload (avoids GitHub CDN stale read)
+            if "fresh_df" in st.session_state:
+                raw_df = st.session_state.pop("fresh_df")
+                merge_log = []
+                _data_exists = True
+                st.caption("Data file ready")
+            elif GITHUB_CONFIGURED:
                 _sha = get_github_file_sha()
                 _data_exists = _sha is not None
                 if _data_exists:
