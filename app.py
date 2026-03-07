@@ -1,6 +1,11 @@
 import io
 import json
+import hashlib
+import pickle
+import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -118,7 +123,9 @@ def list_drive_files(folder_id: str) -> list[dict]:
     query = (
         f"'{folder_id}' in parents and trashed = false and "
         "(mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' "
-        "or mimeType='application/vnd.ms-excel')"
+        "or mimeType='application/vnd.ms-excel' "
+        "or mimeType='text/csv' "
+        "or mimeType='text/plain')"
     )
     result = service.files().list(
         q=query,
@@ -144,9 +151,50 @@ def download_drive_file(file_id: str) -> bytes:
 # ─────────────────────────────────────────────────────────────────────────────
 # Data loading and deduplication
 # ─────────────────────────────────────────────────────────────────────────────
-def parse_single_file(file_bytes: bytes) -> pd.DataFrame:
-    """Parse one Excel file into a clean DataFrame."""
-    df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=0)
+# Columns we actually need — ignore everything else for speed
+REQUIRED_COLS = {
+    "Performing Service Resource",
+    "Order Procedure",
+    "Date/Time - Complete",
+    "Complete Volume",
+}
+
+# Disk cache directory for processed files (persists across Streamlit reruns)
+_CACHE_DIR = Path(tempfile.gettempdir()) / "lab_heatmap_cache"
+_CACHE_DIR.mkdir(exist_ok=True)
+
+
+def _file_cache_path(file_id: str, modified_time: str) -> Path:
+    key = hashlib.md5(f"{file_id}_{modified_time}".encode()).hexdigest()
+    return _CACHE_DIR / f"{key}.pkl"
+
+
+def parse_single_file(file_bytes: bytes, filename: str = "") -> pd.DataFrame:
+    """Parse CSV or Excel file into a clean DataFrame, loading only needed columns."""
+    fname = filename.lower()
+
+    if fname.endswith(".csv") or fname.endswith(".txt"):
+        # Peek at header to find available columns
+        header = pd.read_csv(io.BytesIO(file_bytes), nrows=0)
+        header.columns = [c.strip() for c in header.columns]
+        use_cols = [c for c in header.columns if c in REQUIRED_COLS]
+        df = pd.read_csv(
+            io.BytesIO(file_bytes),
+            usecols=use_cols,
+            low_memory=False,
+        )
+    else:
+        # Excel — read first sheet, only needed columns
+        header = pd.read_excel(io.BytesIO(file_bytes), sheet_name=0, nrows=0)
+        header.columns = [c.strip() if isinstance(c, str) else c for c in header.columns]
+        use_cols = [c for c in header.columns if c in REQUIRED_COLS]
+        df = pd.read_excel(
+            io.BytesIO(file_bytes),
+            sheet_name=0,
+            usecols=use_cols,
+            engine="openpyxl",
+        )
+
     df.columns = [c.strip() if isinstance(c, str) else c for c in df.columns]
     df["Performing Service Resource"] = df["Performing Service Resource"].astype(str).str.strip()
     df["Order Procedure"]             = df["Order Procedure"].astype(str).str.strip()
@@ -229,18 +277,37 @@ def deduplicate_and_merge(frames: list[tuple[str, pd.DataFrame]]) -> pd.DataFram
 # ─────────────────────────────────────────────────────────────────────────────
 # Auto-load from Google Drive (cached by the list of file IDs + modifiedTimes)
 # ─────────────────────────────────────────────────────────────────────────────
+def _load_one_file(f: dict) -> tuple[str, pd.DataFrame]:
+    """Download and parse a single Drive file, using disk cache if unchanged."""
+    cache_path = _file_cache_path(f["id"], f["modifiedTime"])
+    if cache_path.exists():
+        with open(cache_path, "rb") as fh:
+            return f["name"], pickle.load(fh)
+    raw = download_drive_file(f["id"])
+    df  = parse_single_file(raw, filename=f["name"])
+    with open(cache_path, "wb") as fh:
+        pickle.dump(df, fh)
+    return f["name"], df
+
+
 @st.cache_data(show_spinner="Loading data from Google Drive…", ttl=300)
 def load_from_drive(folder_id: str, file_manifest: str) -> tuple[pd.DataFrame, list]:
     """
-    file_manifest is a JSON string of [{id, name, modifiedTime}] used as the
-    cache key — if nothing changed in Drive the cached result is returned.
+    Downloads and parses all files in parallel.
+    Uses a disk cache per file keyed on (file_id + modifiedTime) so unchanged
+    files are never re-downloaded or re-parsed across sessions.
+    file_manifest is a JSON string — changes to it bust the Streamlit cache.
     """
     file_list = json.loads(file_manifest)
     frames = []
-    for f in file_list:
-        raw = download_drive_file(f["id"])
-        df  = parse_single_file(raw)
-        frames.append((f["name"], df))
+
+    # Parallel download + parse (up to 8 files at once)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_load_one_file, f): f for f in file_list}
+        for future in as_completed(futures):
+            name, df = future.result()
+            frames.append((name, df))
+
     return deduplicate_and_merge(frames)
 
 
@@ -249,7 +316,7 @@ def load_from_drive(folder_id: str, file_manifest: str) -> tuple[pd.DataFrame, l
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner="Processing uploaded files…")
 def load_from_uploads(files_bytes: list[tuple[str, bytes]]) -> tuple[pd.DataFrame, list]:
-    frames = [(name, parse_single_file(b)) for name, b in files_bytes]
+    frames = [(name, parse_single_file(b, filename=name)) for name, b in files_bytes]
     return deduplicate_and_merge(frames)
 
 
