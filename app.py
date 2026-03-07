@@ -1,6 +1,6 @@
 import io
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 from copy import deepcopy
 
 import numpy as np
@@ -109,40 +109,78 @@ def get_drive_service():
         creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
     creds = service_account.Credentials.from_service_account_info(
         creds_info,
-        scopes=["https://www.googleapis.com/auth/drive.readonly"],
+        scopes=["https://www.googleapis.com/auth/drive"],
     )
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
-def list_drive_files(folder_id: str) -> list[dict]:
+PARQUET_FILENAME = "lab_data.parquet"
+
+
+def get_parquet_file_meta(folder_id: str) -> dict | None:
+    """Return metadata for lab_data.parquet in the Drive folder, or None if not found."""
     service = get_drive_service()
-    query = (
-        f"'{folder_id}' in parents and trashed = false and "
-        "(mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' "
-        "or mimeType='application/vnd.ms-excel' "
-        "or mimeType='text/csv' "
-        "or mimeType='text/plain')"
-    )
     result = service.files().list(
-        q=query,
+        q=f"'{folder_id}' in parents and name='{PARQUET_FILENAME}' and trashed=false",
         fields="files(id, name, modifiedTime)",
-        orderBy="name",
         supportsAllDrives=True,
         includeItemsFromAllDrives=True,
     ).execute()
-    return result.get("files", [])
+    files = result.get("files", [])
+    return files[0] if files else None
 
 
-def download_drive_file(file_id: str) -> bytes:
+def download_drive_file(file_id: str, retries: int = 4) -> bytes:
+    """Download a Drive file with automatic retry on SSL/network errors."""
+    last_err = None
+    for attempt in range(retries):
+        try:
+            service = get_drive_service()
+            request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
+            buf = io.BytesIO()
+            downloader = MediaIoBaseDownload(buf, request, chunksize=4 * 1024 * 1024)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            buf.seek(0)
+            return buf.read()
+        except Exception as e:
+            last_err = e
+            wait = 2 ** attempt  # 1s, 2s, 4s, 8s
+            time.sleep(wait)
+    raise RuntimeError(f"Failed to download file after {retries} attempts: {last_err}")
+
+def upload_parquet_to_drive(folder_id: str, parquet_bytes: bytes):
+    """Upload or overwrite lab_data.parquet in the Drive folder."""
     service = get_drive_service()
-    request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
-    buf = io.BytesIO()
-    downloader = MediaIoBaseDownload(buf, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    buf.seek(0)
-    return buf.read()
+    from googleapiclient.http import MediaIoBaseUpload as _Upload
+    existing = service.files().list(
+        q=f"'{folder_id}' in parents and name='{PARQUET_FILENAME}' and trashed=false",
+        fields="files(id)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+    ).execute().get("files", [])
+
+    media = _Upload(
+        io.BytesIO(parquet_bytes),
+        mimetype="application/octet-stream",
+        chunksize=8 * 1024 * 1024,
+        resumable=True,
+    )
+    if existing:
+        service.files().update(
+            fileId=existing[0]["id"],
+            media_body=media,
+            supportsAllDrives=True,
+        ).execute()
+    else:
+        service.files().create(
+            body={"name": PARQUET_FILENAME, "parents": [folder_id]},
+            media_body=media,
+            fields="id",
+            supportsAllDrives=True,
+        ).execute()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data loading and deduplication
@@ -260,35 +298,60 @@ def deduplicate_and_merge(frames: list[tuple[str, pd.DataFrame]]) -> pd.DataFram
     return merged, summary
 
 
+def merge_new_into_parquet(existing_df: pd.DataFrame, new_df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """
+    Merge a newly uploaded file into the existing master DataFrame.
+    Uses the same overlap-trimming logic as deduplicate_and_merge.
+    Returns the merged DataFrame and a summary dict.
+    """
+    frames = [("existing", existing_df), ("new file", new_df)]
+    merged, summary = deduplicate_and_merge(frames)
+    stats = {
+        "rows_before": len(existing_df),
+        "rows_after":  len(merged),
+        "rows_added":  len(merged) - len(existing_df),
+        "new_date_range": (
+            f"{new_df['complete_date'].min()} → {new_df['complete_date'].max()}"
+        ),
+    }
+    return merged, stats
+
+
+def df_to_parquet_bytes(df: pd.DataFrame) -> bytes:
+    buf = io.BytesIO()
+    df.to_parquet(buf, index=False, compression="snappy")
+    return buf.getvalue()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Auto-load from Google Drive (cached by the list of file IDs + modifiedTimes)
 # ─────────────────────────────────────────────────────────────────────────────
-def _load_one_file(f: dict) -> tuple[str, pd.DataFrame]:
-    """Download and parse a single Drive file."""
-    raw = download_drive_file(f["id"])
-    df  = parse_single_file(raw, filename=f["name"])
-    return f["name"], df
-
-
 @st.cache_data(show_spinner="Loading data from Google Drive…", ttl=300)
-def load_from_drive(folder_id: str, file_manifest: str) -> tuple[pd.DataFrame, list]:
+def load_from_drive(folder_id: str, parquet_modified_time: str) -> tuple[pd.DataFrame, list]:
     """
-    Downloads and parses all files in parallel.
-    Uses a disk cache per file keyed on (file_id + modifiedTime) so unchanged
-    files are never re-downloaded or re-parsed across sessions.
-    file_manifest is a JSON string — changes to it bust the Streamlit cache.
+    Downloads the single pre-processed lab_data.parquet file from Drive.
+    parquet_modified_time is used as the cache key — the data is only
+    re-downloaded when the file actually changes on Drive.
     """
-    file_list = json.loads(file_manifest)
-    frames = []
-
-    # Parallel download + parse (up to 8 files at once)
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {pool.submit(_load_one_file, f): f for f in file_list}
-        for future in as_completed(futures):
-            name, df = future.result()
-            frames.append((name, df))
-
-    return deduplicate_and_merge(frames)
+    meta = get_parquet_file_meta(folder_id)
+    if meta is None:
+        raise FileNotFoundError(
+            f"'{PARQUET_FILENAME}' not found in Drive folder.\n\n"
+            "Use the Data Management panel in the sidebar to upload your first XLSX file."
+        )
+    raw   = download_drive_file(meta["id"])
+    df    = pd.read_parquet(io.BytesIO(raw))
+    # Ensure date column is correct type after parquet round-trip
+    if "complete_date" not in df.columns:
+        df["complete_date"] = pd.to_datetime(df["Date/Time - Complete"]).dt.date
+    if "hour" not in df.columns:
+        df["hour"] = pd.to_datetime(df["Date/Time - Complete"]).dt.hour.astype(int)
+    summary = [{
+        "File": PARQUET_FILENAME,
+        "Rows": len(df),
+        "Date range": f"{df['complete_date'].min()} → {df['complete_date'].max()}",
+    }]
+    return df, summary
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -448,17 +511,16 @@ with st.sidebar:
             st.cache_data.clear()
 
         try:
-            file_list    = list_drive_files(folder_id)
-            file_manifest = json.dumps(
-                [{"id": f["id"], "name": f["name"], "modifiedTime": f["modifiedTime"]}
-                 for f in file_list],
-                sort_keys=True,
-            )
-            if not file_list:
-                st.warning("No Excel files found in the configured Drive folder.")
+            meta = get_parquet_file_meta(folder_id)
+            if meta is None:
+                st.warning(
+                    f"No '{PARQUET_FILENAME}' found in Drive folder.\n\n"
+                    "Use the **Data Management** panel below to upload your first XLSX file."
+                )
             else:
-                st.caption(f"{len(file_list)} file(s) found in Drive folder")
-                raw_df, merge_log = load_from_drive(folder_id, file_manifest)
+                modified = meta["modifiedTime"]
+                st.caption(f"Data file last updated: {modified[:10]}")
+                raw_df, merge_log = load_from_drive(folder_id, modified)
         except Exception as e:
             st.error(f"Drive error: {e}")
 
