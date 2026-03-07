@@ -523,6 +523,74 @@ with st.sidebar:
                 raw_df, merge_log = load_from_drive(folder_id, modified)
         except Exception as e:
             st.error(f"Drive error: {e}")
+            meta = None
+
+        # ── Data Management ───────────────────────────────────────────────
+        st.markdown("---")
+        _no_data = (meta is None) if "meta" in dir() else True
+        with st.expander("Data Management", expanded=_no_data):
+            st.markdown(
+                "Upload a new XLSX export to add it to the master dataset. "
+                "Overlapping date ranges are handled automatically."
+            )
+
+            admin_pw = st.secrets.get("admin_password", None)
+            if admin_pw:
+                entered_pw = st.text_input("Admin password", type="password", key="admin_pw")
+                authorized = (entered_pw == admin_pw)
+                if entered_pw and not authorized:
+                    st.error("Incorrect password.")
+            else:
+                authorized = True
+
+            if authorized:
+                new_file = st.file_uploader(
+                    "Upload new XLSX file",
+                    type=["xlsx", "xls"],
+                    key="admin_upload",
+                )
+                if new_file is not None:
+                    new_bytes = new_file.read()
+                    st.caption(f"File: {new_file.name}")
+
+                    if st.button("Process and add to master dataset",
+                                 type="primary", use_container_width=True):
+                        with st.spinner("Parsing new file..."):
+                            new_df = parse_single_file(new_bytes, filename=new_file.name)
+                        st.caption(
+                            f"New file: {new_df['complete_date'].min()} → "
+                            f"{new_df['complete_date'].max()}  "
+                            f"({len(new_df):,} rows)"
+                        )
+
+                        existing_meta = get_parquet_file_meta(folder_id)
+                        if existing_meta:
+                            with st.spinner("Loading existing master dataset..."):
+                                existing_bytes = download_drive_file(existing_meta["id"])
+                                existing_df    = pd.read_parquet(io.BytesIO(existing_bytes))
+                        else:
+                            existing_df = pd.DataFrame()
+
+                        with st.spinner("Merging and deduplicating..."):
+                            if existing_df.empty:
+                                merged_df = new_df
+                                rows_added = len(new_df)
+                                rows_before = 0
+                            else:
+                                merged_df, stats = merge_new_into_parquet(existing_df, new_df)
+                                rows_added  = stats["rows_added"]
+                                rows_before = stats["rows_before"]
+
+                        with st.spinner("Uploading updated master dataset to Drive..."):
+                            parquet_bytes = df_to_parquet_bytes(merged_df)
+                            upload_parquet_to_drive(folder_id, parquet_bytes)
+
+                        st.success(
+                            f"Done! Added {rows_added:,} rows "
+                            f"(total: {rows_before:,} → {len(merged_df):,})"
+                        )
+                        st.cache_data.clear()
+                        st.rerun()
 
     else:
         st.markdown("**Data source:** File upload")
