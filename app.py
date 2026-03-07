@@ -1,5 +1,6 @@
 import io
 import json
+import requests
 from copy import deepcopy
 
 import numpy as np
@@ -8,11 +9,6 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
 import streamlit as st
-
-# Google Drive API
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
-from google.oauth2 import service_account
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Page config
@@ -97,71 +93,49 @@ if "last_map_type" not in st.session_state:
 # Google Drive helpers
 # ─────────────────────────────────────────────────────────────────────────────
 DRIVE_CONFIGURED = (
-    "gcp_service_account" in st.secrets and
-    "google_drive" in st.secrets
+    "google_drive" in st.secrets and
+    "api_key" in st.secrets.get("google_drive", {})
 )
 
-@st.cache_resource(show_spinner=False)
-def get_drive_service():
-    """Build and return an authenticated Drive service (cached)."""
-    creds_info = dict(st.secrets["gcp_service_account"])
-    creds = service_account.Credentials.from_service_account_info(
-        creds_info,
-        scopes=["https://www.googleapis.com/auth/drive.readonly"],
-    )
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
-
-
 def list_drive_files(folder_id: str) -> list[dict]:
-    """Return list of xlsx/xls file metadata in the given Drive folder."""
-    service = get_drive_service()
-
-    # Step 1: Verify the folder is accessible at all
-    try:
-        service.files().get(
-            fileId=folder_id,
-            supportsAllDrives=True,
-            fields="id, name",
-        ).execute()
-    except Exception as e:
-        raise PermissionError(
-            f"Cannot access folder '{folder_id}'.\n\n"
-            f"Most likely cause: the folder has not been shared with the service account.\n\n"
-            f"Fix: In Google Drive, right-click the folder → Share → add this email as Viewer:\n"
-            f"  {st.secrets['gcp_service_account']['client_email']}\n\n"
-            f"Original error: {e}"
-        )
-
-    # Step 2: List Excel files inside it
+    """List xlsx/xls files in a public Google Drive folder using API key."""
+    api_key = st.secrets["google_drive"]["api_key"]
     query = (
         f"'{folder_id}' in parents and trashed = false and "
         "(mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' "
         "or mimeType='application/vnd.ms-excel')"
     )
-    result = service.files().list(
-        q=query,
-        fields="files(id, name, modifiedTime)",
-        orderBy="name",
-        supportsAllDrives=True,
-        includeItemsFromAllDrives=True,
-    ).execute()
-    return result.get("files", [])
+    url = "https://www.googleapis.com/drive/v3/files"
+    params = {
+        "q": query,
+        "fields": "files(id,name,modifiedTime)",
+        "orderBy": "name",
+        "key": api_key,
+    }
+    resp = requests.get(url, params=params, timeout=15)
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"Drive API error {resp.status_code}: {resp.text}\n\n"
+            "Make sure:\n"
+            "1. The folder is set to 'Anyone with the link can view'\n"
+            "2. The API key in secrets is correct and has Drive API enabled"
+        )
+    return resp.json().get("files", [])
 
 
 def download_drive_file(file_id: str) -> bytes:
-    """Download a file from Drive and return its raw bytes."""
-    service = get_drive_service()
-    request = service.files().get_media(
-        fileId=file_id,
-        supportsAllDrives=True,
-    )
-    buf = io.BytesIO()
-    downloader = MediaIoBaseDownload(buf, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    buf.seek(0)
-    return buf.read()
+    """Download a public Drive file using API key."""
+    api_key = st.secrets["google_drive"]["api_key"]
+    url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
+    # First get the download URL
+    meta_resp = requests.get(url, params={"alt": "media", "key": api_key}, timeout=60)
+    if meta_resp.status_code == 200:
+        return meta_resp.content
+    # Fallback: export via direct download URL
+    fallback = f"https://drive.google.com/uc?export=download&id={file_id}"
+    fb_resp = requests.get(fallback, timeout=60)
+    fb_resp.raise_for_status()
+    return fb_resp.content
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data loading and deduplication
@@ -434,8 +408,6 @@ with st.sidebar:
             else:
                 st.caption(f"{len(file_list)} file(s) found in Drive folder")
                 raw_df, merge_log = load_from_drive(folder_id, file_manifest)
-        except PermissionError as e:
-            st.error(str(e))
         except Exception as e:
             st.error(f"Drive error: {e}")
 
