@@ -83,7 +83,7 @@ st.markdown(f"""
     opacity: 0.95;
   }}
   .keck-badge {{
-    background: #9D2235;
+    background: #FFCC00;
     color: #FFFFFF;
     font-size: 0.7rem;
     font-weight: 700;
