@@ -167,7 +167,13 @@ def get_github_file_sha() -> str | None:
 
 
 def read_parquet_from_github() -> bytes:
-    """Download the parquet file bytes from GitHub."""
+    """Download the parquet file bytes from GitHub.
+
+    GitHub's Contents API returns the file inline (base64 in 'content') for
+    files ≤ 1 MB.  For larger files it returns an empty 'content' string and
+    a 'download_url' instead.  We handle both cases so a large parquet never
+    surfaces as a spurious "0 bytes" error.
+    """
     import requests as _r, base64
     owner, repo, path = _gh_coords()
     resp = _r.get(
@@ -175,9 +181,25 @@ def read_parquet_from_github() -> bytes:
         headers=_gh_headers(), timeout=30,
     )
     resp.raise_for_status()
-    raw = base64.b64decode(resp.json()["content"])
+    data = resp.json()
+
+    content_str = data.get("content", "").strip()
+    if content_str:
+        # Small file — content is base64-encoded inline
+        raw = base64.b64decode(content_str)
+    elif data.get("download_url"):
+        # Large file — GitHub redirects to a blob download URL
+        dl = _r.get(data["download_url"], headers=_gh_headers(), timeout=60)
+        dl.raise_for_status()
+        raw = dl.content
+    else:
+        raw = b""
+
     if len(raw) == 0:
-        raise ValueError("Parquet file in GitHub is empty (0 bytes). Use Data Management to re-upload your data.")
+        raise ValueError(
+            "Parquet file in GitHub is empty (0 bytes). "
+            "Use Data Management to re-upload your data."
+        )
     return raw
 
 
@@ -603,7 +625,7 @@ def build_png(df_date_hour: pd.DataFrame, map_type: str, selected_date, hours: l
     im = ax.imshow(mat, aspect="auto", cmap="viridis_r", vmin=0, vmax=vmax)
     date_str = pd.Timestamp(selected_date).strftime("%B %d, %Y")
     ax.set_title(f"{map_type} – Top 30 Procedures | {date_str}", fontsize=11, pad=10)
-    ax.set_xticks(np.arange(n_hours) + 0.5)
+    ax.set_xticks(np.arange(n_hours))
     ax.set_xticklabels(x_labels, rotation=45, ha="right", fontsize=8)
     ax.set_yticks(np.arange(len(ylabels)))
     ax.set_yticklabels(ylabels, fontsize=8)
@@ -652,7 +674,7 @@ with st.sidebar:
 
     # ── Handle pending reset ──────────────────────────────────────────────
     if st.session_state.pop("pending_reset", False):
-        import requests as _rr, base64 as _b64
+        import requests as _rr
         try:
             if GITHUB_CONFIGURED:
                 owner, repo, path = _gh_coords()
@@ -666,56 +688,10 @@ with st.sidebar:
                     )
                     get_github_file_sha.clear()
                     st.cache_data.clear()
+                    st.session_state.pop("fresh_df", None)
             st.success("Master dataset cleared.")
-        except Exception as re:
-            st.error(f"Reset failed: {re}")
-
-    # ── Handle pending upload (must run before any st.stop / cache calls) ──
-    if "pending_upload" in st.session_state:
-        pending = st.session_state.pop("pending_upload")
-        with st.spinner(f"Processing {pending['name']}..."):
-            new_df = parse_single_file(pending["bytes"], filename=pending["name"])
-        st.caption(
-            f"New file: {new_df['complete_date'].min()} → {new_df['complete_date'].max()} "
-            f"({len(new_df):,} rows)"
-        )
-        # Load existing master
-        try:
-            if GITHUB_CONFIGURED:
-                sha = get_github_file_sha()
-                existing_df = pd.read_parquet(io.BytesIO(read_parquet_from_github())) if sha else pd.DataFrame()
-            else:
-                folder_id_e = st.secrets["google_drive"]["folder_id"]
-                em = get_parquet_file_meta(folder_id_e)
-                existing_df = pd.read_parquet(io.BytesIO(download_drive_file(em["id"]))) if em else pd.DataFrame()
-        except Exception:
-            existing_df = pd.DataFrame()
-
-        with st.spinner("Merging and deduplicating..."):
-            if existing_df.empty:
-                merged_df   = new_df
-                rows_before = 0
-            else:
-                merged_df, _stats = merge_new_into_parquet(existing_df, new_df)
-                rows_before = _stats["rows_before"]
-
-        with st.spinner("Saving master dataset..."):
-            pq_bytes = df_to_parquet_bytes(merged_df)
-            try:
-                if GITHUB_CONFIGURED:
-                    write_parquet_to_github(pq_bytes)
-                else:
-                    upload_parquet_to_drive(st.secrets["google_drive"]["folder_id"], pq_bytes)
-                st.success(
-                    f"Saved! {rows_before:,} → {len(merged_df):,} rows "
-                    f"(+{len(merged_df)-rows_before:,} new)"
-                )
-                # Keep merged data in session so we don't re-fetch immediately
-                # (GitHub CDN may serve stale data for a few seconds after write)
-                st.session_state["fresh_df"] = merged_df
-            except Exception as ue:
-                st.error(f"Save failed: {ue}")
-        st.cache_data.clear()
+        except Exception as reset_err:
+            st.error(f"Reset failed: {reset_err}")
 
     # ── Load master data ───────────────────────────────────────────────────
     if GITHUB_CONFIGURED or DRIVE_CONFIGURED:
@@ -725,14 +701,19 @@ with st.sidebar:
             st.markdown("**Data source:** Google Drive")
 
         if st.button("Refresh data", use_container_width=True):
+            # Also drop any in-memory post-upload snapshot so we re-fetch
+            st.session_state.pop("fresh_df", None)
             st.cache_data.clear()
             st.rerun()
 
         _data_exists = False
         try:
-            # Use in-memory data if we just did an upload (avoids GitHub CDN stale read)
+            # Use in-memory data if we just did an upload (avoids GitHub CDN stale
+            # read).  We deliberately do NOT pop() here — the snapshot stays in
+            # session_state until the user explicitly clicks "Refresh data", which
+            # clears it so we go back to fetching from GitHub.
             if "fresh_df" in st.session_state:
-                raw_df = st.session_state.pop("fresh_df")
+                raw_df = st.session_state["fresh_df"]
                 merge_log = []
                 _data_exists = True
                 st.caption("Data file ready")
@@ -908,7 +889,10 @@ if "pending_upload" in st.session_state and st.session_state["pending_upload"]:
             st.write(f"Parsed {len(new_df):,} rows "
                      f"({new_df['complete_date'].min()} → {new_df['complete_date'].max()})")
 
+            # ── Step 1: load existing master (read-only; we never touch GitHub
+            #    until the merged result is fully validated) ──────────────────
             st.write("Loading existing master dataset...")
+            existing_df = pd.DataFrame()
             try:
                 if GITHUB_CONFIGURED:
                     sha = get_github_file_sha()
@@ -917,7 +901,6 @@ if "pending_upload" in st.session_state and st.session_state["pending_upload"]:
                         existing_df = pd.read_parquet(io.BytesIO(existing_bytes))
                         st.write(f"Existing dataset: {len(existing_df):,} rows")
                     else:
-                        existing_df = pd.DataFrame()
                         st.write("No existing dataset — creating new master.")
                 else:
                     folder_id_up = st.secrets["google_drive"]["folder_id"]
@@ -927,12 +910,12 @@ if "pending_upload" in st.session_state and st.session_state["pending_upload"]:
                         existing_df = pd.read_parquet(io.BytesIO(existing_bytes))
                         st.write(f"Existing dataset: {len(existing_df):,} rows")
                     else:
-                        existing_df = pd.DataFrame()
                         st.write("No existing dataset — creating new master.")
-            except Exception:
-                existing_df = pd.DataFrame()
-                st.write("No existing dataset — creating new master.")
+            except Exception as load_err:
+                st.write(f"Could not load existing data ({load_err}) — creating new master.")
 
+            # ── Step 2: merge + deduplicate in memory ─────────────────────────
+            # Nothing is written to GitHub until this succeeds.
             st.write("Merging and deduplicating...")
             if existing_df.empty:
                 merged_df   = new_df
@@ -944,24 +927,44 @@ if "pending_upload" in st.session_state and st.session_state["pending_upload"]:
                 rows_added  = _stats["rows_added"]
             st.write(f"Merged: {rows_before:,} → {len(merged_df):,} rows (+{rows_added:,})")
 
-            st.write("Saving to GitHub...")
+            # ── Step 3: serialise and validate before touching the remote ─────
             parquet_bytes_up = df_to_parquet_bytes(merged_df)
             size_mb = len(parquet_bytes_up) / 1024 / 1024
             st.write(f"File size: {size_mb:.2f} MB")
+
+            # Sanity-check: round-trip the bytes to make sure the parquet is valid
+            # before we overwrite the existing file on GitHub.
+            _check = pd.read_parquet(io.BytesIO(parquet_bytes_up))
+            if len(_check) == 0:
+                raise ValueError("Serialised parquet validated as empty — aborting write.")
+
+            # ── Step 4: write (existing master on GitHub is untouched until now)
             if GITHUB_CONFIGURED:
+                st.write("Saving to GitHub...")
                 write_parquet_to_github(parquet_bytes_up)
             else:
                 folder_id_up = st.secrets["google_drive"]["folder_id"]
+                st.write("Saving to Google Drive...")
                 upload_parquet_to_drive(folder_id_up, parquet_bytes_up)
+
+            # ── Step 5: update state and rerender ────────────────────────────
+            # Store merged_df in session so the dashboard renders immediately
+            # without re-fetching from GitHub (CDN may serve stale data for
+            # 30–60 s after a commit).  The snapshot stays until the user
+            # explicitly clicks "Refresh data".
+            st.session_state["fresh_df"] = merged_df
+            st.session_state.pop("pending_upload", None)
+            # Invalidate only the SHA cache so future explicit refreshes pick
+            # up the new commit SHA.  We intentionally skip st.cache_data.clear()
+            # here because fresh_df already has the correct data.
+            get_github_file_sha.clear()
 
             status.update(label=f"Done! Added {rows_added:,} rows to master dataset.",
                           state="complete")
-            st.session_state.pop("pending_upload", None)
-            st.cache_data.clear()
             st.rerun()
 
         except Exception as proc_err:
-            status.update(label="Processing failed.", state="error")
+            status.update(label="Processing failed — existing data is unchanged.", state="error")
             st.error(str(proc_err))
             st.session_state.pop("pending_upload", None)
     st.stop()
