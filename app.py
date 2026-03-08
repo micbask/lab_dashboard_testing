@@ -1590,22 +1590,24 @@ def _show_cell_dialog(proc: str, hour_label: str, hour_int: int) -> None:
 
 
 _table_h = min(80 + 35 * len(pivot), 900)
-st.caption("Click any cell to see detailed statistics.")
-_heatmap_evt = st.dataframe(
-    style_pivot(pivot, VMAX[map_type]),
-    use_container_width=True,
-    height=_table_h,
-    on_select="rerun",
-    selection_mode=["single-row", "single-column"],
-    key="heatmap_selection",
-)
+st.dataframe(style_pivot(pivot, VMAX[map_type]), use_container_width=True, height=_table_h)
 
-_sel = _heatmap_evt.selection
-if _sel.rows and _sel.columns:
-    _sel_proc        = pivot.index[_sel.rows[0]]
-    _sel_hour_label  = _sel.columns[0]
-    if _sel_hour_label in _hour_cols:
-        _show_cell_dialog(_sel_proc, _sel_hour_label, LABEL_TO_HOUR[_sel_hour_label])
+# ── Cell drill-down ────────────────────────────────────────────────────────────
+st.markdown('<div class="section-heading">Cell Drill-down</div>', unsafe_allow_html=True)
+
+_peak_hour_label = pivot[_hour_cols].sum().idxmax()
+if "drill_hour" not in _ss or _ss.get("drill_hour") not in _hour_cols:
+    _ss["drill_hour"] = _peak_hour_label
+
+_dd1, _dd2, _dd3 = st.columns([3, 2, 1])
+with _dd1:
+    sel_proc = st.selectbox("Procedure", pivot.index.tolist(), key="drill_proc")
+with _dd2:
+    sel_hour_label = st.selectbox("Hour", _hour_cols, key="drill_hour")
+with _dd3:
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("View Details", use_container_width=True):
+        _show_cell_dialog(sel_proc, sel_hour_label, LABEL_TO_HOUR[sel_hour_label])
 
 # ── PNG download (lazy — rendered only on explicit request) ───────────────────
 _file_prefix = map_type.replace(" ", "_")
