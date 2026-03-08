@@ -1056,9 +1056,13 @@ with st.sidebar:
         with st.expander("Data Management", expanded=not _data_exists):
 
             # Admin password gate — auth state persists for the session
-            admin_pw = st.secrets.get("admin_password", None)
+            admin_pw = (
+                st.secrets["admin_password"]
+                if "admin_password" in st.secrets
+                else None
+            )
             if "admin_authorized" not in _ss:
-                _ss.admin_authorized = not admin_pw  # auto-authorize locally
+                _ss.admin_authorized = not admin_pw  # auto-authorize if no pw set
 
             if admin_pw and not _ss.admin_authorized:
                 entered_pw = st.text_input(
@@ -1186,6 +1190,12 @@ with st.sidebar:
         _min_d = available_dates[0]
         _max_d = available_dates[-1]
 
+        # If prev/next buttons set a navigation target, apply it BEFORE
+        # the date_input widget renders (Streamlit forbids writing to a
+        # widget key after the widget has been drawn).
+        if "_nav_date" in _ss:
+            _ss["date_picker"] = _ss.pop("_nav_date")
+
         # Initialise / validate the date_picker key before the widget renders.
         # This lets us programmatically change the widget value (e.g. prev/next
         # buttons, map-type switch) by writing to session_state directly.
@@ -1227,12 +1237,14 @@ with st.sidebar:
             _idx_near   = (
                 (_dates_arr - pd.Timestamp(picked_date)).abs().argmin()
             )
-            _ss["date_picker"] = available_dates[_idx_near]
+            _snapped = available_dates[_idx_near]
             st.caption(
                 f"No data on {picked_date} for **{map_type}** — "
-                f"showing nearest: **{_ss['date_picker']}**"
+                f"showing nearest: **{_snapped}**"
             )
-            picked_date = _ss["date_picker"]
+            # Schedule the snap for next rerun (can't write widget key after render)
+            _ss["_nav_date"] = _snapped
+            picked_date = _snapped
 
         selected_date = picked_date
 
@@ -1250,7 +1262,7 @@ with st.sidebar:
                 disabled=(_cur_idx == 0),
             ):
                 new_idx = max(0, _cur_idx - 1)
-                _ss["date_picker"] = available_dates[new_idx]
+                _ss["_nav_date"] = available_dates[new_idx]
                 st.rerun()
         with _nc2:
             if st.button(
@@ -1258,7 +1270,7 @@ with st.sidebar:
                 disabled=(_cur_idx == len(available_dates) - 1),
             ):
                 new_idx = min(len(available_dates) - 1, _cur_idx + 1)
-                _ss["date_picker"] = available_dates[new_idx]
+                _ss["_nav_date"] = available_dates[new_idx]
                 st.rerun()
 
         st.caption(f"Day {_cur_idx + 1} of {len(available_dates)}")
