@@ -892,11 +892,11 @@ def _render_header(map_type: str, date_str: str) -> None:
     st.markdown(f"""
     <div class="keck-header">
       <div>
-        <h1>Lab Productivity Dashboard</h1>
+        <h1>Analytics Dashboard</h1>
         <p class="subtitle">Keck Medicine of USC &nbsp;·&nbsp; {map_type}</p>
       </div>
       <div style="text-align:right;">
-        <span class="keck-badge">Laboratory Analytics</span>
+        <span class="keck-badge">Laboratory Productivity</span>
         <span class="keck-date-label">{date_str}</span>
       </div>
     </div>
