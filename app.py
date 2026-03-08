@@ -47,12 +47,12 @@ st.set_page_config(
 # THEME & GLOBAL CSS
 # ═════════════════════════════════════════════════════════════════════════════
 _NAVY   = "#800000"
-_GOLD   = "#C5A028"
-_STEEL  = "#4A6FA5"
-_WHITE  = "##c0c0c0"
+_GOLD   = "#FFCC00"
+_STEEL  = "#9D2235"
+_WHITE  = "#FFFFFF"
 _LIGHT  = "#F4F6FA"
-_MUTED  = "#6B7280"
-_BORDER = "#D1D5DB"
+_MUTED  = "#555555"
+_BORDER = "#e0e0e0"
 
 st.markdown(f"""
 <style>
@@ -61,7 +61,7 @@ st.markdown(f"""
 
   /* ── Top header banner ── */
   .keck-header {{
-    background: linear-gradient(135deg, {_NAVY} 0%, #1a3a6e 100%);
+    background: linear-gradient(135deg, {_NAVY} 0%, #1a1a1a 100%);
     padding: 1.1rem 1.8rem;
     border-radius: 10px;
     margin-bottom: 1.2rem;
@@ -83,8 +83,8 @@ st.markdown(f"""
     opacity: 0.95;
   }}
   .keck-badge {{
-    background: {_GOLD};
-    color: {_NAVY};
+    background: #9D2235;
+    color: #FFFFFF;
     font-size: 0.7rem;
     font-weight: 700;
     padding: 3px 10px;
@@ -174,7 +174,19 @@ st.markdown(f"""
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    margin-bottom: 0.35rem;
+    margin-bottom: 0.2rem;
+    margin-top: 0.5rem;
+  }}
+  section[data-testid="stSidebar"] .block-container {{
+    padding-top: 0.5rem;
+  }}
+  section[data-testid="stSidebar"] .stSelectbox,
+  section[data-testid="stSidebar"] .stSlider,
+  section[data-testid="stSidebar"] .stDateInput {{
+    margin-bottom: 0.25rem;
+  }}
+  section[data-testid="stSidebar"] hr {{
+    margin: 0.4rem 0;
   }}
 
   /* ── DataFrames ── */
@@ -919,9 +931,9 @@ with st.sidebar:
     st.markdown("### Map Type")
     map_type = st.selectbox("Map type", MAP_TYPES, label_visibility="collapsed")
 
-    # When the map changes, reset the date picker to the most-recent date
+    # Track map type changes — keep the current date value so the snapping
+    # logic below can find the closest available date in the new map's dataset.
     if _ss.last_map_type != map_type:
-        _ss.pop("date_picker", None)
         _ss.last_map_type = map_type
 
     # ── Pending action: reset entire dataset ────────────────────────────────
@@ -989,7 +1001,6 @@ with st.sidebar:
             st.error(f"Delete failed: {_dr_err}")
 
     # ── Data source & loading ────────────────────────────────────────────────
-    st.markdown("---")
     st.markdown("### Data Source")
 
     raw_df    = None
@@ -1042,17 +1053,25 @@ with st.sidebar:
             st.error(f"Could not load data: {_load_err}")
 
         # ── Data Management expander ─────────────────────────────────────────
-        st.markdown("---")
         with st.expander("Data Management", expanded=not _data_exists):
 
-            # Optional admin password gate
-            admin_pw   = st.secrets.get("admin_password", None)
-            authorized = True
-            if admin_pw:
-                entered_pw = st.text_input("Admin password", type="password", key="admin_pw")
-                authorized = entered_pw == admin_pw
-                if entered_pw and not authorized:
-                    st.error("Incorrect password.")
+            # Admin password gate — auth state persists for the session
+            admin_pw = st.secrets.get("admin_password", None)
+            if "admin_authorized" not in _ss:
+                _ss.admin_authorized = not admin_pw  # auto-authorize locally
+
+            if admin_pw and not _ss.admin_authorized:
+                entered_pw = st.text_input(
+                    "Admin password", type="password", key="admin_pw_input"
+                )
+                if entered_pw:
+                    if entered_pw == admin_pw:
+                        _ss.admin_authorized = True
+                        st.rerun()
+                    else:
+                        st.error("Incorrect password.")
+
+            authorized = _ss.admin_authorized
 
             if authorized:
 
@@ -1106,8 +1125,6 @@ with st.sidebar:
                             }
                             st.rerun()
 
-                    st.markdown("---")
-
                 # ── Upload new file ──────────────────────────────────────────
                 st.markdown("**Step 1 — Select XLSX export**")
                 new_file = st.file_uploader(
@@ -1158,8 +1175,6 @@ with st.sidebar:
             raw_df, merge_log = _load_from_uploads(files_bytes)
 
     # ── Calendar date picker ─────────────────────────────────────────────────
-    st.markdown("---")
-
     if raw_df is not None and not raw_df.empty:
         filtered_df     = filter_for_map(raw_df, map_type)
         available_dates = sorted(filtered_df["complete_date"].unique())
@@ -1222,27 +1237,33 @@ with st.sidebar:
         selected_date = picked_date
 
         # Prev / Next quick-navigation
-        _cur_idx = available_dates.index(selected_date)
+        _cur_idx = (
+            available_dates.index(selected_date)
+            if selected_date in available_dates
+            else len(available_dates) - 1
+        )
+        _cur_idx = max(0, min(_cur_idx, len(available_dates) - 1))
         _nc1, _nc2 = st.columns(2)
         with _nc1:
             if st.button(
                 "◀ Prev", use_container_width=True,
                 disabled=(_cur_idx == 0),
             ):
-                _ss["date_picker"] = available_dates[_cur_idx - 1]
+                new_idx = max(0, _cur_idx - 1)
+                _ss["date_picker"] = available_dates[new_idx]
                 st.rerun()
         with _nc2:
             if st.button(
                 "Next ▶", use_container_width=True,
                 disabled=(_cur_idx == len(available_dates) - 1),
             ):
-                _ss["date_picker"] = available_dates[_cur_idx + 1]
+                new_idx = min(len(available_dates) - 1, _cur_idx + 1)
+                _ss["date_picker"] = available_dates[new_idx]
                 st.rerun()
 
         st.caption(f"Day {_cur_idx + 1} of {len(available_dates)}")
 
         # ── Hour range slider ────────────────────────────────────────────────
-        st.markdown("---")
         st.markdown("### Hour Range")
 
         def _fmt_h(h: int) -> str:
@@ -1256,7 +1277,6 @@ with st.sidebar:
         st.caption(f"{_fmt_h(hour_range[0])} → {_fmt_h(hour_range[1])}")
 
         # ── Resource allocation ──────────────────────────────────────────────
-        st.markdown("---")
         with st.expander("Resource Allocation", expanded=False):
             st.markdown(
                 "Reassign instruments between maps. "
