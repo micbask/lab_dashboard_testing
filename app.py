@@ -1006,14 +1006,15 @@ with st.sidebar:
     raw_df    = None
     merge_log = []
 
+    # Hardcoded admin password
+    _ADMIN_PASSWORD = "labadmin"
+
+    if "admin_authorized" not in _ss:
+        _ss.admin_authorized = False
+
     if GITHUB_CONFIGURED or DRIVE_CONFIGURED:
         source_label = "GitHub" if GITHUB_CONFIGURED else "Google Drive"
         st.caption(f"Storage: {source_label}")
-
-        if st.button("↺  Refresh data", use_container_width=True):
-            _ss.pop("fresh_df", None)
-            st.cache_data.clear()
-            st.rerun()
 
         _data_exists = False
         try:
@@ -1041,6 +1042,7 @@ with st.sidebar:
                 else:
                     _status_chip("No data yet — upload below", level="warn")
 
+            # ── Row count chip — always visible outside the expander ─────────
             if raw_df is not None and not raw_df.empty:
                 _chip_text = (
                     f"{len(raw_df):,} rows · "
@@ -1052,36 +1054,29 @@ with st.sidebar:
             _status_chip("Load error", level="error")
             st.error(f"Could not load data: {_load_err}")
 
-        # ── Data Management expander ─────────────────────────────────────────
+        # ── Data Management expander (password-protected) ────────────────────
         with st.expander("Data Management", expanded=not _data_exists):
 
-            # Admin password gate — auth state persists for the session
-            admin_pw = (
-                st.secrets["admin_password"]
-                if "admin_password" in st.secrets
-                else None
-            )
-            if "admin_authorized" not in _ss:
-                _ss.admin_authorized = not admin_pw  # auto-authorize if no pw set
-
-            if admin_pw and not _ss.admin_authorized:
-                entered_pw = st.text_input(
-                    "Admin password", type="password", key="admin_pw_input"
+            if not _ss.admin_authorized:
+                st.caption("Enter the admin password to manage data.")
+                _entered_pw = st.text_input(
+                    "Password", type="password", key="admin_pw_input"
                 )
-                if entered_pw:
-                    if entered_pw == admin_pw:
+                if _entered_pw:
+                    if _entered_pw == _ADMIN_PASSWORD:
                         _ss.admin_authorized = True
                         st.rerun()
                     else:
                         st.error("Incorrect password.")
+            else:
+                # ── Refresh data ─────────────────────────────────────────────
+                if st.button("↺  Refresh data", use_container_width=True):
+                    _ss.pop("fresh_df", None)
+                    st.cache_data.clear()
+                    st.rerun()
 
-            authorized = _ss.admin_authorized
-
-            if authorized:
-
-                # ── Current dataset summary ──────────────────────────────────
+                # ── Current dataset summary ───────────────────────────────────
                 if raw_df is not None and not raw_df.empty:
-                    st.markdown("**Current dataset**")
                     st.caption(
                         f"Rows: **{len(raw_df):,}**  \n"
                         f"Date range: **{raw_df['complete_date'].min()}** → "
@@ -1089,7 +1084,7 @@ with st.sidebar:
                         f"Unique dates: **{raw_df['complete_date'].nunique()}**"
                     )
 
-                    # ── Remove a date range ──────────────────────────────────
+                    # ── Remove a date range ───────────────────────────────────
                     with st.expander("Remove a date range", expanded=False):
                         st.caption(
                             "Permanently deletes all rows in the chosen window "
@@ -1129,7 +1124,7 @@ with st.sidebar:
                             }
                             st.rerun()
 
-                # ── Upload new file ──────────────────────────────────────────
+                # ── Upload new file ───────────────────────────────────────────
                 st.markdown("**Step 1 — Select XLSX export**")
                 new_file = st.file_uploader(
                     "Upload XLSX", type=["xlsx", "xls"], key="admin_upload",
@@ -1155,12 +1150,10 @@ with st.sidebar:
                         }
                         st.rerun()
 
-                # ── Danger zone ──────────────────────────────────────────────
+                # ── Danger zone ───────────────────────────────────────────────
                 st.markdown("---")
                 st.markdown("**Danger zone**")
-                if st.button(
-                    "Reset — delete all data", use_container_width=True,
-                ):
+                if st.button("Reset — delete all data", use_container_width=True):
                     _ss["pending_reset"] = True
                     st.rerun()
 
