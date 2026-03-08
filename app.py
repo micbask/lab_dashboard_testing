@@ -1487,6 +1487,87 @@ st.markdown(
 _table_h = min(80 + 35 * len(pivot), 900)
 st.dataframe(style_pivot(pivot, VMAX[map_type]), use_container_width=True, height=_table_h)
 
+# ── Cell drill-down — statistics ──────────────────────────────────────────────
+st.markdown(
+    '<div class="section-heading">Cell Drill-down</div>',
+    unsafe_allow_html=True,
+)
+
+_peak_hour_label = pivot[_hour_cols].sum().idxmax()
+
+# Seed to peak hour on first load or when stored value is no longer in scope
+if "drill_hour" not in _ss or _ss.get("drill_hour") not in _hour_cols:
+    _ss["drill_hour"] = _peak_hour_label
+
+_dd1, _dd2 = st.columns(2)
+with _dd1:
+    sel_proc = st.selectbox("Procedure", pivot.index.tolist(), key="drill_proc")
+with _dd2:
+    sel_hour_label = st.selectbox("Hour", _hour_cols, key="drill_hour")
+
+sel_hour_int = LABEL_TO_HOUR[sel_hour_label]
+
+# Value in the currently viewed cell
+_today_val = int(pivot.loc[sel_proc, sel_hour_label]) if sel_hour_label in pivot.columns else 0
+
+# Full history for this procedure × hour across all dates in the current map type
+_drill_df = filtered_df[
+    (filtered_df["Order Procedure"] == sel_proc) &
+    (filtered_df["hour"] == sel_hour_int)
+]
+
+# All-time average — only days where volume > 0 in this hour
+_alltime_by_day = _drill_df.groupby("complete_date")["Complete Volume"].sum()
+_alltime_by_day = _alltime_by_day[_alltime_by_day > 0]
+_alltime_avg    = round(float(_alltime_by_day.mean()), 1) if len(_alltime_by_day) else 0.0
+_alltime_n      = len(_alltime_by_day)
+
+# Current-month average (month of the selected date)
+_sel_year, _sel_month = selected_date.year, selected_date.month
+_month_start = date(_sel_year, _sel_month, 1)
+_month_end   = date(_sel_year + 1, 1, 1) if _sel_month == 12 else date(_sel_year, _sel_month + 1, 1)
+_month_mask  = (
+    (_drill_df["complete_date"] >= _month_start) &
+    (_drill_df["complete_date"] < _month_end)
+)
+_month_by_day = _drill_df[_month_mask].groupby("complete_date")["Complete Volume"].sum()
+_month_by_day = _month_by_day[_month_by_day > 0]
+_month_avg    = round(float(_month_by_day.mean()), 1) if len(_month_by_day) else 0.0
+_month_n      = len(_month_by_day)
+_month_label  = pd.Timestamp(selected_date).strftime("%B %Y")
+
+st.markdown(
+    f'<div style="font-size:0.88rem; font-weight:600; color:{_NAVY}; margin:0.3rem 0 0.5rem;">'
+    f'{sel_proc} &nbsp;&mdash;&nbsp; {sel_hour_label}'
+    f'</div>',
+    unsafe_allow_html=True,
+)
+
+_dm1, _dm2, _dm3 = st.columns(3)
+with _dm1:
+    st.markdown(
+        _metric_card("Today", f"{_today_val:,}", sub=date_str, accent=True),
+        unsafe_allow_html=True,
+    )
+with _dm2:
+    st.markdown(
+        _metric_card(
+            "All-time avg",
+            f"{_alltime_avg}",
+            sub=f"per day &nbsp;·&nbsp; n = {_alltime_n} days",
+        ),
+        unsafe_allow_html=True,
+    )
+with _dm3:
+    st.markdown(
+        _metric_card(
+            f"{_month_label} avg",
+            f"{_month_avg}",
+            sub=f"per day &nbsp;·&nbsp; n = {_month_n} days",
+        ),
+        unsafe_allow_html=True,
+    )
+
 # ── PNG download (lazy — rendered only on explicit request) ───────────────────
 _file_prefix = map_type.replace(" ", "_")
 _date_tag    = pd.Timestamp(selected_date).strftime("%Y-%m-%d")
@@ -1522,20 +1603,9 @@ if merge_log:
         )
         st.dataframe(pd.DataFrame(merge_log), use_container_width=True)
 
-# ── Cell drill-down ───────────────────────────────────────────────────────────
-with st.expander("Drill into a cell — individual completion events", expanded=False):
-    st.markdown(
-        "Select a **procedure** and **hour** to inspect every individual "
-        "completion event recorded in that cell."
-    )
-    _dd1, _dd2 = st.columns(2)
-    with _dd1:
-        sel_proc       = st.selectbox("Procedure", pivot.index.tolist(), key="drill_proc")
-    with _dd2:
-        sel_hour_label = st.selectbox("Hour", _hour_cols, key="drill_hour")
-
-    sel_hour_int = LABEL_TO_HOUR[sel_hour_label]
-    detail       = df_date[
+# ── Individual completion events for selected cell ────────────────────────────
+with st.expander("Individual completion events for selected cell", expanded=False):
+    detail = df_date[
         (df_date["Order Procedure"] == sel_proc) &
         (df_date["hour"] == sel_hour_int)
     ].copy().sort_values("Date/Time - Complete")
