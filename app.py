@@ -329,13 +329,15 @@ if _app_password is not None and not _ss.app_authenticated:
     with st.container():
         _col = st.columns([1, 2, 1])[1]
         with _col:
-            _pw_input = st.text_input("Password", type="password", key="_app_pw")
-            if st.button("Log in", use_container_width=True, type="primary"):
-                if _pw_input == _app_password:
-                    _ss.app_authenticated = True
-                    st.rerun()
-                else:
-                    st.error("Incorrect password.")
+            with st.form("login_form", enter_to_submit=True):
+                _pw_input = st.text_input("Password", type="password")
+                _submitted = st.form_submit_button("Log in", use_container_width=True, type="primary")
+                if _submitted:
+                    if _pw_input == _app_password:
+                        _ss.app_authenticated = True
+                        st.rerun()
+                    else:
+                        st.error("Incorrect password.")
     st.stop()
 
 
