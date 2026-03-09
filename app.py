@@ -6,8 +6,6 @@ Architecture:
   - Master dataset stored as Snappy-compressed Parquet in GitHub (data/lab_data.parquet)
   - On load: reads Parquet from GitHub → renders interactive heatmaps
   - On upload: parses XLSX, merges into master, writes back to GitHub
-  - Google Drive credentials exist in secrets but Drive is only used as a
-    fallback read/write path when GitHub is not configured
   - After a write, fresh_df in session_state bypasses the GitHub CDN stale-read
     window; user can force a re-fetch with the "Refresh data" button
 """
@@ -27,9 +25,6 @@ from matplotlib import font_manager
 import requests
 import streamlit as st
 
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
-from google.oauth2 import service_account
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -281,7 +276,7 @@ REQUIRED_COLS: set[str] = {
     "Complete Volume",
 }
 
-# Parquet filename (used for both Drive and GitHub paths)
+# Parquet filename
 PARQUET_FILENAME = "lab_data.parquet"
 
 # Hour display helpers
@@ -293,11 +288,8 @@ def _hour_label(h: int) -> str:
 HOUR_LABELS   = {h: _hour_label(h) for h in range(24)}
 LABEL_TO_HOUR = {v: k for k, v in HOUR_LABELS.items()}
 
-# Storage backend flags (evaluated once)
+# Storage backend flag (evaluated once)
 GITHUB_CONFIGURED = "github" in st.secrets
-DRIVE_CONFIGURED  = (
-    "gcp_service_account" in st.secrets and "google_drive" in st.secrets
-)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -345,135 +337,6 @@ if _app_password is not None and not _ss.app_authenticated:
                 else:
                     st.error("Incorrect password.")
     st.stop()
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# GOOGLE DRIVE HELPERS
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _get_drive_creds():
-    """Build and immediately refresh Drive service-account credentials.
-
-    Always called fresh for write operations; for read operations the Drive
-    service handle is cached via ``_get_drive_service()``.
-    """
-    from google.auth.transport.requests import Request as _GReq
-    info = dict(st.secrets["gcp_service_account"])
-    pk = info.get("private_key", "")
-    if "\\n" in pk:
-        pk = pk.replace("\\n", "\n")
-    info["private_key"] = pk
-    creds = service_account.Credentials.from_service_account_info(
-        info, scopes=["https://www.googleapis.com/auth/drive"]
-    )
-    creds.refresh(_GReq())
-    return creds
-
-
-@st.cache_resource(show_spinner=False)
-def _get_drive_service():
-    """Cached Google Drive API service handle.
-
-    Note: the underlying token is refreshed on first call only.  For
-    long-lived sessions this handle may eventually expire — in practice
-    Streamlit Cloud restarts apps frequently enough that this is not an
-    issue.  Write operations bypass this via ``_get_authed_session()``.
-    """
-    return build("drive", "v3", credentials=_get_drive_creds(), cache_discovery=False)
-
-
-def _get_authed_session():
-    """Return a freshly authorised requests.Session for Drive write operations."""
-    from google.auth.transport.requests import AuthorizedSession
-    return AuthorizedSession(_get_drive_creds())
-
-
-def _get_drive_file_meta(folder_id: str) -> dict | None:
-    """Return the Drive metadata dict for lab_data.parquet, or None if absent."""
-    svc = _get_drive_service()
-    res = svc.files().list(
-        q=f"'{folder_id}' in parents and name='{PARQUET_FILENAME}' and trashed=false",
-        fields="files(id, name, modifiedTime)",
-        supportsAllDrives=True,
-        includeItemsFromAllDrives=True,
-    ).execute()
-    files = res.get("files", [])
-    return files[0] if files else None
-
-
-def _download_drive_file(file_id: str, retries: int = 4) -> bytes:
-    """Download a Drive file, retrying with exponential back-off on errors."""
-    last_err = None
-    for attempt in range(retries):
-        try:
-            svc = _get_drive_service()
-            req = svc.files().get_media(fileId=file_id, supportsAllDrives=True)
-            buf = io.BytesIO()
-            dl  = MediaIoBaseDownload(buf, req, chunksize=4 * 1024 * 1024)
-            done = False
-            while not done:
-                _, done = dl.next_chunk()
-            buf.seek(0)
-            return buf.read()
-        except Exception as exc:
-            last_err = exc
-            time.sleep(2 ** attempt)
-    raise RuntimeError(f"Drive download failed after {retries} attempts: {last_err}")
-
-
-def _upload_to_drive(folder_id: str, parquet_bytes: bytes) -> None:
-    """Create or overwrite lab_data.parquet in the specified Drive folder.
-
-    Uses an AuthorizedSession (always fresh token) and the multipart upload
-    endpoint so metadata and content are sent in a single request.
-    """
-    session = _get_authed_session()
-
-    # Check whether the file already exists
-    resp = session.get(
-        "https://www.googleapis.com/drive/v3/files",
-        params={
-            "q": f"'{folder_id}' in parents and name='{PARQUET_FILENAME}' and trashed=false",
-            "fields": "files(id)",
-            "supportsAllDrives": "true",
-            "includeItemsFromAllDrives": "true",
-        },
-        timeout=30,
-    )
-    resp.raise_for_status()
-    existing = resp.json().get("files", [])
-
-    boundary  = "lab_heatmap_boundary"
-    meta_json = json.dumps(
-        {"name": PARQUET_FILENAME} if existing
-        else {"name": PARQUET_FILENAME, "parents": [folder_id]}
-    ).encode()
-    sep  = b"\r\n"
-    body = (
-        b"--" + boundary.encode() + sep
-        + b"Content-Type: application/json; charset=UTF-8" + sep + sep
-        + meta_json + sep
-        + b"--" + boundary.encode() + sep
-        + b"Content-Type: application/octet-stream" + sep + sep
-        + parquet_bytes + sep
-        + b"--" + boundary.encode() + b"--" + sep
-    )
-    headers = {"Content-Type": f"multipart/related; boundary={boundary}"}
-
-    if existing:
-        r = session.patch(
-            f"https://www.googleapis.com/upload/drive/v3/files/{existing[0]['id']}",
-            params={"uploadType": "multipart", "supportsAllDrives": "true"},
-            headers=headers, data=body, timeout=120,
-        )
-    else:
-        r = session.post(
-            "https://www.googleapis.com/upload/drive/v3/files",
-            params={"uploadType": "multipart", "supportsAllDrives": "true"},
-            headers=headers, data=body, timeout=120,
-        )
-    if not r.ok:
-        raise RuntimeError(f"Drive upload failed {r.status_code}: {r.text[:500]}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -746,20 +609,12 @@ def _remove_date_range(df: pd.DataFrame, start: date, end: date) -> pd.DataFrame
 
 @st.cache_data(show_spinner="Loading master dataset…", ttl=300)
 def _load_master_data(cache_key: str) -> pd.DataFrame:
-    """Load the master parquet from GitHub or Drive.
+    """Load the master parquet from GitHub.
 
-    ``cache_key`` encodes the current file version (blob SHA for GitHub,
-    modifiedTime for Drive) so the Streamlit cache is automatically busted
-    when the remote file changes.
+    ``cache_key`` encodes the current blob SHA so the Streamlit cache is
+    automatically busted when the remote file changes.
     """
-    if GITHUB_CONFIGURED:
-        return _parquet_bytes_to_df(_read_parquet_from_github())
-
-    folder_id = st.secrets["google_drive"]["folder_id"]
-    meta      = _get_drive_file_meta(folder_id)
-    if meta is None:
-        raise FileNotFoundError("No data file found on Drive. Use Data Management to upload.")
-    return _parquet_bytes_to_df(_download_drive_file(meta["id"]))
+    return _parquet_bytes_to_df(_read_parquet_from_github())
 
 
 @st.cache_data(show_spinner="Processing uploaded files…")
@@ -978,28 +833,19 @@ with st.sidebar:
     # ── Pending action: reset entire dataset ────────────────────────────────
     if _ss.pop("pending_reset", False):
         try:
-            if GITHUB_CONFIGURED:
-                owner, repo, path = _gh_coords()
-                sha = _get_github_sha()
-                if sha:
-                    requests.delete(
-                        f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
-                        headers=_gh_headers(),
-                        json={"message": "Reset master dataset", "sha": sha},
-                        timeout=15,
-                    )
-                    _get_github_sha.clear()
-                st.cache_data.clear()
-                _ss.pop("fresh_df", None)
-                st.success("Master dataset cleared.")
-            elif DRIVE_CONFIGURED:
-                folder_id_rst = st.secrets["google_drive"]["folder_id"]
-                meta_rst      = _get_drive_file_meta(folder_id_rst)
-                if meta_rst:
-                    _get_drive_service().files().delete(fileId=meta_rst["id"]).execute()
-                st.cache_data.clear()
-                _ss.pop("fresh_df", None)
-                st.success("Master dataset cleared.")
+            owner, repo, path = _gh_coords()
+            sha = _get_github_sha()
+            if sha:
+                requests.delete(
+                    f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
+                    headers=_gh_headers(),
+                    json={"message": "Reset master dataset", "sha": sha},
+                    timeout=15,
+                )
+                _get_github_sha.clear()
+            st.cache_data.clear()
+            _ss.pop("fresh_df", None)
+            st.success("Master dataset cleared.")
         except Exception as _rst_err:
             st.error(f"Reset failed: {_rst_err}")
 
@@ -1007,30 +853,18 @@ with st.sidebar:
     if "pending_delete_range" in _ss:
         del_info = _ss.pop("pending_delete_range")
         try:
-            # Load current master (prefer in-memory snapshot)
             if "fresh_df" in _ss:
                 src_df = _ss["fresh_df"]
-            elif GITHUB_CONFIGURED:
+            else:
                 sha_dr = _get_github_sha()
                 if not sha_dr:
                     raise ValueError("No data on GitHub to delete from.")
                 src_df = _parquet_bytes_to_df(_read_parquet_from_github())
-            else:
-                folder_id_dr = st.secrets["google_drive"]["folder_id"]
-                meta_dr      = _get_drive_file_meta(folder_id_dr)
-                if not meta_dr:
-                    raise ValueError("No data on Drive to delete from.")
-                src_df = _parquet_bytes_to_df(_download_drive_file(meta_dr["id"]))
 
             rows_before = len(src_df)
             new_df      = _remove_date_range(src_df, del_info["start"], del_info["end"])
             pq_bytes    = df_to_parquet_bytes(new_df)
-
-            if GITHUB_CONFIGURED:
-                _write_parquet_to_github(pq_bytes)
-            else:
-                _upload_to_drive(st.secrets["google_drive"]["folder_id"], pq_bytes)
-
+            _write_parquet_to_github(pq_bytes)
             _ss["fresh_df"] = new_df
             st.success(
                 f"Deleted {rows_before - len(new_df):,} rows "
@@ -1048,9 +882,8 @@ with st.sidebar:
     if "admin_authorized" not in _ss:
         _ss.admin_authorized = False
 
-    if GITHUB_CONFIGURED or DRIVE_CONFIGURED:
-        source_label = "GitHub" if GITHUB_CONFIGURED else "Google Drive"
-        st.caption(f"Storage: {source_label}")
+    if GITHUB_CONFIGURED:
+        st.caption("Storage: GitHub")
 
         _data_exists = False
         try:
@@ -1060,21 +893,11 @@ with st.sidebar:
                 # The snapshot remains until the user clicks "Refresh data".
                 raw_df       = _ss["fresh_df"]
                 _data_exists = True
-
-            elif GITHUB_CONFIGURED:
+            else:
                 _sha         = _get_github_sha()
                 _data_exists = _sha is not None
                 if _data_exists:
                     raw_df = _load_master_data(_sha)
-                else:
-                    _status_chip("No data yet — upload below", level="warn")
-
-            else:
-                _folder_id   = st.secrets["google_drive"]["folder_id"]
-                _meta        = _get_drive_file_meta(_folder_id)
-                _data_exists = _meta is not None
-                if _data_exists:
-                    raw_df = _load_master_data(_meta["modifiedTime"])
                 else:
                     _status_chip("No data yet — upload below", level="warn")
 
@@ -1204,8 +1027,7 @@ with st.sidebar:
         # No remote storage configured — fall back to in-session file upload
         st.markdown("**Data source:** Local file upload")
         st.caption(
-            "Configure GitHub or Google Drive in Streamlit secrets "
-            "to enable persistent storage."
+            "Configure GitHub in Streamlit secrets to enable persistent storage."
         )
         uploaded_files = st.file_uploader(
             "Upload Excel file(s)", type=["xlsx", "xls"], accept_multiple_files=True,
@@ -1377,23 +1199,12 @@ if _ss.get("pending_upload"):
             st.write("**Step 2 / 4** — Loading existing master dataset…")
             existing_df = pd.DataFrame()
             try:
-                if GITHUB_CONFIGURED:
-                    sha_up = _get_github_sha()
-                    if sha_up:
-                        existing_df = _parquet_bytes_to_df(_read_parquet_from_github())
-                        st.write(f"Existing master: **{len(existing_df):,}** rows")
-                    else:
-                        st.write("No existing master — creating a new one.")
-                elif DRIVE_CONFIGURED:
-                    folder_id_up = st.secrets["google_drive"]["folder_id"]
-                    meta_up      = _get_drive_file_meta(folder_id_up)
-                    if meta_up:
-                        existing_df = _parquet_bytes_to_df(
-                            _download_drive_file(meta_up["id"])
-                        )
-                        st.write(f"Existing master: **{len(existing_df):,}** rows")
-                    else:
-                        st.write("No existing master — creating a new one.")
+                sha_up = _get_github_sha()
+                if sha_up:
+                    existing_df = _parquet_bytes_to_df(_read_parquet_from_github())
+                    st.write(f"Existing master: **{len(existing_df):,}** rows")
+                else:
+                    st.write("No existing master — creating a new one.")
             except Exception as _load_ex:
                 st.write(f"Could not load existing data ({_load_ex}) — creating new master.")
 
@@ -1420,12 +1231,8 @@ if _ss.get("pending_upload"):
                 )
             st.write(f"Payload: **{len(pq_bytes) / 1024 / 1024:.2f} MB** (valid)")
 
-            if GITHUB_CONFIGURED:
-                _write_parquet_to_github(pq_bytes)
-                st.write("Saved to GitHub.")
-            elif DRIVE_CONFIGURED:
-                _upload_to_drive(st.secrets["google_drive"]["folder_id"], pq_bytes)
-                st.write("Saved to Google Drive.")
+            _write_parquet_to_github(pq_bytes)
+            st.write("Saved to GitHub.")
 
             # Store merged result in session so the dashboard renders immediately
             # without waiting for the GitHub CDN to reflect the new commit.
@@ -1462,7 +1269,7 @@ if raw_df is None or raw_df.empty:
     </div>
     """, unsafe_allow_html=True)
     st.info(
-        "Welcome!  Upload a file or configure GitHub / Google Drive in your "
+        "Welcome!  Upload a file or configure GitHub in your "
         "Streamlit secrets to start viewing lab productivity heatmaps."
     )
     st.stop()
