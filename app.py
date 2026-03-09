@@ -309,6 +309,42 @@ if "resource_assignments" not in _ss:
     _ss.resource_assignments = deepcopy(DEFAULT_RESOURCES)
 if "last_map_type" not in _ss:
     _ss.last_map_type = None
+if "app_authenticated" not in _ss:
+    _ss.app_authenticated = False
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# APP-LEVEL PASSWORD GATE
+# ═════════════════════════════════════════════════════════════════════════════
+_app_password = st.secrets.get("app_password", None)
+if _app_password is not None and not _ss.app_authenticated:
+    st.markdown(f"""
+    <div style="max-width:380px; margin:6rem auto 0; padding:2rem 2rem 1.5rem;
+                background:#fff; border-radius:12px;
+                box-shadow:0 4px 20px rgba(0,0,0,0.10);">
+      <div style="background:linear-gradient(135deg,{_NAVY} 0%,#1a1a1a 100%);
+                  border-radius:8px; padding:1rem 1.2rem; margin-bottom:1.4rem;">
+        <div style="color:#fff; font-size:1.1rem; font-weight:700;">
+          Analytics Dashboard
+        </div>
+        <div style="color:{_GOLD}; font-size:0.8rem; margin-top:0.2rem;">
+          Keck Medicine of USC &nbsp;·&nbsp; Laboratory Productivity
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.container():
+        _col = st.columns([1, 2, 1])[1]
+        with _col:
+            _pw_input = st.text_input("Password", type="password", key="_app_pw")
+            if st.button("Log in", use_container_width=True, type="primary"):
+                if _pw_input == _app_password:
+                    _ss.app_authenticated = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect password.")
+    st.stop()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1009,9 +1045,6 @@ with st.sidebar:
     raw_df    = None
     merge_log = []
 
-    # Hardcoded admin password
-    _ADMIN_PASSWORD = "labadmin"
-
     if "admin_authorized" not in _ss:
         _ss.admin_authorized = False
 
@@ -1061,16 +1094,23 @@ with st.sidebar:
         with st.expander("Data Management", expanded=not _data_exists):
 
             if not _ss.admin_authorized:
-                st.caption("Enter the admin password to manage data.")
-                _entered_pw = st.text_input(
-                    "Password", type="password", key="admin_pw_input"
-                )
-                if _entered_pw:
-                    if _entered_pw == _ADMIN_PASSWORD:
-                        _ss.admin_authorized = True
-                        st.rerun()
-                    else:
-                        st.error("Incorrect password.")
+                _admin_secret = st.secrets.get("admin_password", None)
+                if _admin_secret is None:
+                    st.error(
+                        "Admin access is not configured. "
+                        "Set `admin_password` in Streamlit secrets to enable."
+                    )
+                else:
+                    st.caption("Enter the admin password to manage data.")
+                    _entered_pw = st.text_input(
+                        "Password", type="password", key="admin_pw_input"
+                    )
+                    if _entered_pw:
+                        if _entered_pw == _admin_secret:
+                            _ss.admin_authorized = True
+                            st.rerun()
+                        else:
+                            st.error("Incorrect password.")
             else:
                 # ── Refresh data ─────────────────────────────────────────────
                 if st.button("↺  Refresh data", use_container_width=True):
