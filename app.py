@@ -749,12 +749,7 @@ def filter_for_map(df: pd.DataFrame, map_type: str) -> pd.DataFrame:
     """
     resources = _ss.resource_assignments[map_type]
     out = df[df["Performing Service Resource"].isin(resources)].copy()
-    out = out[~out["Order Procedure"].isin(EXCLUDE_PROCS)]
-    top30 = (
-        out.groupby("Order Procedure")["Complete Volume"]
-        .sum().sort_values(ascending=False).head(30).index.tolist()
-    )
-    return out[out["Order Procedure"].isin(top30)].copy()
+    return out[~out["Order Procedure"].isin(EXCLUDE_PROCS)].copy()
 
 
 def build_pivot(
@@ -774,6 +769,14 @@ def build_pivot(
 
     if df_dh.empty:
         return None, None, df_date, hours
+
+    # Top-30 by that day's total volume only (matches original per-day script behaviour)
+    top30 = (
+        df_date.groupby("Order Procedure")["Complete Volume"]
+        .sum().sort_values(ascending=False).head(30).index.tolist()
+    )
+    df_date = df_date[df_date["Order Procedure"].isin(top30)]
+    df_dh   = df_dh[df_dh["Order Procedure"].isin(top30)]
 
     pivot = (
         df_dh.pivot_table(
