@@ -52,48 +52,192 @@ _LIGHT  = "#F4F6FA"
 _MUTED  = "#6B7280"
 _BORDER = "#D1D5DB"
 
-st.markdown(f"""
+st.markdown("""
 <style>
-  /* ── FIX 4: Base font & background ── */
-  html, body, [class*="css"] {{
+/* ── BASE ────────────────────────────────────────────── */
+html, body, [data-testid="stAppViewContainer"],
+[data-testid="stApp"], section.main {
     font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
-    background-color: #f8fafc !important;
-  }}
-  .stApp {{
-    background-color: #f8fafc;
-  }}
-
-  /* ── Remove default top padding ── */
-  .block-container {{
-    padding-top: 1rem !important;
-    padding-bottom: 2rem;
-  }}
-
-  /* ── Top header banner ── */
-  .keck-header {{
-    background: linear-gradient(135deg, {_NAVY} 0%, #5a0000 100%);
+    background-color: #f4f4f4 !important;
+}
+.block-container {
+    padding-top: 1.5rem !important;
+    max-width: 1400px !important;
+}
+/* ── SIDEBAR ─────────────────────────────────────────── */
+[data-testid="stSidebar"] {
+    background-color: #1a1a1a !important;
+}
+[data-testid="stSidebar"] * {
+    color: #ffffff !important;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] span {
+    color: #ffffff !important;
+    font-size: 0.82rem !important;
+    letter-spacing: 0.05em !important;
+    text-transform: uppercase !important;
+    font-weight: 600 !important;
+}
+/* ── ALL BUTTONS (entire app) ────────────────────────── */
+button[kind], button[kind="secondary"],
+button[kind="primary"], .stButton > button,
+[data-testid="stSidebar"] .stButton > button,
+[data-testid="stBaseButton-secondary"],
+[data-testid="stBaseButton-primary"] {
+    background-color: #111111 !important;
+    color: #ffffff !important;
+    border: 1px solid #333333 !important;
+    border-radius: 5px !important;
+    font-weight: 600 !important;
+    font-size: 0.85rem !important;
+    padding: 0.45rem 1rem !important;
+    transition: background-color 0.15s ease !important;
+    box-shadow: none !important;
+}
+button[kind]:hover, button[kind="secondary"]:hover,
+button[kind="primary"]:hover, .stButton > button:hover,
+[data-testid="stSidebar"] .stButton > button:hover,
+[data-testid="stBaseButton-secondary"]:hover,
+[data-testid="stBaseButton-primary"]:hover {
+    background-color: #2a2a2a !important;
+    color: #ffffff !important;
+    border-color: #444444 !important;
+}
+/* ── ALL SELECTBOXES / DROPDOWNS (entire app) ─────────── */
+[data-testid="stSelectbox"] > div > div,
+[data-testid="stSidebar"] [data-testid="stSelectbox"] > div > div {
+    background-color: #111111 !important;
+    color: #ffffff !important;
+    border: 1px solid #333333 !important;
+    border-radius: 5px !important;
+}
+[data-testid="stSelectbox"] > div > div:focus-within,
+[data-testid="stSelectbox"] > div > div[aria-expanded="true"] {
+    background-color: #2a2a2a !important;
+    border-color: #555555 !important;
+}
+[data-testid="stSelectbox"] svg,
+[data-testid="stSidebar"] [data-testid="stSelectbox"] svg {
+    fill: #ffffff !important;
+    color: #ffffff !important;
+}
+/* Dropdown option list */
+[data-testid="stSelectbox"] ul,
+[role="listbox"] {
+    background-color: #1a1a1a !important;
+    border: 1px solid #333333 !important;
+    border-radius: 5px !important;
+}
+[data-testid="stSelectbox"] li,
+[role="option"] {
+    color: #ffffff !important;
+    background-color: #1a1a1a !important;
+}
+[data-testid="stSelectbox"] li:hover,
+[role="option"]:hover,
+[role="option"][aria-selected="true"] {
+    background-color: #2a2a2a !important;
+    color: #ffffff !important;
+}
+/* ── DATE INPUT ──────────────────────────────────────── */
+[data-testid="stDateInput"] input,
+[data-testid="stSidebar"] [data-testid="stDateInput"] input {
+    background-color: #111111 !important;
+    color: #ffffff !important;
+    border: 1px solid #333333 !important;
+    border-radius: 5px !important;
+}
+[data-testid="stDateInput"] svg {
+    fill: #ffffff !important;
+}
+/* ── RADIO BUTTONS (Daily / Monthly toggle) ──────────── */
+[data-testid="stRadio"] label {
+    background-color: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+}
+[data-testid="stRadio"] label p {
+    color: #ffffff !important;
+    font-weight: 500 !important;
+    font-size: 0.88rem !important;
+    background-color: transparent !important;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
+}
+[data-testid="stRadio"] label:hover {
+    background-color: transparent !important;
+}
+/* ── TEXT INPUTS (password fields etc.) ──────────────── */
+[data-testid="stTextInput"] input {
+    background-color: #ffffff !important;
+    color: #111111 !important;
+    border: 1px solid #cccccc !important;
+    border-radius: 5px !important;
+}
+/* ── METRIC CARDS ────────────────────────────────────── */
+[data-testid="metric-container"] {
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    border-top: 3px solid #800000 !important;
+    border-radius: 8px !important;
+    padding: 1rem 1.25rem !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.07) !important;
+}
+[data-testid="metric-container"] label {
+    font-size: 0.7rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.07em !important;
+    text-transform: uppercase !important;
+    color: #64748b !important;
+}
+[data-testid="metric-container"] [data-testid="stMetricValue"] {
+    font-size: 1.55rem !important;
+    font-weight: 700 !important;
+    color: #0f172a !important;
+}
+/* ── EXPANDERS ───────────────────────────────────────── */
+[data-testid="stExpander"] {
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 8px !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+}
+[data-testid="stExpander"] summary {
+    font-weight: 600 !important;
+    color: #0f172a !important;
+}
+/* ── DIVIDERS ────────────────────────────────────────── */
+hr {
+    border-color: #e2e8f0 !important;
+    margin: 1rem 0 !important;
+}
+/* ── CUSTOM COMPONENT CLASSES (used by keck-header, metric-card, etc.) ── */
+.keck-header {
+    background: linear-gradient(135deg, #800000 0%, #5a0000 100%);
     padding: 1.1rem 1.8rem;
     border-radius: 10px;
     margin-bottom: 1.2rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
-  }}
-  .keck-header h1 {{
-    color: {_WHITE};
+}
+.keck-header h1 {
+    color: #FFFFFF;
     font-size: 1.45rem;
     font-weight: 700;
     margin: 0;
     letter-spacing: 0.3px;
-  }}
-  .keck-header .subtitle {{
-    color: {_GOLD};
+}
+.keck-header .subtitle {
+    color: #FFCC00;
     font-size: 0.85rem;
     margin: 0.25rem 0 0;
     opacity: 0.95;
-  }}
-  .keck-badge {{
-    background: {_GOLD};
+}
+.keck-badge {
+    background: #FFCC00;
     color: #1a1a1a;
     font-size: 0.7rem;
     font-weight: 700;
@@ -101,81 +245,53 @@ st.markdown(f"""
     border-radius: 12px;
     letter-spacing: 1px;
     text-transform: uppercase;
-  }}
-  .keck-date-label {{
+}
+.keck-date-label {
     color: #CBD5E1;
     font-size: 0.78rem;
     margin-top: 6px;
     display: block;
-  }}
-
-  /* ── FIX 4: Native st.metric cards ── */
-  [data-testid="metric-container"] {{
-    background: white !important;
-    border: 1px solid #e2e8f0 !important;
-    border-top: 3px solid {_NAVY} !important;
-    border-radius: 8px !important;
-    padding: 1rem 1.25rem !important;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.06) !important;
-  }}
-  [data-testid="metric-container"] label {{
-    font-size: 0.72rem !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.06em !important;
-    text-transform: uppercase !important;
-    color: #64748b !important;
-  }}
-  [data-testid="metric-container"] [data-testid="stMetricValue"] {{
-    font-size: 1.6rem !important;
-    font-weight: 700 !important;
-    color: #0f172a !important;
-  }}
-
-  /* ── Custom HTML metric cards ── */
-  .metric-card {{
+}
+.metric-card {
     background: white;
     border: 1px solid #e2e8f0;
-    border-top: 4px solid {_NAVY};
+    border-top: 4px solid #800000;
     border-radius: 8px;
     padding: 0.85rem 1rem;
     margin-bottom: 0.5rem;
     height: 100%;
     box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-  }}
-  .metric-card.accent {{ border-top-color: {_GOLD}; }}
-  .metric-card .label {{
+}
+.metric-card.accent { border-top-color: #FFCC00; }
+.metric-card .label {
     color: #64748b;
     font-size: 0.72rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.6px;
     margin-bottom: 0.3rem;
-  }}
-  .metric-card .value {{
-    color: {_NAVY};
+}
+.metric-card .value {
+    color: #800000;
     font-size: 1.5rem;
     font-weight: 700;
     line-height: 1.1;
     word-break: break-word;
-  }}
-  .metric-card .sub {{
+}
+.metric-card .sub {
     color: #64748b;
     font-size: 0.72rem;
     margin-top: 0.2rem;
-  }}
-
-  /* ── Section headings ── */
-  .section-heading {{
-    color: {_NAVY};
+}
+.section-heading {
+    color: #800000;
     font-size: 1.05rem;
     font-weight: 700;
-    border-bottom: 2px solid {_GOLD};
+    border-bottom: 2px solid #FFCC00;
     padding-bottom: 0.3rem;
     margin: 1rem 0 0.8rem;
-  }}
-
-  /* ── Heatmap legend bar ── */
-  .heatmap-legend {{
+}
+.heatmap-legend {
     background: white;
     border: 1px solid #e2e8f0;
     border-radius: 6px;
@@ -183,10 +299,8 @@ st.markdown(f"""
     font-size: 0.78rem;
     color: #64748b;
     margin-bottom: 0.6rem;
-  }}
-
-  /* ── Status chips ── */
-  .status-chip {{
+}
+.status-chip {
     display: inline-block;
     background: #DCFCE7;
     color: #166534;
@@ -195,145 +309,27 @@ st.markdown(f"""
     padding: 3px 9px;
     border-radius: 10px;
     margin-bottom: 0.4rem;
-  }}
-  .status-chip.warn  {{ background: #FEF9C3; color: #854D0E; }}
-  .status-chip.error {{ background: #FEE2E2; color: #991B1B; }}
-
-  /* ── FIX 4: Sidebar ── */
-  section[data-testid="stSidebar"] {{
-    background-color: #ffffff !important;
-    border-right: 1px solid #e2e8f0 !important;
-  }}
-  section[data-testid="stSidebar"] .stMarkdown h3 {{
-    color: {_NAVY};
-    font-size: 0.8rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 0.35rem;
-  }}
-  section[data-testid="stSidebar"] .stSelectbox label,
-  section[data-testid="stSidebar"] .stRadio label,
-  section[data-testid="stSidebar"] p,
-  section[data-testid="stSidebar"] span {{
-    color: #1a1a1a !important;
-    font-size: 0.85rem !important;
-  }}
-
-  /* ── Radio button labels: no highlight ── */
-  div[data-testid="stRadio"] label {{
-    background-color: transparent !important;
-    box-shadow: none !important;
-    border: none !important;
-    padding: 0 !important;
-  }}
-  div[data-testid="stRadio"] label:hover {{
-    background-color: transparent !important;
-  }}
-  div[data-testid="stRadio"] label p {{
-    color: #1a1a1a !important;
-    font-weight: 500 !important;
-    font-size: 0.9rem !important;
-    background-color: transparent !important;
-  }}
-
-  /* ── FIX 4: Expanders ── */
-  details {{
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 8px !important;
-    margin-bottom: 0.75rem !important;
-  }}
-  div[data-testid="stExpander"] {{
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 8px !important;
-    margin-bottom: 0.5rem;
-  }}
-
-  /* ── FIX 4: Dividers ── */
-  hr {{
-    border-color: #e2e8f0 !important;
-    margin: 1rem 0 !important;
-  }}
-  .metrics-divider {{
+}
+.status-chip.warn  { background: #FEF9C3; color: #854D0E; }
+.status-chip.error { background: #FEE2E2; color: #991B1B; }
+.metrics-divider {
     border: none;
     border-top: 1px solid #e2e8f0;
     margin: 0.8rem 0 1rem;
-  }}
-
-  /* ── FIX 4: Buttons ── */
-  .stButton > button {{
-    background-color: {_NAVY} !important;
+}
+.refresh-btn button {
+    background-color: #800000 !important;
     color: white !important;
+    font-weight: 600 !important;
     border: none !important;
     border-radius: 6px !important;
-    font-weight: 600 !important;
-  }}
-  .stButton > button:hover {{
-    background-color: #5a0000 !important;
-  }}
-
-  /* ── DataFrames ── */
-  div[data-testid="stDataFrame"] {{
+    width: 100% !important;
+}
+div[data-testid="stDataFrame"] {
     border-radius: 8px;
     overflow: hidden;
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-  }}
-
-  /* ── Refresh data button ── */
-  .refresh-btn button {{
-    background-color: {_NAVY} !important;
-    color: white !important;
-    font-weight: 600 !important;
-    border: none !important;
-    border-radius: 6px !important;
-    width: 100% !important;
-  }}
-
-  /* ── Sidebar buttons ── */
-  section[data-testid="stSidebar"] .stButton > button {{
-    background-color: #800000 !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 6px !important;
-    font-weight: 600 !important;
-    width: 100% !important;
-  }}
-  section[data-testid="stSidebar"] .stButton > button:hover {{
-    background-color: #600000 !important;
-    color: white !important;
-  }}
-
-  /* ── Sidebar selectbox/dropdown — the visible box ── */
-  section[data-testid="stSidebar"] .stSelectbox > div > div {{
-    background-color: #800000 !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 6px !important;
-  }}
-  /* Sidebar selectbox text inside the box */
-  section[data-testid="stSidebar"] .stSelectbox > div > div > div {{
-    color: white !important;
-  }}
-  /* Sidebar selectbox dropdown arrow/icon */
-  section[data-testid="stSidebar"] .stSelectbox svg {{
-    fill: white !important;
-  }}
-
-  /* ── Sidebar date input ── */
-  section[data-testid="stSidebar"] .stDateInput > div > div > input {{
-    background-color: #800000 !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 6px !important;
-  }}
-
-  /* ── Sidebar text input (password field — keep white for readability) ── */
-  section[data-testid="stSidebar"] .stTextInput > div > div > input {{
-    background-color: white !important;
-    color: #1a1a1a !important;
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 6px !important;
-  }}
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -349,44 +345,49 @@ if "app_authenticated" not in st.session_state:
     st.session_state["app_authenticated"] = False
 
 if _app_password is not None and not st.session_state["app_authenticated"]:
-    st.markdown(
-        "<div style='max-width:400px;margin:8rem auto;border-radius:10px;"
-        "box-shadow:none;overflow:hidden;'>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("""
-        <div style="
-            background-color: #800000;
-            padding: 2rem 2.5rem 1.5rem 2.5rem;
-            border-radius: 10px 10px 0 0;
-            text-align: center;
-            box-shadow: none;
-            margin-bottom: 0;
-        ">
-            <h1 style="
-                color: #FFCC00;
-                font-family: 'Inter', system-ui, sans-serif;
-                font-size: 1.8rem;
-                font-weight: 700;
-                letter-spacing: 0.04em;
-                margin: 0;
-                padding: 0;
-                text-shadow: none;
-            ">Laboratory Productivity</h1>
-        </div>
-        <div style="background:white;padding:2rem 2.5rem 2rem 2.5rem;border-radius:0 0 10px 10px;">
-    """, unsafe_allow_html=True)
-    with st.form("login_form", enter_to_submit=True):
-        _pw_input = st.text_input("Password", type="password", label_visibility="collapsed",
-                                  placeholder="Enter password")
-        _submitted = st.form_submit_button("Log in", use_container_width=True)
-        if _submitted:
-            if _pw_input == _app_password:
-                st.session_state["app_authenticated"] = True
-                st.rerun()
-            else:
-                st.error("Incorrect password")
-    st.markdown("</div></div>", unsafe_allow_html=True)
+    _, col, _ = st.columns([1, 1.2, 1])
+    with col:
+        st.markdown("""
+            <div style="
+                background-color: #800000;
+                padding: 2rem 2rem 1.5rem 2rem;
+                border-radius: 10px 10px 0 0;
+                text-align: center;
+                box-shadow: none;
+            ">
+                <h1 style="
+                    color: #FFCC00;
+                    font-family: 'Inter', system-ui, sans-serif;
+                    font-size: 1.5rem;
+                    font-weight: 700;
+                    letter-spacing: 0.05em;
+                    margin: 0;
+                    padding: 0;
+                    text-shadow: none;
+                ">Laboratory Productivity</h1>
+            </div>
+            <div style="
+                background: #ffffff;
+                padding: 1.75rem 2rem 2rem 2rem;
+                border-radius: 0 0 10px 10px;
+                border: 1px solid #e2e8f0;
+                border-top: none;
+                box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+            ">
+        """, unsafe_allow_html=True)
+        with st.form("login_form", enter_to_submit=True):
+            password = st.text_input("Password", type="password",
+                                     label_visibility="collapsed",
+                                     placeholder="Enter password")
+            submitted = st.form_submit_button("Log in",
+                                              use_container_width=True)
+            if submitted:
+                if password == st.secrets.get("app_password", ""):
+                    st.session_state["app_authenticated"] = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect password")
+        st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
 
