@@ -56,6 +56,7 @@ st.markdown("""
 <style>
 /* ══════════════════════════════════════════════════════════
    BASE — background & font
+   Matches config.toml: backgroundColor = "#f4f4f4"
    ══════════════════════════════════════════════════════════ */
 html, body,
 [data-testid="stAppViewContainer"],
@@ -71,15 +72,16 @@ section.main {
 }
 
 /* ══════════════════════════════════════════════════════════
-   SIDEBAR — light gray background, dark labels
+   SIDEBAR — dark background, light text
+   Matches config.toml: secondaryBackgroundColor = "#1a1a1a"
    ══════════════════════════════════════════════════════════ */
 [data-testid="stSidebar"] {
-    background-color: #f0f0f0 !important;
-    border-right: 1px solid #d8d8d8 !important;
+    background-color: #1a1a1a !important;
+    border-right: 1px solid #333333 !important;
 }
 /* Section headings (### markdown) */
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
-    color: #800000 !important;
+    color: #FFCC00 !important;
     font-size: 0.78rem !important;
     font-weight: 700 !important;
     text-transform: uppercase !important;
@@ -89,7 +91,7 @@ section.main {
 /* General text / labels inside sidebar */
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
 [data-testid="stSidebar"] label {
-    color: #1a1a1a !important;
+    color: #ffffff !important;
     font-size: 0.82rem !important;
     font-weight: 600 !important;
 }
@@ -97,17 +99,22 @@ section.main {
 [data-testid="stSidebar"] [data-testid="stCaptionContainer"],
 [data-testid="stSidebar"] small,
 [data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
-    color: #555555 !important;
+    color: #aaaaaa !important;
     font-size: 0.75rem !important;
     font-weight: 400 !important;
     text-transform: none !important;
     letter-spacing: 0 !important;
 }
+/* Dividers inside sidebar */
+[data-testid="stSidebar"] hr {
+    border-color: #333333 !important;
+}
 
 /* ══════════════════════════════════════════════════════════
-   BUTTONS — maroon everywhere, very specific selectors
+   BUTTONS — maroon everywhere
+   Matches config.toml: primaryColor = "#800000"
+   Uses html body prefix for higher specificity than Streamlit's own CSS
    ══════════════════════════════════════════════════════════ */
-/* Catch Streamlit's generated button elements by every known selector */
 html body .stButton > button,
 html body [data-testid="stBaseButton-secondary"],
 html body [data-testid="stBaseButton-primary"],
@@ -169,15 +176,15 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     fill: #ffffff !important;
     color: #ffffff !important;
 }
-/* Dropdown option list */
+/* Dropdown option list — dark to match sidebar secondaryBackground */
 [role="listbox"] {
-    background-color: #2a2a2a !important;
+    background-color: #1a1a1a !important;
     border: 1px solid #444444 !important;
     border-radius: 5px !important;
 }
 [role="option"] {
     color: #ffffff !important;
-    background-color: #2a2a2a !important;
+    background-color: #1a1a1a !important;
 }
 [role="option"]:hover,
 [role="option"][aria-selected="true"] {
@@ -201,7 +208,7 @@ html body [data-testid="stBaseButton-primary"]:disabled {
 }
 
 /* ══════════════════════════════════════════════════════════
-   RADIO BUTTONS — transparent, readable text
+   RADIO BUTTONS — transparent, white text on dark sidebar
    ══════════════════════════════════════════════════════════ */
 [data-testid="stRadio"] label {
     background-color: transparent !important;
@@ -209,7 +216,7 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     border: none !important;
 }
 [data-testid="stRadio"] label p {
-    color: #1a1a1a !important;
+    color: #ffffff !important;
     font-weight: 500 !important;
     font-size: 0.88rem !important;
     background-color: transparent !important;
@@ -233,6 +240,7 @@ html body [data-testid="stBaseButton-primary"]:disabled {
 
 /* ══════════════════════════════════════════════════════════
    METRIC CARDS (native st.metric)
+   Matches config.toml: textColor = "#0f172a", primaryColor = "#800000"
    ══════════════════════════════════════════════════════════ */
 [data-testid="metric-container"] {
     background: #ffffff !important;
@@ -270,7 +278,7 @@ html body [data-testid="stBaseButton-primary"]:disabled {
 }
 
 /* ══════════════════════════════════════════════════════════
-   DIVIDERS
+   DIVIDERS (main panel)
    ══════════════════════════════════════════════════════════ */
 hr {
     border-color: #e2e8f0 !important;
@@ -280,6 +288,7 @@ hr {
 /* ══════════════════════════════════════════════════════════
    CUSTOM COMPONENT CLASSES
    (keck-header, metric-card, section-heading, etc.)
+   primaryColor = "#800000", gold = "#FFCC00", textColor = "#0f172a"
    ══════════════════════════════════════════════════════════ */
 .keck-header {
     background: linear-gradient(135deg, #800000 0%, #5a0000 100%);
@@ -291,7 +300,7 @@ hr {
     justify-content: space-between;
 }
 .keck-header h1 {
-    color: #FFFFFF;
+    color: #ffffff;
     font-size: 1.45rem;
     font-weight: 700;
     margin: 0;
@@ -320,7 +329,7 @@ hr {
     display: block;
 }
 .metric-card {
-    background: white;
+    background: #ffffff;
     border: 1px solid #e2e8f0;
     border-top: 4px solid #800000;
     border-radius: 8px;
@@ -359,7 +368,7 @@ hr {
     margin: 1rem 0 0.8rem;
 }
 .heatmap-legend {
-    background: white;
+    background: #ffffff;
     border: 1px solid #e2e8f0;
     border-radius: 6px;
     padding: 0.5rem 0.8rem;
@@ -386,7 +395,7 @@ hr {
 }
 .refresh-btn button {
     background-color: #800000 !important;
-    color: white !important;
+    color: #ffffff !important;
     font-weight: 600 !important;
     border: none !important;
     border-radius: 6px !important;
@@ -1562,6 +1571,18 @@ with st.sidebar:
             _min_d = available_dates[0]
             _max_d = available_dates[-1]
 
+            # ── Apply any pending navigation from the previous run ──────────
+            # Prev/Next buttons cannot set _ss["date_picker"] directly after
+            # the date_input widget has rendered (Streamlit raises
+            # StreamlitAPIException for widget-owned keys).  Instead they store
+            # the target date in "_pending_date" (a plain session-state key),
+            # and we apply it here — before the widget renders — which is safe.
+            if "_pending_date" in _ss:
+                _pending = _ss.pop("_pending_date")
+                if _min_d <= _pending <= _max_d:
+                    _ss["date_picker"] = _pending
+
+            # ── Initialise / clamp date_picker (safe: widget not yet rendered) ─
             if (
                 "date_picker" not in _ss
                 or _ss["date_picker"] < _min_d
@@ -1582,6 +1603,10 @@ with st.sidebar:
                 f"{_min_d} → {_max_d}"
             )
 
+            # ── Render the date picker widget ───────────────────────────────
+            # After this line _ss["date_picker"] is owned by the widget.
+            # Do NOT assign to _ss["date_picker"] anywhere below this point —
+            # use _ss["_pending_date"] instead.
             picked_date = st.date_input(
                 "Select date",
                 min_value=_min_d,
@@ -1590,28 +1615,30 @@ with st.sidebar:
                 key="date_picker",
             )
 
+            # If the user typed a date with no data, show nearest and queue a
+            # correction for the next run via _pending_date (not the widget key)
             if picked_date not in available_dates:
                 _dates_arr = pd.to_datetime(available_dates)
                 _idx_near  = (
                     (_dates_arr - pd.Timestamp(picked_date)).abs().argmin()
                 )
-                _ss["date_picker"] = available_dates[_idx_near]
+                _nearest = available_dates[_idx_near]
                 st.caption(
                     f"No data on {picked_date} for **{map_type}** — "
-                    f"showing nearest: **{_ss['date_picker']}**"
+                    f"showing nearest: **{_nearest}**"
                 )
-                picked_date = _ss["date_picker"]
+                _ss["_pending_date"] = _nearest   # corrected on next rerun
+                picked_date = _nearest
 
             selected_date = picked_date
 
-            # Guard: if selected_date somehow not in available_dates (e.g. type
-            # mismatch after a map-type switch), fall back to the last date.
+            # Compute index — safe linear search on the (small) list
             try:
                 _cur_idx = available_dates.index(selected_date)
             except ValueError:
                 _cur_idx = len(available_dates) - 1
                 selected_date = available_dates[_cur_idx]
-                _ss["date_picker"] = selected_date
+                _ss["_pending_date"] = selected_date   # queue fix, not widget key
 
             _nc1, _nc2 = st.columns(2)
             with _nc1:
@@ -1619,14 +1646,14 @@ with st.sidebar:
                     "◄ Prev", use_container_width=True,
                     disabled=(_cur_idx == 0),
                 ):
-                    _ss["date_picker"] = available_dates[_cur_idx - 1]
+                    _ss["_pending_date"] = available_dates[_cur_idx - 1]
                     st.rerun()
             with _nc2:
                 if st.button(
                     "Next ►", use_container_width=True,
                     disabled=(_cur_idx == len(available_dates) - 1),
                 ):
-                    _ss["date_picker"] = available_dates[_cur_idx + 1]
+                    _ss["_pending_date"] = available_dates[_cur_idx + 1]
                     st.rerun()
 
             st.caption(f"Day {_cur_idx + 1} of {len(available_dates)}")
