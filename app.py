@@ -288,6 +288,52 @@ st.markdown(f"""
     border-radius: 6px !important;
     width: 100% !important;
   }}
+
+  /* ── Sidebar buttons ── */
+  section[data-testid="stSidebar"] .stButton > button {{
+    background-color: #800000 !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 6px !important;
+    font-weight: 600 !important;
+    width: 100% !important;
+  }}
+  section[data-testid="stSidebar"] .stButton > button:hover {{
+    background-color: #600000 !important;
+    color: white !important;
+  }}
+
+  /* ── Sidebar selectbox/dropdown — the visible box ── */
+  section[data-testid="stSidebar"] .stSelectbox > div > div {{
+    background-color: #800000 !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 6px !important;
+  }}
+  /* Sidebar selectbox text inside the box */
+  section[data-testid="stSidebar"] .stSelectbox > div > div > div {{
+    color: white !important;
+  }}
+  /* Sidebar selectbox dropdown arrow/icon */
+  section[data-testid="stSidebar"] .stSelectbox svg {{
+    fill: white !important;
+  }}
+
+  /* ── Sidebar date input ── */
+  section[data-testid="stSidebar"] .stDateInput > div > div > input {{
+    background-color: #800000 !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 6px !important;
+  }}
+
+  /* ── Sidebar text input (password field — keep white for readability) ── */
+  section[data-testid="stSidebar"] .stTextInput > div > div > input {{
+    background-color: white !important;
+    color: #1a1a1a !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 6px !important;
+  }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -304,15 +350,32 @@ if "app_authenticated" not in st.session_state:
 
 if _app_password is not None and not st.session_state["app_authenticated"]:
     st.markdown(
-        "<div style='max-width:360px;margin:8rem auto;padding:2rem 2.5rem;"
-        "background:white;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,0.10);'>",
+        "<div style='max-width:400px;margin:8rem auto;border-radius:10px;"
+        "box-shadow:none;overflow:hidden;'>",
         unsafe_allow_html=True,
     )
-    st.markdown(
-        f"<h2 style='color:#800000;margin-bottom:1.5rem;font-size:1.3rem;"
-        f"font-weight:700;text-align:center;'>Lab Productivity Dashboard</h2>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("""
+        <div style="
+            background-color: #800000;
+            padding: 2rem 2.5rem 1.5rem 2.5rem;
+            border-radius: 10px 10px 0 0;
+            text-align: center;
+            box-shadow: none;
+            margin-bottom: 0;
+        ">
+            <h1 style="
+                color: #FFCC00;
+                font-family: 'Inter', system-ui, sans-serif;
+                font-size: 1.8rem;
+                font-weight: 700;
+                letter-spacing: 0.04em;
+                margin: 0;
+                padding: 0;
+                text-shadow: none;
+            ">Laboratory Productivity</h1>
+        </div>
+        <div style="background:white;padding:2rem 2.5rem 2rem 2.5rem;border-radius:0 0 10px 10px;">
+    """, unsafe_allow_html=True)
     with st.form("login_form", enter_to_submit=True):
         _pw_input = st.text_input("Password", type="password", label_visibility="collapsed",
                                   placeholder="Enter password")
@@ -323,7 +386,7 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                 st.rerun()
             else:
                 st.error("Incorrect password")
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div></div>", unsafe_allow_html=True)
     st.stop()
 
 
