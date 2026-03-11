@@ -44,9 +44,9 @@ st.set_page_config(
 # ═════════════════════════════════════════════════════════════════════════════
 # THEME & GLOBAL CSS
 # ═════════════════════════════════════════════════════════════════════════════
-_NAVY   = "#800000"
-_GOLD   = "#FFCC00"
-_STEEL  = "#9D2235"
+_NAVY   = "#6F1828"   # USC Maroon
+_GOLD   = "#EDC153"   # USC Gold
+_STEEL  = "#57121f"   # Dark USC Maroon
 _WHITE  = "#FFFFFF"
 _LIGHT  = "#F4F6FA"
 _MUTED  = "#6B7280"
@@ -67,8 +67,9 @@ section.main {
     background-color: #f4f4f4 !important;
 }
 .block-container {
-    padding-top: 1.5rem !important;
-    max-width: 1400px !important;
+    padding-top: 1.8rem !important;
+    padding-bottom: 2rem !important;
+    max-width: 1480px !important;
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -77,42 +78,43 @@ section.main {
    ══════════════════════════════════════════════════════════ */
 [data-testid="stSidebar"] {
     background-color: #1a1a1a !important;
-    border-right: 1px solid #333333 !important;
+    border-right: 1px solid #2e2e2e !important;
 }
 /* Section headings (### markdown) */
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
-    color: #FFCC00 !important;
-    font-size: 0.78rem !important;
+    color: #EDC153 !important;
+    font-size: 0.72rem !important;
     font-weight: 700 !important;
     text-transform: uppercase !important;
-    letter-spacing: 0.06em !important;
-    margin-bottom: 0.3rem !important;
+    letter-spacing: 0.08em !important;
+    margin-bottom: 0.25rem !important;
+    margin-top: 0.1rem !important;
 }
 /* General text / labels inside sidebar */
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
 [data-testid="stSidebar"] label {
-    color: #ffffff !important;
+    color: #e8e8e8 !important;
     font-size: 0.82rem !important;
-    font-weight: 600 !important;
+    font-weight: 500 !important;
 }
 /* Caption / small text */
 [data-testid="stSidebar"] [data-testid="stCaptionContainer"],
 [data-testid="stSidebar"] small,
 [data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
-    color: #aaaaaa !important;
-    font-size: 0.75rem !important;
+    color: #999999 !important;
+    font-size: 0.73rem !important;
     font-weight: 400 !important;
     text-transform: none !important;
     letter-spacing: 0 !important;
 }
 /* Dividers inside sidebar */
 [data-testid="stSidebar"] hr {
-    border-color: #333333 !important;
+    border-color: #2e2e2e !important;
+    margin: 0.6rem 0 !important;
 }
 
 /* ══════════════════════════════════════════════════════════
-   BUTTONS — maroon everywhere
-   Matches config.toml: primaryColor = "#800000"
+   BUTTONS — USC Maroon everywhere
    Uses html body prefix for higher specificity than Streamlit's own CSS
    ══════════════════════════════════════════════════════════ */
 html body .stButton > button,
@@ -122,9 +124,9 @@ html body [data-testid="stBaseButton-primaryFormSubmit"],
 html body button[kind="primary"],
 html body button[kind="secondary"],
 html body button[kind="tertiary"] {
-    background-color: #800000 !important;
+    background-color: #6F1828 !important;
     color: #ffffff !important;
-    border: 1px solid #600000 !important;
+    border: 1px solid #57121f !important;
     border-radius: 5px !important;
     font-weight: 600 !important;
     font-size: 0.85rem !important;
@@ -138,35 +140,35 @@ html body [data-testid="stBaseButton-primary"]:hover,
 html body [data-testid="stBaseButton-primaryFormSubmit"]:hover,
 html body button[kind="primary"]:hover,
 html body button[kind="secondary"]:hover {
-    background-color: #600000 !important;
+    background-color: #57121f !important;
     color: #ffffff !important;
-    border-color: #500000 !important;
+    border-color: #4a0f1b !important;
 }
 html body .stButton > button:disabled,
 html body [data-testid="stBaseButton-secondary"]:disabled,
 html body [data-testid="stBaseButton-primary"]:disabled {
-    background-color: #ccaaaa !important;
+    background-color: #b89099 !important;
     color: #ffffff !important;
-    border-color: #ccaaaa !important;
+    border-color: #b89099 !important;
     opacity: 0.65 !important;
     cursor: not-allowed !important;
 }
 
 /* ══════════════════════════════════════════════════════════
-   SELECTBOXES / DROPDOWNS — maroon box, white text
+   SELECTBOXES / DROPDOWNS — USC Maroon box, white text
    ══════════════════════════════════════════════════════════ */
 [data-testid="stSelectbox"] > div > div,
 [data-testid="stSelectbox"] [role="combobox"],
 [data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child {
-    background-color: #800000 !important;
+    background-color: #6F1828 !important;
     color: #ffffff !important;
-    border: 1px solid #600000 !important;
+    border: 1px solid #57121f !important;
     border-radius: 5px !important;
 }
 [data-testid="stSelectbox"] > div > div:focus-within,
 [data-testid="stSelectbox"] > div > div[aria-expanded="true"] {
-    background-color: #600000 !important;
-    border-color: #500000 !important;
+    background-color: #57121f !important;
+    border-color: #4a0f1b !important;
 }
 [data-testid="stSelectbox"] > div > div > div,
 [data-testid="stSelectbox"] [role="combobox"] > div {
@@ -176,30 +178,30 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     fill: #ffffff !important;
     color: #ffffff !important;
 }
-/* Dropdown option list — dark to match sidebar secondaryBackground */
+/* Dropdown option list */
 [role="listbox"] {
     background-color: #1a1a1a !important;
-    border: 1px solid #444444 !important;
+    border: 1px solid #3a3a3a !important;
     border-radius: 5px !important;
 }
 [role="option"] {
-    color: #ffffff !important;
+    color: #e8e8e8 !important;
     background-color: #1a1a1a !important;
 }
 [role="option"]:hover,
 [role="option"][aria-selected="true"] {
-    background-color: #800000 !important;
+    background-color: #6F1828 !important;
     color: #ffffff !important;
 }
 
 /* ══════════════════════════════════════════════════════════
-   DATE INPUT — maroon box, white text (the input field only)
+   DATE INPUT — USC Maroon box, white text (the input field only)
    ══════════════════════════════════════════════════════════ */
 [data-testid="stDateInput"] input,
 [data-testid="stSidebar"] [data-testid="stDateInput"] input {
-    background-color: #800000 !important;
+    background-color: #6F1828 !important;
     color: #ffffff !important;
-    border: 1px solid #600000 !important;
+    border: 1px solid #57121f !important;
     border-radius: 5px !important;
 }
 /* Only the calendar-toggle icon (inside the input row), not the popup */
@@ -244,13 +246,13 @@ html body [data-testid="stBaseButton-primary"]:disabled {
 /* Selected day highlight */
 [data-baseweb="calendar"] [aria-selected="true"] button,
 [data-baseweb="calendar"] [data-selected="true"] {
-    background-color: #800000 !important;
+    background-color: #6F1828 !important;
     color: #ffffff !important;
     border-radius: 50% !important;
 }
 /* Today marker */
 [data-baseweb="calendar"] [data-today="true"] button {
-    border: 1px solid #800000 !important;
+    border: 2px solid #6F1828 !important;
     border-radius: 50% !important;
 }
 /* Disabled / out-of-range days */
@@ -259,7 +261,7 @@ html body [data-testid="stBaseButton-primary"]:disabled {
 }
 
 /* ══════════════════════════════════════════════════════════
-   RADIO BUTTONS — transparent, white text on dark sidebar
+   RADIO BUTTONS — transparent, light text on dark sidebar
    ══════════════════════════════════════════════════════════ */
 [data-testid="stRadio"] label {
     background-color: transparent !important;
@@ -267,7 +269,7 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     border: none !important;
 }
 [data-testid="stRadio"] label p {
-    color: #ffffff !important;
+    color: #e8e8e8 !important;
     font-weight: 500 !important;
     font-size: 0.88rem !important;
     background-color: transparent !important;
@@ -287,24 +289,30 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     color: #111111 !important;
     border: 1px solid #cccccc !important;
     border-radius: 5px !important;
+    font-size: 0.9rem !important;
+}
+[data-testid="stTextInput"] input:focus,
+[data-testid="stSidebar"] [data-testid="stTextInput"] input:focus {
+    border-color: #6F1828 !important;
+    outline: none !important;
+    box-shadow: 0 0 0 2px rgba(111,24,40,0.15) !important;
 }
 
 /* ══════════════════════════════════════════════════════════
    METRIC CARDS (native st.metric)
-   Matches config.toml: textColor = "#0f172a", primaryColor = "#800000"
    ══════════════════════════════════════════════════════════ */
 [data-testid="metric-container"] {
     background: #ffffff !important;
     border: 1px solid #e2e8f0 !important;
-    border-top: 3px solid #800000 !important;
+    border-top: 3px solid #6F1828 !important;
     border-radius: 8px !important;
     padding: 1rem 1.25rem !important;
     box-shadow: 0 1px 3px rgba(0,0,0,0.07) !important;
 }
 [data-testid="metric-container"] label {
-    font-size: 0.7rem !important;
+    font-size: 0.68rem !important;
     font-weight: 700 !important;
-    letter-spacing: 0.07em !important;
+    letter-spacing: 0.08em !important;
     text-transform: uppercase !important;
     color: #64748b !important;
 }
@@ -321,11 +329,12 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     border: 1px solid #e2e8f0 !important;
     border-radius: 8px !important;
     background: #ffffff !important;
-    box-shadow: none !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04) !important;
 }
 [data-testid="stExpander"] summary {
     font-weight: 600 !important;
     color: #0f172a !important;
+    font-size: 0.88rem !important;
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -333,40 +342,41 @@ html body [data-testid="stBaseButton-primary"]:disabled {
    ══════════════════════════════════════════════════════════ */
 hr {
     border-color: #e2e8f0 !important;
-    margin: 1rem 0 !important;
+    margin: 1.1rem 0 !important;
 }
 
 /* ══════════════════════════════════════════════════════════
    CUSTOM COMPONENT CLASSES
-   (keck-header, metric-card, section-heading, etc.)
-   primaryColor = "#800000", gold = "#FFCC00", textColor = "#0f172a"
+   USC Maroon #6F1828, USC Gold #EDC153, textColor #0f172a
    ══════════════════════════════════════════════════════════ */
 .keck-header {
-    background: linear-gradient(135deg, #800000 0%, #5a0000 100%);
-    padding: 1.1rem 1.8rem;
+    background: linear-gradient(135deg, #6F1828 0%, #521322 100%);
+    padding: 1.2rem 2rem;
     border-radius: 10px;
-    margin-bottom: 1.2rem;
+    margin-bottom: 1.4rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    box-shadow: 0 2px 8px rgba(111,24,40,0.25);
 }
 .keck-header h1 {
     color: #ffffff;
-    font-size: 1.45rem;
+    font-size: 1.5rem;
     font-weight: 700;
     margin: 0;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.2px;
 }
 .keck-header .subtitle {
-    color: #FFCC00;
-    font-size: 0.85rem;
+    color: #EDC153;
+    font-size: 0.87rem;
     margin: 0.25rem 0 0;
     opacity: 0.95;
+    font-weight: 500;
 }
 .keck-badge {
-    background: #FFCC00;
-    color: #1a1a1a;
-    font-size: 0.7rem;
+    background: #EDC153;
+    color: #3a1a00;
+    font-size: 0.68rem;
     font-weight: 700;
     padding: 3px 10px;
     border-radius: 12px;
@@ -374,7 +384,7 @@ hr {
     text-transform: uppercase;
 }
 .keck-date-label {
-    color: #CBD5E1;
+    color: #d0d8e4;
     font-size: 0.78rem;
     margin-top: 6px;
     display: block;
@@ -382,24 +392,24 @@ hr {
 .metric-card {
     background: #ffffff;
     border: 1px solid #e2e8f0;
-    border-top: 4px solid #800000;
+    border-top: 4px solid #6F1828;
     border-radius: 8px;
-    padding: 0.85rem 1rem;
+    padding: 1rem 1.1rem;
     margin-bottom: 0.5rem;
     height: 100%;
     box-shadow: 0 1px 4px rgba(0,0,0,0.06);
 }
-.metric-card.accent { border-top-color: #FFCC00; }
+.metric-card.accent { border-top-color: #EDC153; }
 .metric-card .label {
     color: #64748b;
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.6px;
     margin-bottom: 0.3rem;
 }
 .metric-card .value {
-    color: #800000;
+    color: #6F1828;
     font-size: 1.5rem;
     font-weight: 700;
     line-height: 1.1;
@@ -408,24 +418,25 @@ hr {
 .metric-card .sub {
     color: #64748b;
     font-size: 0.72rem;
-    margin-top: 0.2rem;
+    margin-top: 0.25rem;
 }
 .section-heading {
-    color: #800000;
+    color: #6F1828;
     font-size: 1.05rem;
     font-weight: 700;
-    border-bottom: 2px solid #FFCC00;
+    border-bottom: 2px solid #EDC153;
     padding-bottom: 0.3rem;
     margin: 1rem 0 0.8rem;
 }
 .heatmap-legend {
     background: #ffffff;
     border: 1px solid #e2e8f0;
+    border-left: 3px solid #EDC153;
     border-radius: 6px;
-    padding: 0.5rem 0.8rem;
+    padding: 0.5rem 0.85rem;
     font-size: 0.78rem;
     color: #64748b;
-    margin-bottom: 0.6rem;
+    margin-bottom: 0.7rem;
 }
 .status-chip {
     display: inline-block;
@@ -442,10 +453,10 @@ hr {
 .metrics-divider {
     border: none;
     border-top: 1px solid #e2e8f0;
-    margin: 0.8rem 0 1rem;
+    margin: 0.9rem 0 1.1rem;
 }
 .refresh-btn button {
-    background-color: #800000 !important;
+    background-color: #6F1828 !important;
     color: #ffffff !important;
     font-weight: 600 !important;
     border: none !important;
@@ -472,62 +483,84 @@ if "app_authenticated" not in st.session_state:
     st.session_state["app_authenticated"] = False
 
 if _app_password is not None and not st.session_state["app_authenticated"]:
-    # Push the card ~20% down the viewport so it sits in the visual centre
-    st.markdown('<div style="height: 18vh; min-height: 60px;"></div>',
+    # Centre the card vertically on a desktop viewport
+    st.markdown('<div style="height: 15vh; min-height: 48px;"></div>',
                 unsafe_allow_html=True)
-    _, col, _ = st.columns([1, 1.1, 1])
+    _, col, _ = st.columns([1, 0.9, 1])
     with col:
         st.markdown("""
             <div style="
-                background: linear-gradient(135deg, #800000 0%, #5a0000 100%);
-                padding: 1.6rem 2rem 1.4rem 2rem;
-                border-radius: 10px 10px 0 0;
+                background: linear-gradient(150deg, #6F1828 0%, #521322 60%, #3d0e19 100%);
+                padding: 2rem 2.4rem 1.8rem 2.4rem;
+                border-radius: 12px 12px 0 0;
                 text-align: center;
                 box-shadow: none;
             ">
                 <div style="
-                    color: #FFCC00;
+                    display: inline-block;
+                    background: rgba(237,193,83,0.18);
+                    border: 1px solid rgba(237,193,83,0.4);
+                    color: #EDC153;
                     font-family: 'Inter', system-ui, sans-serif;
-                    font-size: 0.68rem;
+                    font-size: 0.62rem;
                     font-weight: 700;
-                    letter-spacing: 0.14em;
+                    letter-spacing: 0.18em;
                     text-transform: uppercase;
-                    margin-bottom: 0.45rem;
-                    opacity: 0.9;
+                    padding: 3px 12px;
+                    border-radius: 20px;
+                    margin-bottom: 1rem;
                 ">Keck Medicine of USC</div>
                 <div style="
                     color: #ffffff;
                     font-family: 'Inter', system-ui, sans-serif;
-                    font-size: 1.35rem;
+                    font-size: 1.45rem;
                     font-weight: 700;
-                    letter-spacing: 0.02em;
-                    margin: 0;
-                    padding: 0;
+                    letter-spacing: 0.01em;
+                    margin: 0 0 0.3rem 0;
                     line-height: 1.2;
                 ">Laboratory Productivity</div>
+                <div style="
+                    color: rgba(237,193,83,0.85);
+                    font-family: 'Inter', system-ui, sans-serif;
+                    font-size: 0.82rem;
+                    font-weight: 400;
+                    letter-spacing: 0.01em;
+                    margin: 0;
+                ">Analytics Dashboard</div>
             </div>
             <div style="
                 background: #ffffff;
-                padding: 1.6rem 2rem 1.8rem 2rem;
-                border-radius: 0 0 10px 10px;
-                border: 1px solid #e2e8f0;
+                padding: 1.8rem 2.4rem 2.2rem 2.4rem;
+                border-radius: 0 0 12px 12px;
+                border: 1px solid #dde1e7;
                 border-top: none;
-                box-shadow: 0 6px 24px rgba(0,0,0,0.10);
+                box-shadow: 0 8px 32px rgba(0,0,0,0.12);
             ">
+                <p style="
+                    color: #475569;
+                    font-size: 0.82rem;
+                    margin: 0 0 1.2rem 0;
+                    font-family: 'Inter', system-ui, sans-serif;
+                ">Enter your access password to continue.</p>
         """, unsafe_allow_html=True)
         with st.form("login_form", enter_to_submit=True):
             password = st.text_input("Password", type="password",
                                      label_visibility="collapsed",
-                                     placeholder="Enter password")
-            submitted = st.form_submit_button("Log in",
+                                     placeholder="Password")
+            submitted = st.form_submit_button("Sign In",
                                               use_container_width=True)
             if submitted:
                 if password == st.secrets.get("app_password", ""):
                     st.session_state["app_authenticated"] = True
                     st.rerun()
                 else:
-                    st.error("Incorrect password")
-        st.markdown("</div>", unsafe_allow_html=True)
+                    st.error("Incorrect password. Please try again.")
+        st.markdown("""
+            </div>
+            <div style="text-align:center; margin-top: 1.2rem; color: #94a3b8; font-size: 0.7rem; font-family: 'Inter', system-ui, sans-serif;">
+                Keck Medicine of USC &nbsp;·&nbsp; Laboratory Analytics
+            </div>
+        """, unsafe_allow_html=True)
     st.stop()
 
 
