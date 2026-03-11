@@ -13,6 +13,7 @@ Architecture:
 """
 
 import base64
+import calendar as _cal
 import io
 import json
 import time
@@ -56,8 +57,11 @@ _BORDER = "#D1D5DB"
 
 st.markdown(f"""
 <style>
-  /* ── App background ── */
-  .stApp {{ background-color: {_LIGHT}; }}
+  /* ── Base font & App background ── */
+  html, body, .stApp {{
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background-color: #f8fafc;
+  }}
 
   /* ── Top header banner ── */
   .keck-header {{
@@ -103,13 +107,14 @@ st.markdown(f"""
   .metric-card {{
     background: {_WHITE};
     border: 1px solid {_BORDER};
-    border-left: 4px solid {_STEEL};
+    border-top: 4px solid {_NAVY};
     border-radius: 8px;
     padding: 0.85rem 1rem;
     margin-bottom: 0.5rem;
     height: 100%;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.06);
   }}
-  .metric-card.accent {{ border-left-color: {_GOLD}; }}
+  .metric-card.accent {{ border-top-color: {_GOLD}; }}
   .metric-card .label {{
     color: {_MUTED};
     font-size: 0.72rem;
@@ -176,6 +181,9 @@ st.markdown(f"""
     letter-spacing: 0.5px;
     margin-bottom: 0.35rem;
   }}
+  section[data-testid="stSidebar"] .stRadio {{
+    margin-bottom: 0.25rem;
+  }}
 
   /* ── DataFrames ── */
   div[data-testid="stDataFrame"] {{
@@ -184,8 +192,22 @@ st.markdown(f"""
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
   }}
 
+  /* ── Expanders ── */
+  div[data-testid="stExpander"] {{
+    border: 1px solid {_BORDER} !important;
+    border-radius: 8px !important;
+    margin-bottom: 0.5rem;
+  }}
+
+  /* ── Metrics / heatmap divider ── */
+  .metrics-divider {{
+    border: none;
+    border-top: 1px solid {_BORDER};
+    margin: 0.8rem 0 1rem;
+  }}
+
   /* ── General padding ── */
-  .block-container {{ padding-top: 1rem; padding-bottom: 2rem; }}
+  .block-container {{ padding-top: 0.5rem; padding-bottom: 2rem; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -798,6 +820,81 @@ def style_pivot(pivot: pd.DataFrame, vmax: int):
     )
 
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MONTHLY PIVOT
+# ═════════════════════════════════════════════════════════════════════════════
+
+def build_monthly_pivot(
+    df: pd.DataFrame,
+    year: int,
+    month: int,
+) -> tuple["pd.DataFrame | None", int, "pd.DataFrame"]:
+    """Build a procedure x hour pivot of daily-average volumes for a calendar month.
+
+    Returns (avg_pivot, n_days, month_df).
+    avg_pivot is None when there is no data for the selected month.
+    """
+    month_start = date(year, month, 1)
+    month_end   = date(year, month, _cal.monthrange(year, month)[1])
+    month_df    = df[
+        (df["complete_date"] >= month_start) &
+        (df["complete_date"] <= month_end)
+    ].copy()
+
+    if month_df.empty:
+        return None, 0, month_df
+
+    # Top-30 by total Complete Volume within this month
+    top30 = (
+        month_df.groupby("Order Procedure")["Complete Volume"]
+        .sum().sort_values(ascending=False).head(30).index.tolist()
+    )
+    month_df = month_df[month_df["Order Procedure"].isin(top30)].copy()
+
+    # Pivot: rows = procedures, columns = hours 0-23
+    pivot = (
+        month_df.pivot_table(
+            index="Order Procedure",
+            columns="hour",
+            values="Complete Volume",
+            aggfunc="sum",
+            fill_value=0,
+        ).reindex(columns=list(range(24)), fill_value=0)
+    )
+
+    n_days = int(month_df["complete_date"].nunique())
+
+    # Divide by n_days to get daily averages
+    avg = pivot / n_days
+    avg["Total"] = avg.sum(axis=1)
+    avg = avg.sort_values("Total", ascending=False)
+
+    # Rename hour columns to labels
+    avg.columns = [HOUR_LABELS[c] if isinstance(c, int) else c for c in avg.columns]
+
+    return avg, n_days, month_df
+
+
+def style_monthly_pivot(pivot: pd.DataFrame, vmax: int):
+    """Apply viridis_r gradient styling to a monthly average pivot (1 dp)."""
+    hour_cols = [c for c in pivot.columns if c != "Total"]
+    return (
+        pivot.style
+        .background_gradient(cmap="viridis_r", vmin=0, vmax=vmax, subset=hour_cols)
+        .format("{:.1f}")
+        .set_properties(**{"text-align": "center"})
+        .set_properties(subset=["Total"], **{
+            "font-weight": "bold",
+            "font-size":   "13px",
+            "border-left": "2px solid #888",
+        })
+        .set_table_styles([
+            {"selector": "th",            "props": [("text-align", "center"), ("font-size", "12px")]},
+            {"selector": "th.row_heading","props": [("text-align", "left"),   ("min-width", "220px")]},
+        ])
+    )
+
 # ═════════════════════════════════════════════════════════════════════════════
 # PNG EXPORT
 # ═════════════════════════════════════════════════════════════════════════════
@@ -893,7 +990,7 @@ def _render_header(map_type: str, date_str: str) -> None:
     <div class="keck-header">
       <div>
         <h1>Lab Productivity Dashboard</h1>
-        <p class="subtitle">Keck Medicine of USC &nbsp;·&nbsp; {map_type}</p>
+        <p class="subtitle">{map_type}</p>
       </div>
       <div style="text-align:right;">
         <span class="keck-badge">Laboratory Analytics</span>
@@ -923,6 +1020,13 @@ with st.sidebar:
     if _ss.last_map_type != map_type:
         _ss.pop("date_picker", None)
         _ss.last_map_type = map_type
+
+    # ── View mode toggle ─────────────────────────────────────────────────────
+    st.markdown("### View")
+    view_mode = st.radio(
+        "View", ["Daily", "Monthly"],
+        horizontal=True, label_visibility="collapsed",
+    )
 
     # ── Pending action: reset entire dataset ────────────────────────────────
     if _ss.pop("pending_reset", False):
@@ -1157,105 +1261,120 @@ with st.sidebar:
             files_bytes = tuple((f.name, f.read()) for f in uploaded_files)
             raw_df, merge_log = _load_from_uploads(files_bytes)
 
-    # ── Calendar date picker ─────────────────────────────────────────────────
+    # ── Date / Month selector ───────────────────────────────────────────────────────────────────────
     st.markdown("---")
 
     if raw_df is not None and not raw_df.empty:
-        filtered_df     = filter_for_map(raw_df, map_type)
-        available_dates = sorted(filtered_df["complete_date"].unique())
+        filtered_df = filter_for_map(raw_df, map_type)
 
-        if not available_dates:
-            st.warning("No data found for this map type.")
-            st.stop()
+        if view_mode == "Daily":
+            available_dates = sorted(filtered_df["complete_date"].unique())
 
-        _min_d = available_dates[0]
-        _max_d = available_dates[-1]
+            if not available_dates:
+                st.warning("No data found for this map type.")
+                st.stop()
 
-        # Initialise / validate the date_picker key before the widget renders.
-        # This lets us programmatically change the widget value (e.g. prev/next
-        # buttons, map-type switch) by writing to session_state directly.
-        if (
-            "date_picker" not in _ss
-            or _ss["date_picker"] < _min_d
-            or _ss["date_picker"] > _max_d
-        ):
-            _ss["date_picker"] = _max_d   # default to most-recent date
+            _min_d = available_dates[0]
+            _max_d = available_dates[-1]
 
-        # Snap to nearest available date if the current selection has no data
-        # (can happen when switching between map types with different date sets)
-        if _ss["date_picker"] not in available_dates:
-            _dates_arr = pd.to_datetime(available_dates)
-            _idx_near  = (
-                (_dates_arr - pd.Timestamp(_ss["date_picker"])).abs().argmin()
-            )
-            _ss["date_picker"] = available_dates[_idx_near]
+            if (
+                "date_picker" not in _ss
+                or _ss["date_picker"] < _min_d
+                or _ss["date_picker"] > _max_d
+            ):
+                _ss["date_picker"] = _max_d
 
-        st.markdown("### Date")
-        st.caption(
-            f"{len(available_dates)} date(s) with data  ·  "
-            f"{_min_d} → {_max_d}"
-        )
+            if _ss["date_picker"] not in available_dates:
+                _dates_arr = pd.to_datetime(available_dates)
+                _idx_near  = (
+                    (_dates_arr - pd.Timestamp(_ss["date_picker"])).abs().argmin()
+                )
+                _ss["date_picker"] = available_dates[_idx_near]
 
-        # Calendar widget — min/max bounds grey out out-of-range dates natively.
-        # If the user picks a date within range but with no data, we snap below.
-        picked_date = st.date_input(
-            "Select date",
-            min_value=_min_d,
-            max_value=_max_d,
-            label_visibility="collapsed",
-            key="date_picker",
-        )
-
-        # Snap to nearest date that has data for this map type
-        if picked_date not in available_dates:
-            _dates_arr  = pd.to_datetime(available_dates)
-            _idx_near   = (
-                (_dates_arr - pd.Timestamp(picked_date)).abs().argmin()
-            )
-            _ss["date_picker"] = available_dates[_idx_near]
+            st.markdown("### Date")
             st.caption(
-                f"No data on {picked_date} for **{map_type}** — "
-                f"showing nearest: **{_ss['date_picker']}**"
+                f"{len(available_dates)} date(s) with data  ·  "
+                f"{_min_d} → {_max_d}"
             )
-            picked_date = _ss["date_picker"]
 
-        selected_date = picked_date
+            picked_date = st.date_input(
+                "Select date",
+                min_value=_min_d,
+                max_value=_max_d,
+                label_visibility="collapsed",
+                key="date_picker",
+            )
 
-        # Prev / Next quick-navigation
-        _cur_idx = available_dates.index(selected_date)
-        _nc1, _nc2 = st.columns(2)
-        with _nc1:
-            if st.button(
-                "◀ Prev", use_container_width=True,
-                disabled=(_cur_idx == 0),
-            ):
-                _ss["date_picker"] = available_dates[_cur_idx - 1]
-                st.rerun()
-        with _nc2:
-            if st.button(
-                "Next ▶", use_container_width=True,
-                disabled=(_cur_idx == len(available_dates) - 1),
-            ):
-                _ss["date_picker"] = available_dates[_cur_idx + 1]
-                st.rerun()
+            if picked_date not in available_dates:
+                _dates_arr = pd.to_datetime(available_dates)
+                _idx_near  = (
+                    (_dates_arr - pd.Timestamp(picked_date)).abs().argmin()
+                )
+                _ss["date_picker"] = available_dates[_idx_near]
+                st.caption(
+                    f"No data on {picked_date} for **{map_type}** — "
+                    f"showing nearest: **{_ss['date_picker']}**"
+                )
+                picked_date = _ss["date_picker"]
 
-        st.caption(f"Day {_cur_idx + 1} of {len(available_dates)}")
+            selected_date = picked_date
 
-        # ── Hour range slider ────────────────────────────────────────────────
-        st.markdown("---")
-        st.markdown("### Hour Range")
+            _cur_idx = available_dates.index(selected_date)
+            _nc1, _nc2 = st.columns(2)
+            with _nc1:
+                if st.button(
+                    "◄ Prev", use_container_width=True,
+                    disabled=(_cur_idx == 0),
+                ):
+                    _ss["date_picker"] = available_dates[_cur_idx - 1]
+                    st.rerun()
+            with _nc2:
+                if st.button(
+                    "Next ►", use_container_width=True,
+                    disabled=(_cur_idx == len(available_dates) - 1),
+                ):
+                    _ss["date_picker"] = available_dates[_cur_idx + 1]
+                    st.rerun()
 
-        def _fmt_h(h: int) -> str:
-            hr12 = 12 if h % 12 == 0 else h % 12
-            suf  = "AM" if h < 12 else "PM"
-            return f"{hr12}:00 {suf}"
+            st.caption(f"Day {_cur_idx + 1} of {len(available_dates)}")
 
-        hour_range = st.slider(
-            "Hours", 0, 23, (0, 23), label_visibility="collapsed"
-        )
-        st.caption(f"{_fmt_h(hour_range[0])} → {_fmt_h(hour_range[1])}")
+            # ── Hour range slider ─────────────────────────────────────────────────────────────────────
+            st.markdown("---")
+            st.markdown("### Hour Range")
 
-        # ── Resource allocation ──────────────────────────────────────────────
+            def _fmt_h(h: int) -> str:
+                hr12 = 12 if h % 12 == 0 else h % 12
+                suf  = "AM" if h < 12 else "PM"
+                return f"{hr12}:00 {suf}"
+
+            hour_range = st.slider(
+                "Hours", 0, 23, (0, 23), label_visibility="collapsed"
+            )
+            st.caption(f"{_fmt_h(hour_range[0])} → {_fmt_h(hour_range[1])}")
+
+        else:  # Monthly view
+            _all_dates    = sorted(filtered_df["complete_date"].unique())
+            _avail_months = sorted({(d.year, d.month) for d in _all_dates})
+
+            if not _avail_months:
+                st.warning("No data found for this map type.")
+                st.stop()
+
+            _month_labels = [
+                f"{_cal.month_name[m]} {y}" for y, m in _avail_months
+            ]
+
+            st.markdown("### Month")
+            _sel_month_label = st.selectbox(
+                "Select month",
+                _month_labels,
+                index=len(_avail_months) - 1,
+                label_visibility="collapsed",
+            )
+            _sel_idx = _month_labels.index(_sel_month_label)
+            selected_year, selected_month = _avail_months[_sel_idx]
+
+        # ── Resource allocation ─────────────────────────────────────────────────────────────────────────
         st.markdown("---")
         with st.expander("Resource Allocation", expanded=False):
             st.markdown(
@@ -1388,7 +1507,7 @@ if raw_df is None or raw_df.empty:
     <div class="keck-header">
       <div>
         <h1>Lab Productivity Dashboard</h1>
-        <p class="subtitle">Keck Medicine of USC &nbsp;·&nbsp; Laboratory Analytics</p>
+        <p class="subtitle">Laboratory Analytics</p>
       </div>
       <span class="keck-badge">Laboratory Analytics</span>
     </div>
@@ -1403,91 +1522,215 @@ if raw_df is None or raw_df.empty:
 # ═════════════════════════════════════════════════════════════════════════════
 # MAIN PANEL — heatmap
 # ═════════════════════════════════════════════════════════════════════════════
+# MAIN PANEL — heatmap (branched by view mode)
+# ═════════════════════════════════════════════════════════════════════════════
 
-# Build pivot (hour_range and selected_date are defined in the sidebar block above)
-pivot, df_date_hour, df_date, hours = build_pivot(filtered_df, selected_date, hour_range)
+if view_mode == "Daily":
+    # ── Build pivot ────────────────────────────────────────────────────────────────────────────
+    pivot, df_date_hour, df_date, hours = build_pivot(filtered_df, selected_date, hour_range)
 
-date_str = pd.Timestamp(selected_date).strftime("%B %d, %Y")
-_render_header(map_type, date_str)
+    date_str = pd.Timestamp(selected_date).strftime("%B %d, %Y")
+    _render_header(map_type, date_str)
 
-if pivot is None:
-    st.warning(
-        f"No data found for **{map_type}** on **{date_str}** "
-        f"within the selected hour range.  Try widening the hour slider."
+    if pivot is None:
+        st.warning(
+            f"No data found for **{map_type}** on **{date_str}** "
+            f"within the selected hour range.  Try widening the hour slider."
+        )
+        st.stop()
+
+    # ── Metrics row ────────────────────────────────────────────────────────────────────────────
+    _hour_cols  = [c for c in pivot.columns if c != "Total"]
+    total_vol   = int(pivot["Total"].sum())
+    top_proc    = pivot["Total"].idxmax()
+    peak_hour   = pivot[_hour_cols].sum().idxmax()
+    num_procs   = len(pivot)
+    avg_per_hr  = round(total_vol / max(len(_hour_cols), 1), 1)
+
+    _m1, _m2, _m3, _m4, _m5 = st.columns(5)
+    with _m1:
+        st.markdown(_metric_card("Total Volume", f"{total_vol:,}", accent=True),
+                    unsafe_allow_html=True)
+    with _m2:
+        _tp_disp = top_proc[:28] + "…" if len(top_proc) > 28 else top_proc
+        st.markdown(_metric_card("Top Procedure", _tp_disp, sub=f"{int(pivot.loc[top_proc, 'Total']):,} total"),
+                    unsafe_allow_html=True)
+    with _m3:
+        st.markdown(_metric_card("Peak Hour", peak_hour,
+                                 sub=f"{int(pivot[_hour_cols].sum()[peak_hour])} completions"),
+                    unsafe_allow_html=True)
+    with _m4:
+        st.markdown(_metric_card("Procedures", str(num_procs), sub="shown (top 30)"),
+                    unsafe_allow_html=True)
+    with _m5:
+        st.markdown(_metric_card("Avg / Hour", str(avg_per_hr),
+                                 sub=f"across {len(_hour_cols)} hours"),
+                    unsafe_allow_html=True)
+
+    st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
+
+    # ── Heatmap table ─────────────────────────────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="section-heading">Completed Volume by Procedure &amp; Hour</div>',
+        unsafe_allow_html=True,
     )
-    st.stop()
-
-# ── Metrics row ──────────────────────────────────────────────────────────────
-_hour_cols  = [c for c in pivot.columns if c != "Total"]
-total_vol   = int(pivot["Total"].sum())
-top_proc    = pivot["Total"].idxmax()
-peak_hour   = pivot[_hour_cols].sum().idxmax()
-num_procs   = len(pivot)
-avg_per_hr  = round(total_vol / max(len(_hour_cols), 1), 1)
-
-_m1, _m2, _m3, _m4, _m5 = st.columns(5)
-with _m1:
-    st.markdown(_metric_card("Total Volume", f"{total_vol:,}", accent=True),
-                unsafe_allow_html=True)
-with _m2:
-    _tp_disp = top_proc[:28] + "…" if len(top_proc) > 28 else top_proc
-    st.markdown(_metric_card("Top Procedure", _tp_disp, sub=f"{int(pivot.loc[top_proc, 'Total']):,} total"),
-                unsafe_allow_html=True)
-with _m3:
-    st.markdown(_metric_card("Peak Hour", peak_hour,
-                             sub=f"{int(pivot[_hour_cols].sum()[peak_hour])} completions"),
-                unsafe_allow_html=True)
-with _m4:
-    st.markdown(_metric_card("Procedures", str(num_procs), sub="shown (top 30)"),
-                unsafe_allow_html=True)
-with _m5:
-    st.markdown(_metric_card("Avg / Hour", str(avg_per_hr),
-                             sub=f"across {len(_hour_cols)} hours"),
-                unsafe_allow_html=True)
-
-# ── Heatmap table ─────────────────────────────────────────────────────────────
-st.markdown(
-    '<div class="section-heading">Completed Volume by Procedure &amp; Hour</div>',
-    unsafe_allow_html=True,
-)
-st.markdown(
-    f'<div class="heatmap-legend">'
-    f'Colour scale: &nbsp;<strong style="color:#f5e642;">■</strong> low &nbsp;→&nbsp; '
-    f'<strong style="color:#3b0f70;">■</strong> high (≥ {VMAX[map_type]} / hour). &nbsp;'
-    f'<strong>Total</strong> column = full-day sum per procedure.'
-    f'</div>',
-    unsafe_allow_html=True,
-)
-
-_table_h = min(80 + 35 * len(pivot), 900)
-st.dataframe(style_pivot(pivot, VMAX[map_type]), use_container_width=True, height=_table_h)
-
-# ── PNG download (lazy — rendered only on explicit request) ───────────────────
-_file_prefix = map_type.replace(" ", "_")
-_date_tag    = pd.Timestamp(selected_date).strftime("%Y-%m-%d")
-
-if st.button("Generate PNG for download"):
-    _ss["show_png"] = True
-
-if _ss.get("show_png"):
-    with st.spinner("Rendering PNG…"):
-        _png_bytes = build_png(df_date_hour, map_type, selected_date, hours)
-    st.download_button(
-        label="⬇  Download PNG",
-        data=_png_bytes,
-        file_name=f"{_file_prefix}_Top30_{_date_tag}.png",
-        mime="image/png",
+    st.markdown(
+        f'<div class="heatmap-legend">'
+        f'Colour scale: &nbsp;<strong style="color:#f5e642;">■</strong> low &nbsp;→&nbsp; '
+        f'<strong style="color:#3b0f70;">■</strong> high (≥ {VMAX[map_type]} / hour). &nbsp;'
+        f'<strong>Total</strong> column = full-day sum per procedure.'
+        f'</div>',
+        unsafe_allow_html=True,
     )
 
-st.markdown("---")
+    _table_h = min(80 + 35 * len(pivot), 900)
+    st.dataframe(style_pivot(pivot, VMAX[map_type]), use_container_width=True, height=_table_h)
 
-# ── Hourly bar chart ──────────────────────────────────────────────────────────
-with st.expander("Hourly volume bar chart", expanded=False):
-    _hourly = pivot[_hour_cols].sum().reset_index()
-    _hourly.columns = ["Hour", "Total Volume"]
-    st.bar_chart(_hourly.set_index("Hour"), height=220)
+    # ── PNG download (lazy — rendered only on explicit request) ─────────────────────────────────────────
+    _file_prefix = map_type.replace(" ", "_")
+    _date_tag    = pd.Timestamp(selected_date).strftime("%Y-%m-%d")
 
-# ── File merge log (only shown when using direct file upload) ─────────────────
+    if st.button("Generate PNG for download"):
+        _ss["show_png"] = True
+
+    if _ss.get("show_png"):
+        with st.spinner("Rendering PNG…"):
+            _png_bytes = build_png(df_date_hour, map_type, selected_date, hours)
+        st.download_button(
+            label="⬇  Download PNG",
+            data=_png_bytes,
+            file_name=f"{_file_prefix}_Top30_{_date_tag}.png",
+            mime="image/png",
+        )
+
+    st.markdown("---")
+
+    # ── Hourly bar chart ──────────────────────────────────────────────────────────────────────────
+    with st.expander("Hourly volume bar chart", expanded=False):
+        _hourly = pivot[_hour_cols].sum().reset_index()
+        _hourly.columns = ["Hour", "Total Volume"]
+        st.bar_chart(_hourly.set_index("Hour"), height=220)
+
+    # ── Cell drill-down ────────────────────────────────────────────────────────────────────────────
+    with st.expander("Drill into a cell — individual completion events", expanded=False):
+        st.markdown(
+            "Select a **procedure** and **hour** to inspect every individual "
+            "completion event recorded in that cell."
+        )
+        _dd1, _dd2 = st.columns(2)
+        with _dd1:
+            sel_proc       = st.selectbox("Procedure", pivot.index.tolist(), key="drill_proc")
+        with _dd2:
+            sel_hour_label = st.selectbox("Hour", _hour_cols, key="drill_hour")
+
+        sel_hour_int = LABEL_TO_HOUR[sel_hour_label]
+        detail       = df_date[
+            (df_date["Order Procedure"] == sel_proc) &
+            (df_date["hour"] == sel_hour_int)
+        ].copy().sort_values("Date/Time - Complete")
+
+        _show_cols = {k: v for k, v in {
+            "Date/Time - Complete":        "Completed At",
+            "Performing Service Resource": "Resource",
+            "Complete Volume":             "Volume",
+        }.items() if k in detail.columns}
+
+        detail_display = (
+            detail[list(_show_cols.keys())]
+            .rename(columns=_show_cols)
+            .reset_index(drop=True)
+        )
+        if "Completed At" in detail_display.columns:
+            detail_display["Completed At"] = (
+                pd.to_datetime(detail_display["Completed At"])
+                .dt.strftime("%Y-%m-%d  %H:%M:%S")
+            )
+
+        if detail_display.empty:
+            st.info(
+                f"No completions for **{sel_proc}** during **{sel_hour_label}** on {date_str}."
+            )
+        else:
+            _cell_vol = (
+                int(detail_display["Volume"].sum())
+                if "Volume" in detail_display.columns else len(detail_display)
+            )
+            st.markdown(
+                f"**{len(detail_display)} event(s)** &nbsp;·&nbsp; *{sel_proc}* &nbsp;·&nbsp; "
+                f"**{sel_hour_label}** &nbsp;·&nbsp; Total volume: **{_cell_vol}**"
+            )
+            st.dataframe(
+                detail_display, use_container_width=True,
+                height=min(80 + 35 * len(detail_display), 500),
+            )
+
+else:
+    # ── Monthly view ──────────────────────────────────────────────────────────────────────────────────
+    month_name_str = f"{_cal.month_name[selected_month]} {selected_year}"
+    _render_header(map_type, month_name_str)
+
+    monthly_pivot, n_days, month_raw_df = build_monthly_pivot(
+        filtered_df, selected_year, selected_month
+    )
+
+    if monthly_pivot is None:
+        st.warning(f"No data found for **{map_type}** in **{month_name_str}**.")
+        st.stop()
+
+    # ── Monthly metrics row ───────────────────────────────────────────────────────────────────
+    _m_hour_cols  = [c for c in monthly_pivot.columns if c != "Total"]
+    _m_total_vol  = int(round(monthly_pivot["Total"].sum() * n_days))
+    _m_top_proc   = monthly_pivot["Total"].idxmax()
+    _m_peak_col   = monthly_pivot[_m_hour_cols].sum().idxmax()
+    _m_peak_disp  = _m_peak_col.replace("AM", " AM").replace("PM", " PM")
+    _m_n_procs    = len(monthly_pivot)
+    _m_avg_per_day = round(_m_total_vol / max(n_days, 1))
+
+    _mm1, _mm2, _mm3, _mm4, _mm5 = st.columns(5)
+    with _mm1:
+        st.markdown(_metric_card("Total Volume", f"{_m_total_vol:,}", accent=True),
+                    unsafe_allow_html=True)
+    with _mm2:
+        _mtp_disp = _m_top_proc[:28] + "…" if len(_m_top_proc) > 28 else _m_top_proc
+        st.markdown(_metric_card("Top Procedure", _mtp_disp,
+                                 sub=f"highest volume in {month_name_str}"),
+                    unsafe_allow_html=True)
+    with _mm3:
+        st.markdown(_metric_card("Peak Hour", _m_peak_disp,
+                                 sub="highest avg volume"), unsafe_allow_html=True)
+    with _mm4:
+        st.markdown(_metric_card("Procedures Shown", str(_m_n_procs),
+                                 sub="top 30 by month volume"), unsafe_allow_html=True)
+    with _mm5:
+        st.markdown(_metric_card("Avg / Day", f"{_m_avg_per_day:,}",
+                                 sub=f"over {n_days} days"), unsafe_allow_html=True)
+
+    st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
+
+    # ── Monthly heatmap title ────────────────────────────────────────────────────────────────────
+    st.markdown(
+        f'<div class="section-heading">'
+        f'{map_type} — Monthly Average | {month_name_str} | N = {n_days} days'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div class="heatmap-legend">'
+        f'Values = avg completed volume per day in hour. '
+        f'Colour scale: &nbsp;<strong style="color:#f5e642;">■</strong> low &nbsp;→&nbsp; '
+        f'<strong style="color:#3b0f70;">■</strong> high (≥ {VMAX[map_type]}). &nbsp;'
+        f'<strong>Total</strong> column = avg daily total per procedure.'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    _m_table_h = min(80 + 35 * len(monthly_pivot), 900)
+    st.dataframe(
+        style_monthly_pivot(monthly_pivot, VMAX[map_type]),
+        use_container_width=True, height=_m_table_h,
+    )
+
+# ── File merge log (only shown when using direct file upload) ─────────────────────────────
 if merge_log:
     with st.expander("Data file overlap details", expanded=False):
         st.markdown(
@@ -1496,56 +1739,3 @@ if merge_log:
             "are taken from the later (more complete) file only."
         )
         st.dataframe(pd.DataFrame(merge_log), use_container_width=True)
-
-# ── Cell drill-down ───────────────────────────────────────────────────────────
-with st.expander("Drill into a cell — individual completion events", expanded=False):
-    st.markdown(
-        "Select a **procedure** and **hour** to inspect every individual "
-        "completion event recorded in that cell."
-    )
-    _dd1, _dd2 = st.columns(2)
-    with _dd1:
-        sel_proc       = st.selectbox("Procedure", pivot.index.tolist(), key="drill_proc")
-    with _dd2:
-        sel_hour_label = st.selectbox("Hour", _hour_cols, key="drill_hour")
-
-    sel_hour_int = LABEL_TO_HOUR[sel_hour_label]
-    detail       = df_date[
-        (df_date["Order Procedure"] == sel_proc) &
-        (df_date["hour"] == sel_hour_int)
-    ].copy().sort_values("Date/Time - Complete")
-
-    _show_cols = {k: v for k, v in {
-        "Date/Time - Complete":        "Completed At",
-        "Performing Service Resource": "Resource",
-        "Complete Volume":             "Volume",
-    }.items() if k in detail.columns}
-
-    detail_display = (
-        detail[list(_show_cols.keys())]
-        .rename(columns=_show_cols)
-        .reset_index(drop=True)
-    )
-    if "Completed At" in detail_display.columns:
-        detail_display["Completed At"] = (
-            pd.to_datetime(detail_display["Completed At"])
-            .dt.strftime("%Y-%m-%d  %H:%M:%S")
-        )
-
-    if detail_display.empty:
-        st.info(
-            f"No completions for **{sel_proc}** during **{sel_hour_label}** on {date_str}."
-        )
-    else:
-        _cell_vol = (
-            int(detail_display["Volume"].sum())
-            if "Volume" in detail_display.columns else len(detail_display)
-        )
-        st.markdown(
-            f"**{len(detail_display)} event(s)** &nbsp;·&nbsp; *{sel_proc}* &nbsp;·&nbsp; "
-            f"**{sel_hour_label}** &nbsp;·&nbsp; Total volume: **{_cell_vol}**"
-        )
-        st.dataframe(
-            detail_display, use_container_width=True,
-            height=min(80 + 35 * len(detail_display), 500),
-        )
