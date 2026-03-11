@@ -54,9 +54,14 @@ _BORDER = "#D1D5DB"
 
 st.markdown("""
 <style>
-/* ── BASE ────────────────────────────────────────────── */
-html, body, [data-testid="stAppViewContainer"],
-[data-testid="stApp"], section.main {
+/* ══════════════════════════════════════════════════════════
+   BASE — background & font
+   ══════════════════════════════════════════════════════════ */
+html, body,
+[data-testid="stAppViewContainer"],
+[data-testid="stApp"],
+.stApp,
+section.main {
     font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
     background-color: #f4f4f4 !important;
 }
@@ -64,102 +69,147 @@ html, body, [data-testid="stAppViewContainer"],
     padding-top: 1.5rem !important;
     max-width: 1400px !important;
 }
-/* ── SIDEBAR ─────────────────────────────────────────── */
+
+/* ══════════════════════════════════════════════════════════
+   SIDEBAR — light gray background, dark labels
+   ══════════════════════════════════════════════════════════ */
 [data-testid="stSidebar"] {
-    background-color: #1a1a1a !important;
+    background-color: #f0f0f0 !important;
+    border-right: 1px solid #d8d8d8 !important;
 }
-[data-testid="stSidebar"] * {
-    color: #ffffff !important;
-}
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
-[data-testid="stSidebar"] label,
-[data-testid="stSidebar"] span {
-    color: #ffffff !important;
-    font-size: 0.82rem !important;
-    letter-spacing: 0.05em !important;
+/* Section headings (### markdown) */
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
+    color: #800000 !important;
+    font-size: 0.78rem !important;
+    font-weight: 700 !important;
     text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
+    margin-bottom: 0.3rem !important;
+}
+/* General text / labels inside sidebar */
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+[data-testid="stSidebar"] label {
+    color: #1a1a1a !important;
+    font-size: 0.82rem !important;
     font-weight: 600 !important;
 }
-/* ── ALL BUTTONS (entire app) ────────────────────────── */
-button[kind], button[kind="secondary"],
-button[kind="primary"], .stButton > button,
-[data-testid="stSidebar"] .stButton > button,
-[data-testid="stBaseButton-secondary"],
-[data-testid="stBaseButton-primary"] {
-    background-color: #111111 !important;
+/* Caption / small text */
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+[data-testid="stSidebar"] small,
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
+    color: #555555 !important;
+    font-size: 0.75rem !important;
+    font-weight: 400 !important;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   BUTTONS — maroon everywhere, very specific selectors
+   ══════════════════════════════════════════════════════════ */
+/* Catch Streamlit's generated button elements by every known selector */
+html body .stButton > button,
+html body [data-testid="stBaseButton-secondary"],
+html body [data-testid="stBaseButton-primary"],
+html body [data-testid="stBaseButton-primaryFormSubmit"],
+html body button[kind="primary"],
+html body button[kind="secondary"],
+html body button[kind="tertiary"] {
+    background-color: #800000 !important;
     color: #ffffff !important;
-    border: 1px solid #333333 !important;
+    border: 1px solid #600000 !important;
     border-radius: 5px !important;
     font-weight: 600 !important;
     font-size: 0.85rem !important;
-    padding: 0.45rem 1rem !important;
-    transition: background-color 0.15s ease !important;
+    padding: 0.4rem 1rem !important;
     box-shadow: none !important;
+    transition: background-color 0.15s ease !important;
 }
-button[kind]:hover, button[kind="secondary"]:hover,
-button[kind="primary"]:hover, .stButton > button:hover,
-[data-testid="stSidebar"] .stButton > button:hover,
-[data-testid="stBaseButton-secondary"]:hover,
-[data-testid="stBaseButton-primary"]:hover {
-    background-color: #2a2a2a !important;
+html body .stButton > button:hover,
+html body [data-testid="stBaseButton-secondary"]:hover,
+html body [data-testid="stBaseButton-primary"]:hover,
+html body [data-testid="stBaseButton-primaryFormSubmit"]:hover,
+html body button[kind="primary"]:hover,
+html body button[kind="secondary"]:hover {
+    background-color: #600000 !important;
     color: #ffffff !important;
-    border-color: #444444 !important;
+    border-color: #500000 !important;
 }
-/* ── ALL SELECTBOXES / DROPDOWNS (entire app) ─────────── */
+html body .stButton > button:disabled,
+html body [data-testid="stBaseButton-secondary"]:disabled,
+html body [data-testid="stBaseButton-primary"]:disabled {
+    background-color: #ccaaaa !important;
+    color: #ffffff !important;
+    border-color: #ccaaaa !important;
+    opacity: 0.65 !important;
+    cursor: not-allowed !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   SELECTBOXES / DROPDOWNS — maroon box, white text
+   ══════════════════════════════════════════════════════════ */
 [data-testid="stSelectbox"] > div > div,
-[data-testid="stSidebar"] [data-testid="stSelectbox"] > div > div {
-    background-color: #111111 !important;
+[data-testid="stSelectbox"] [role="combobox"],
+[data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child {
+    background-color: #800000 !important;
     color: #ffffff !important;
-    border: 1px solid #333333 !important;
+    border: 1px solid #600000 !important;
     border-radius: 5px !important;
 }
 [data-testid="stSelectbox"] > div > div:focus-within,
 [data-testid="stSelectbox"] > div > div[aria-expanded="true"] {
-    background-color: #2a2a2a !important;
-    border-color: #555555 !important;
+    background-color: #600000 !important;
+    border-color: #500000 !important;
 }
-[data-testid="stSelectbox"] svg,
-[data-testid="stSidebar"] [data-testid="stSelectbox"] svg {
+[data-testid="stSelectbox"] > div > div > div,
+[data-testid="stSelectbox"] [role="combobox"] > div {
+    color: #ffffff !important;
+}
+[data-testid="stSelectbox"] svg {
     fill: #ffffff !important;
     color: #ffffff !important;
 }
 /* Dropdown option list */
-[data-testid="stSelectbox"] ul,
 [role="listbox"] {
-    background-color: #1a1a1a !important;
-    border: 1px solid #333333 !important;
+    background-color: #2a2a2a !important;
+    border: 1px solid #444444 !important;
     border-radius: 5px !important;
 }
-[data-testid="stSelectbox"] li,
 [role="option"] {
     color: #ffffff !important;
-    background-color: #1a1a1a !important;
+    background-color: #2a2a2a !important;
 }
-[data-testid="stSelectbox"] li:hover,
 [role="option"]:hover,
 [role="option"][aria-selected="true"] {
-    background-color: #2a2a2a !important;
+    background-color: #800000 !important;
     color: #ffffff !important;
 }
-/* ── DATE INPUT ──────────────────────────────────────── */
+
+/* ══════════════════════════════════════════════════════════
+   DATE INPUT — maroon box, white text
+   ══════════════════════════════════════════════════════════ */
 [data-testid="stDateInput"] input,
 [data-testid="stSidebar"] [data-testid="stDateInput"] input {
-    background-color: #111111 !important;
+    background-color: #800000 !important;
     color: #ffffff !important;
-    border: 1px solid #333333 !important;
+    border: 1px solid #600000 !important;
     border-radius: 5px !important;
 }
 [data-testid="stDateInput"] svg {
     fill: #ffffff !important;
+    color: #ffffff !important;
 }
-/* ── RADIO BUTTONS (Daily / Monthly toggle) ──────────── */
+
+/* ══════════════════════════════════════════════════════════
+   RADIO BUTTONS — transparent, readable text
+   ══════════════════════════════════════════════════════════ */
 [data-testid="stRadio"] label {
     background-color: transparent !important;
     box-shadow: none !important;
     border: none !important;
 }
 [data-testid="stRadio"] label p {
-    color: #ffffff !important;
+    color: #1a1a1a !important;
     font-weight: 500 !important;
     font-size: 0.88rem !important;
     background-color: transparent !important;
@@ -169,14 +219,21 @@ button[kind="primary"]:hover, .stButton > button:hover,
 [data-testid="stRadio"] label:hover {
     background-color: transparent !important;
 }
-/* ── TEXT INPUTS (password fields etc.) ──────────────── */
-[data-testid="stTextInput"] input {
+
+/* ══════════════════════════════════════════════════════════
+   TEXT INPUTS — white background, dark text (password fields)
+   ══════════════════════════════════════════════════════════ */
+[data-testid="stTextInput"] input,
+[data-testid="stSidebar"] [data-testid="stTextInput"] input {
     background-color: #ffffff !important;
     color: #111111 !important;
     border: 1px solid #cccccc !important;
     border-radius: 5px !important;
 }
-/* ── METRIC CARDS ────────────────────────────────────── */
+
+/* ══════════════════════════════════════════════════════════
+   METRIC CARDS (native st.metric)
+   ══════════════════════════════════════════════════════════ */
 [data-testid="metric-container"] {
     background: #ffffff !important;
     border: 1px solid #e2e8f0 !important;
@@ -197,7 +254,10 @@ button[kind="primary"]:hover, .stButton > button:hover,
     font-weight: 700 !important;
     color: #0f172a !important;
 }
-/* ── EXPANDERS ───────────────────────────────────────── */
+
+/* ══════════════════════════════════════════════════════════
+   EXPANDERS
+   ══════════════════════════════════════════════════════════ */
 [data-testid="stExpander"] {
     border: 1px solid #e2e8f0 !important;
     border-radius: 8px !important;
@@ -208,12 +268,19 @@ button[kind="primary"]:hover, .stButton > button:hover,
     font-weight: 600 !important;
     color: #0f172a !important;
 }
-/* ── DIVIDERS ────────────────────────────────────────── */
+
+/* ══════════════════════════════════════════════════════════
+   DIVIDERS
+   ══════════════════════════════════════════════════════════ */
 hr {
     border-color: #e2e8f0 !important;
     margin: 1rem 0 !important;
 }
-/* ── CUSTOM COMPONENT CLASSES (used by keck-header, metric-card, etc.) ── */
+
+/* ══════════════════════════════════════════════════════════
+   CUSTOM COMPONENT CLASSES
+   (keck-header, metric-card, section-heading, etc.)
+   ══════════════════════════════════════════════════════════ */
 .keck-header {
     background: linear-gradient(135deg, #800000 0%, #5a0000 100%);
     padding: 1.1rem 1.8rem;
@@ -345,34 +412,47 @@ if "app_authenticated" not in st.session_state:
     st.session_state["app_authenticated"] = False
 
 if _app_password is not None and not st.session_state["app_authenticated"]:
-    _, col, _ = st.columns([1, 1.2, 1])
+    # Push the card ~20% down the viewport so it sits in the visual centre
+    st.markdown('<div style="height: 18vh; min-height: 60px;"></div>',
+                unsafe_allow_html=True)
+    _, col, _ = st.columns([1, 1.1, 1])
     with col:
         st.markdown("""
             <div style="
-                background-color: #800000;
-                padding: 2rem 2rem 1.5rem 2rem;
+                background: linear-gradient(135deg, #800000 0%, #5a0000 100%);
+                padding: 1.6rem 2rem 1.4rem 2rem;
                 border-radius: 10px 10px 0 0;
                 text-align: center;
                 box-shadow: none;
             ">
-                <h1 style="
+                <div style="
                     color: #FFCC00;
                     font-family: 'Inter', system-ui, sans-serif;
-                    font-size: 1.5rem;
+                    font-size: 0.68rem;
                     font-weight: 700;
-                    letter-spacing: 0.05em;
+                    letter-spacing: 0.14em;
+                    text-transform: uppercase;
+                    margin-bottom: 0.45rem;
+                    opacity: 0.9;
+                ">Keck Medicine of USC</div>
+                <div style="
+                    color: #ffffff;
+                    font-family: 'Inter', system-ui, sans-serif;
+                    font-size: 1.35rem;
+                    font-weight: 700;
+                    letter-spacing: 0.02em;
                     margin: 0;
                     padding: 0;
-                    text-shadow: none;
-                ">Laboratory Productivity</h1>
+                    line-height: 1.2;
+                ">Laboratory Productivity</div>
             </div>
             <div style="
                 background: #ffffff;
-                padding: 1.75rem 2rem 2rem 2rem;
+                padding: 1.6rem 2rem 1.8rem 2rem;
                 border-radius: 0 0 10px 10px;
                 border: 1px solid #e2e8f0;
                 border-top: none;
-                box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+                box-shadow: 0 6px 24px rgba(0,0,0,0.10);
             ">
         """, unsafe_allow_html=True)
         with st.form("login_form", enter_to_submit=True):
@@ -932,18 +1012,16 @@ def _load_from_uploads(files_bytes: tuple[tuple[str, bytes], ...]) -> tuple[pd.D
 def filter_for_map(df: pd.DataFrame, map_type: str) -> pd.DataFrame:
     """Filter the master dataset to the resources and procedures for one map.
 
-    Applies the current resource assignments from session state, excludes
-    globally excluded procedures, and limits to the top-30 procedures by
-    total cumulative volume.
+    Applies the current resource assignments from session state and excludes
+    globally excluded procedures.  Top-30 is NOT applied here — it is computed
+    per-day inside build_pivot (daily view) and per-month inside
+    build_monthly_pivot (monthly view) so the ranking reflects the period
+    actually being displayed rather than all-time totals.
     """
     resources = _ss.resource_assignments[map_type]
     out = df[df["Performing Service Resource"].isin(resources)].copy()
     out = out[~out["Order Procedure"].isin(EXCLUDE_PROCS)]
-    top30 = (
-        out.groupby("Order Procedure")["Complete Volume"]
-        .sum().sort_values(ascending=False).head(30).index.tolist()
-    )
-    return out[out["Order Procedure"].isin(top30)].copy()
+    return out
 
 
 def build_pivot(
@@ -953,6 +1031,11 @@ def build_pivot(
 ) -> tuple[pd.DataFrame | None, pd.DataFrame | None, pd.DataFrame, list[int]]:
     """Build the procedure × hour pivot table for a given date and hour window.
 
+    Top-30 procedures are ranked by their full-day Complete Volume (all hours),
+    then the pivot is built from only those 30 using the selected hour window.
+    This ensures the displayed count always reflects the busiest procedures for
+    that specific day, not across all historical data.
+
     Returns (pivot_df, date_hour_df, date_df, hours_list).
     ``pivot_df`` is None when there is no data for this date/hour combination.
     """
@@ -960,6 +1043,16 @@ def build_pivot(
     hours   = list(range(h_start, h_end + 1))
     df_date = df[df["complete_date"] == selected_date].copy()
     df_dh   = df_date[df_date["hour"].isin(hours)].copy()
+
+    if df_dh.empty:
+        return None, None, df_date, hours
+
+    # Rank by full-day volume so the top-30 is not skewed by the hour filter
+    top30 = (
+        df_date.groupby("Order Procedure")["Complete Volume"]
+        .sum().sort_values(ascending=False).head(30).index.tolist()
+    )
+    df_dh = df_dh[df_dh["Order Procedure"].isin(top30)].copy()
 
     if df_dh.empty:
         return None, None, df_date, hours
@@ -1324,13 +1417,23 @@ with st.sidebar:
         with st.expander("Data Management", expanded=not _data_exists):
 
             # Optional admin password gate
+            # Once the correct password is entered, store in session state so
+            # the input field is hidden for the rest of the session.
             admin_pw   = st.secrets.get("admin_password", None)
             authorized = True
             if admin_pw:
-                entered_pw = st.text_input("Admin password", type="password", key="admin_pw")
-                authorized = entered_pw == admin_pw
-                if entered_pw and not authorized:
-                    st.error("Incorrect password.")
+                if _ss.get("admin_authorized", False):
+                    authorized = True
+                else:
+                    entered_pw = st.text_input(
+                        "Admin password", type="password", key="admin_pw"
+                    )
+                    if entered_pw == admin_pw:
+                        _ss["admin_authorized"] = True
+                        st.rerun()
+                    elif entered_pw:
+                        st.error("Incorrect password.")
+                    authorized = _ss.get("admin_authorized", False)
 
             if authorized:
 
@@ -1501,7 +1604,15 @@ with st.sidebar:
 
             selected_date = picked_date
 
-            _cur_idx = available_dates.index(selected_date)
+            # Guard: if selected_date somehow not in available_dates (e.g. type
+            # mismatch after a map-type switch), fall back to the last date.
+            try:
+                _cur_idx = available_dates.index(selected_date)
+            except ValueError:
+                _cur_idx = len(available_dates) - 1
+                selected_date = available_dates[_cur_idx]
+                _ss["date_picker"] = selected_date
+
             _nc1, _nc2 = st.columns(2)
             with _nc1:
                 if st.button(
