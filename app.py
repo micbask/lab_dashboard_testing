@@ -28,9 +28,6 @@ from matplotlib import font_manager
 import requests
 import streamlit as st
 
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
-from google.oauth2 import service_account
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -293,6 +290,41 @@ st.markdown(f"""
   }}
 </style>
 """, unsafe_allow_html=True)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# APP-LEVEL PASSWORD GATE
+# Runs before any content renders. Gate is skipped if app_password is not set
+# in st.secrets, so local dev and open deployments work without configuration.
+# ═════════════════════════════════════════════════════════════════════════════
+_app_password = st.secrets.get("app_password", None)
+
+if "app_authenticated" not in st.session_state:
+    st.session_state["app_authenticated"] = False
+
+if _app_password is not None and not st.session_state["app_authenticated"]:
+    st.markdown(
+        "<div style='max-width:360px;margin:8rem auto;padding:2rem 2.5rem;"
+        "background:white;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,0.10);'>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"<h2 style='color:#800000;margin-bottom:1.5rem;font-size:1.3rem;"
+        f"font-weight:700;text-align:center;'>Lab Productivity Dashboard</h2>",
+        unsafe_allow_html=True,
+    )
+    with st.form("login_form", enter_to_submit=True):
+        _pw_input = st.text_input("Password", type="password", label_visibility="collapsed",
+                                  placeholder="Enter password")
+        _submitted = st.form_submit_button("Log in", use_container_width=True)
+        if _submitted:
+            if _pw_input == _app_password:
+                st.session_state["app_authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Incorrect password")
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.stop()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
