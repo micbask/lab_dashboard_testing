@@ -193,7 +193,7 @@ html body [data-testid="stBaseButton-primary"]:disabled {
 }
 
 /* ══════════════════════════════════════════════════════════
-   DATE INPUT — maroon box, white text
+   DATE INPUT — maroon box, white text (the input field only)
    ══════════════════════════════════════════════════════════ */
 [data-testid="stDateInput"] input,
 [data-testid="stSidebar"] [data-testid="stDateInput"] input {
@@ -202,9 +202,60 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     border: 1px solid #600000 !important;
     border-radius: 5px !important;
 }
-[data-testid="stDateInput"] svg {
+/* Only the calendar-toggle icon (inside the input row), not the popup */
+[data-testid="stDateInput"] > div > div > div > svg {
     fill: #ffffff !important;
     color: #ffffff !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   DATE PICKER POPUP (BaseWeb calendar portal)
+   Ensure month/year header, nav arrows and day labels are
+   clearly readable on the popup's white background.
+   ══════════════════════════════════════════════════════════ */
+[data-baseweb="calendar"] {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+}
+/* Month / year header buttons and navigation arrows */
+[data-baseweb="calendar"] button {
+    color: #0f172a !important;
+    background-color: transparent !important;
+}
+[data-baseweb="calendar"] button:hover {
+    background-color: #f0f0f0 !important;
+}
+/* All SVGs inside the popup (prev/next chevrons, etc.) */
+[data-baseweb="calendar"] svg {
+    fill: #0f172a !important;
+    color: #0f172a !important;
+}
+/* Day-of-week header row */
+[data-baseweb="calendar"] [data-testid="calendar-day-label"],
+[data-baseweb="calendar"] abbr {
+    color: #64748b !important;
+}
+/* Individual day cells */
+[data-baseweb="calendar"] [role="gridcell"] button,
+[data-baseweb="calendar"] [data-testid="calendar-day"] {
+    color: #0f172a !important;
+    background-color: transparent !important;
+}
+/* Selected day highlight */
+[data-baseweb="calendar"] [aria-selected="true"] button,
+[data-baseweb="calendar"] [data-selected="true"] {
+    background-color: #800000 !important;
+    color: #ffffff !important;
+    border-radius: 50% !important;
+}
+/* Today marker */
+[data-baseweb="calendar"] [data-today="true"] button {
+    border: 1px solid #800000 !important;
+    border-radius: 50% !important;
+}
+/* Disabled / out-of-range days */
+[data-baseweb="calendar"] [aria-disabled="true"] button {
+    color: #cccccc !important;
 }
 
 /* ══════════════════════════════════════════════════════════
