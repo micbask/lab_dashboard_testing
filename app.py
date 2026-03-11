@@ -47,9 +47,9 @@ st.set_page_config(
 # ═════════════════════════════════════════════════════════════════════════════
 # THEME & GLOBAL CSS
 # ═════════════════════════════════════════════════════════════════════════════
-_NAVY   = "#0A2240"
-_GOLD   = "#C5A028"
-_STEEL  = "#4A6FA5"
+_NAVY   = "#800000"
+_GOLD   = "#FFCC00"
+_STEEL  = "#9D2235"
 _WHITE  = "#FFFFFF"
 _LIGHT  = "#F4F6FA"
 _MUTED  = "#6B7280"
@@ -57,15 +57,24 @@ _BORDER = "#D1D5DB"
 
 st.markdown(f"""
 <style>
-  /* ── Base font & App background ── */
-  html, body, .stApp {{
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  /* ── FIX 4: Base font & background ── */
+  html, body, [class*="css"] {{
+    font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+    background-color: #f8fafc !important;
+  }}
+  .stApp {{
     background-color: #f8fafc;
+  }}
+
+  /* ── Remove default top padding ── */
+  .block-container {{
+    padding-top: 1rem !important;
+    padding-bottom: 2rem;
   }}
 
   /* ── Top header banner ── */
   .keck-header {{
-    background: linear-gradient(135deg, {_NAVY} 0%, #1a3a6e 100%);
+    background: linear-gradient(135deg, {_NAVY} 0%, #5a0000 100%);
     padding: 1.1rem 1.8rem;
     border-radius: 10px;
     margin-bottom: 1.2rem;
@@ -88,7 +97,7 @@ st.markdown(f"""
   }}
   .keck-badge {{
     background: {_GOLD};
-    color: {_NAVY};
+    color: #1a1a1a;
     font-size: 0.7rem;
     font-weight: 700;
     padding: 3px 10px;
@@ -103,20 +112,42 @@ st.markdown(f"""
     display: block;
   }}
 
-  /* ── Metric cards ── */
+  /* ── FIX 4: Native st.metric cards ── */
+  [data-testid="metric-container"] {{
+    background: white !important;
+    border: 1px solid #e2e8f0 !important;
+    border-top: 3px solid {_NAVY} !important;
+    border-radius: 8px !important;
+    padding: 1rem 1.25rem !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06) !important;
+  }}
+  [data-testid="metric-container"] label {{
+    font-size: 0.72rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.06em !important;
+    text-transform: uppercase !important;
+    color: #64748b !important;
+  }}
+  [data-testid="metric-container"] [data-testid="stMetricValue"] {{
+    font-size: 1.6rem !important;
+    font-weight: 700 !important;
+    color: #0f172a !important;
+  }}
+
+  /* ── Custom HTML metric cards ── */
   .metric-card {{
-    background: {_WHITE};
-    border: 1px solid {_BORDER};
+    background: white;
+    border: 1px solid #e2e8f0;
     border-top: 4px solid {_NAVY};
     border-radius: 8px;
     padding: 0.85rem 1rem;
     margin-bottom: 0.5rem;
     height: 100%;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
   }}
   .metric-card.accent {{ border-top-color: {_GOLD}; }}
   .metric-card .label {{
-    color: {_MUTED};
+    color: #64748b;
     font-size: 0.72rem;
     font-weight: 600;
     text-transform: uppercase;
@@ -131,7 +162,7 @@ st.markdown(f"""
     word-break: break-word;
   }}
   .metric-card .sub {{
-    color: {_MUTED};
+    color: #64748b;
     font-size: 0.72rem;
     margin-top: 0.2rem;
   }}
@@ -148,12 +179,12 @@ st.markdown(f"""
 
   /* ── Heatmap legend bar ── */
   .heatmap-legend {{
-    background: {_WHITE};
-    border: 1px solid {_BORDER};
+    background: white;
+    border: 1px solid #e2e8f0;
     border-radius: 6px;
     padding: 0.5rem 0.8rem;
     font-size: 0.78rem;
-    color: {_MUTED};
+    color: #64748b;
     margin-bottom: 0.6rem;
   }}
 
@@ -171,8 +202,11 @@ st.markdown(f"""
   .status-chip.warn  {{ background: #FEF9C3; color: #854D0E; }}
   .status-chip.error {{ background: #FEE2E2; color: #991B1B; }}
 
-  /* ── Sidebar tweaks ── */
-  section[data-testid="stSidebar"] {{ background-color: #F9FAFC; }}
+  /* ── FIX 4: Sidebar ── */
+  section[data-testid="stSidebar"] {{
+    background-color: #ffffff !important;
+    border-right: 1px solid #e2e8f0 !important;
+  }}
   section[data-testid="stSidebar"] .stMarkdown h3 {{
     color: {_NAVY};
     font-size: 0.8rem;
@@ -181,8 +215,64 @@ st.markdown(f"""
     letter-spacing: 0.5px;
     margin-bottom: 0.35rem;
   }}
-  section[data-testid="stSidebar"] .stRadio {{
-    margin-bottom: 0.25rem;
+  section[data-testid="stSidebar"] .stSelectbox label,
+  section[data-testid="stSidebar"] .stRadio label,
+  section[data-testid="stSidebar"] p,
+  section[data-testid="stSidebar"] span {{
+    color: #1a1a1a !important;
+    font-size: 0.85rem !important;
+  }}
+
+  /* ── Radio button labels: no highlight ── */
+  div[data-testid="stRadio"] label {{
+    background-color: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+  }}
+  div[data-testid="stRadio"] label:hover {{
+    background-color: transparent !important;
+  }}
+  div[data-testid="stRadio"] label p {{
+    color: #1a1a1a !important;
+    font-weight: 500 !important;
+    font-size: 0.9rem !important;
+    background-color: transparent !important;
+  }}
+
+  /* ── FIX 4: Expanders ── */
+  details {{
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 8px !important;
+    margin-bottom: 0.75rem !important;
+  }}
+  div[data-testid="stExpander"] {{
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 8px !important;
+    margin-bottom: 0.5rem;
+  }}
+
+  /* ── FIX 4: Dividers ── */
+  hr {{
+    border-color: #e2e8f0 !important;
+    margin: 1rem 0 !important;
+  }}
+  .metrics-divider {{
+    border: none;
+    border-top: 1px solid #e2e8f0;
+    margin: 0.8rem 0 1rem;
+  }}
+
+  /* ── FIX 4: Buttons ── */
+  .stButton > button {{
+    background-color: {_NAVY} !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 6px !important;
+    font-weight: 600 !important;
+  }}
+  .stButton > button:hover {{
+    background-color: #5a0000 !important;
   }}
 
   /* ── DataFrames ── */
@@ -192,22 +282,15 @@ st.markdown(f"""
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
   }}
 
-  /* ── Expanders ── */
-  div[data-testid="stExpander"] {{
-    border: 1px solid {_BORDER} !important;
-    border-radius: 8px !important;
-    margin-bottom: 0.5rem;
+  /* ── Refresh data button ── */
+  .refresh-btn button {{
+    background-color: {_NAVY} !important;
+    color: white !important;
+    font-weight: 600 !important;
+    border: none !important;
+    border-radius: 6px !important;
+    width: 100% !important;
   }}
-
-  /* ── Metrics / heatmap divider ── */
-  .metrics-divider {{
-    border: none;
-    border-top: 1px solid {_BORDER};
-    margin: 0.8rem 0 1rem;
-  }}
-
-  /* ── General padding ── */
-  .block-container {{ padding-top: 0.5rem; padding-bottom: 2rem; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -882,7 +965,7 @@ def style_monthly_pivot(pivot: pd.DataFrame, vmax: int):
     return (
         pivot.style
         .background_gradient(cmap="viridis_r", vmin=0, vmax=vmax, subset=hour_cols)
-        .format("{:.1f}")
+        .format(lambda v: str(int(round(v))))
         .set_properties(**{"text-align": "center"})
         .set_properties(subset=["Total"], **{
             "font-weight": "bold",
@@ -1103,11 +1186,6 @@ with st.sidebar:
         source_label = "GitHub" if GITHUB_CONFIGURED else "Google Drive"
         st.caption(f"Storage: {source_label}")
 
-        if st.button("↺  Refresh data", use_container_width=True):
-            _ss.pop("fresh_df", None)
-            st.cache_data.clear()
-            st.rerun()
-
         _data_exists = False
         try:
             if "fresh_df" in _ss:
@@ -1159,6 +1237,14 @@ with st.sidebar:
                     st.error("Incorrect password.")
 
             if authorized:
+
+                # ── Refresh data ─────────────────────────────────────────────
+                st.markdown('<div class="refresh-btn">', unsafe_allow_html=True)
+                if st.button("↺  Refresh data", use_container_width=True, key="refresh_data_btn"):
+                    _ss.pop("fresh_df", None)
+                    st.cache_data.clear()
+                    st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
 
                 # ── Current dataset summary ──────────────────────────────────
                 if raw_df is not None and not raw_df.empty:
