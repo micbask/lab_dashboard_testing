@@ -16,9 +16,10 @@ import base64
 import calendar as _cal
 import io
 import json
+import pickle
 import time
 from copy import deepcopy
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -1428,6 +1429,173 @@ def build_monthly_png(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# PROPHET FORECAST — TRAINING & CACHING
+# ═════════════════════════════════════════════════════════════════════════════
+
+FORECAST_HORIZON = 14  # forecast days ahead
+
+
+def _forecast_gh_path(map_type: str) -> str:
+    """GitHub path for the forecast pickle for a given map type."""
+    return f"data/forecasts_{map_type.replace(' ', '_')}.pkl"
+
+
+def _write_forecast_to_github(map_type: str, payload: dict) -> None:
+    """Serialise payload as pickle and push to GitHub."""
+    if not GITHUB_CONFIGURED:
+        return
+    owner, repo, _ = _gh_coords()
+    gh_path = _forecast_gh_path(map_type)
+    url     = f"https://api.github.com/repos/{owner}/{repo}/contents/{gh_path}"
+    headers = _gh_headers()
+
+    pkl_bytes = pickle.dumps(payload)
+    b64       = base64.b64encode(pkl_bytes).decode()
+
+    resp = requests.get(url, headers=headers, timeout=15)
+    sha  = resp.json().get("sha") if resp.status_code == 200 else None
+
+    body: dict = {"message": f"Update forecasts for {map_type}", "content": b64}
+    if sha:
+        body["sha"] = sha
+    requests.put(url, headers=headers, json=body, timeout=30)
+
+
+def _read_forecast_from_github(map_type: str) -> dict | None:
+    """Download and unpickle the forecast payload from GitHub, or None."""
+    if not GITHUB_CONFIGURED:
+        return None
+    owner, repo, _ = _gh_coords()
+    url     = f"https://api.github.com/repos/{owner}/{repo}/contents/{_forecast_gh_path(map_type)}"
+    headers = _gh_headers()
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return None
+        return pickle.loads(base64.b64decode(resp.json()["content"]))
+    except Exception:
+        return None
+
+
+def train_and_cache_forecasts(df: pd.DataFrame, map_type: str) -> None:
+    """Train one Prophet model per procedure × hour for the top-30 procedures.
+
+    Payload written to GitHub and stored in session state:
+      {
+        "last_data_date": date,          # last date in the training set
+        "forecast_end":   date,          # last_data_date + FORECAST_HORIZON
+        "predictions":    {(proc, hour): {date: float, ...}, ...},
+      }
+    Sparse combinations (<7 non-zero days) fall back to weekday averages.
+    """
+    from prophet import Prophet  # lazy import — only when training
+
+    filtered = filter_for_map(df, map_type)
+    if filtered.empty:
+        return
+
+    last_data_date: date = filtered["complete_date"].max()
+    forecast_end:   date = last_data_date + timedelta(days=FORECAST_HORIZON)
+
+    top30 = (
+        filtered.groupby("Order Procedure")["Complete Volume"]
+        .sum().sort_values(ascending=False).head(30).index.tolist()
+    )
+    filtered = filtered[filtered["Order Procedure"].isin(top30)].copy()
+
+    predictions: dict[tuple[str, int], dict[date, float]] = {}
+
+    for proc in top30:
+        proc_df = filtered[filtered["Order Procedure"] == proc]
+        for hour in range(24):
+            hour_df = proc_df[proc_df["hour"] == hour]
+            daily = (
+                hour_df.groupby("complete_date")["Complete Volume"]
+                .sum().reset_index()
+            )
+            daily.columns = ["ds", "y"]
+            daily["ds"] = pd.to_datetime(daily["ds"])
+
+            if not daily.empty:
+                full_range = pd.date_range(daily["ds"].min(), last_data_date)
+                daily = (
+                    daily.set_index("ds")
+                    .reindex(full_range, fill_value=0)
+                    .reset_index()
+                    .rename(columns={"index": "ds"})
+                )
+
+            non_zero = int((daily["y"] > 0).sum()) if not daily.empty else 0
+
+            if non_zero < 7:
+                # Weekday-average fallback
+                if daily.empty:
+                    preds = {
+                        last_data_date + timedelta(days=d): 0.0
+                        for d in range(1, FORECAST_HORIZON + 1)
+                    }
+                else:
+                    daily["weekday"] = daily["ds"].dt.dayofweek
+                    wd_avg = daily.groupby("weekday")["y"].mean().to_dict()
+                    preds = {}
+                    for d in range(1, FORECAST_HORIZON + 1):
+                        fdate = last_data_date + timedelta(days=d)
+                        preds[fdate] = max(
+                            0.0, round(wd_avg.get(pd.Timestamp(fdate).dayofweek, 0.0), 1)
+                        )
+                predictions[(proc, hour)] = preds
+            else:
+                m = Prophet(
+                    weekly_seasonality=True,
+                    daily_seasonality=False,
+                    yearly_seasonality=False,
+                    changepoint_prior_scale=0.05,
+                )
+                m.fit(daily)
+                future = m.make_future_dataframe(periods=FORECAST_HORIZON)
+                fc = m.predict(future)
+                fc = fc[fc["ds"] > pd.Timestamp(last_data_date)]
+                preds = {
+                    row["ds"].date(): max(0.0, round(row["yhat"], 1))
+                    for _, row in fc.iterrows()
+                }
+                predictions[(proc, hour)] = preds
+
+    payload = {
+        "last_data_date": last_data_date,
+        "forecast_end":   forecast_end,
+        "predictions":    predictions,
+    }
+
+    _write_forecast_to_github(map_type, payload)
+    _ss[f"forecasts_{map_type}"] = payload
+
+
+def load_forecasts(map_type: str) -> dict | None:
+    """Return the cached forecast payload for map_type, or None if unavailable.
+
+    Checks session state first, then falls back to GitHub.
+    """
+    cache_key = f"forecasts_{map_type}"
+    if cache_key in _ss:
+        return _ss[cache_key]
+    payload = _read_forecast_from_github(map_type)
+    if payload is not None:
+        _ss[cache_key] = payload
+    return payload
+
+
+def _retrain_all_forecasts(df: pd.DataFrame) -> None:
+    """Train and cache forecasts for every map type, clearing stale session cache first."""
+    for mt in MAP_TYPES:
+        _ss.pop(f"forecasts_{mt}", None)  # clear stale session cache
+        try:
+            train_and_cache_forecasts(df, mt)
+        except Exception as _fc_err:
+            st.write(f"⚠ Forecast training skipped for {mt}: {_fc_err}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # UI HELPERS
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -1488,6 +1656,24 @@ with st.sidebar:
         horizontal=True, label_visibility="collapsed",
     )
 
+    # ── Pending action: retrain forecast models ──────────────────────────────
+    if _ss.pop("pending_forecast_retrain", False):
+        # raw_df is not yet loaded at this point in the sidebar; load it inline
+        _fc_src_df = _ss.get("fresh_df")
+        if _fc_src_df is None and GITHUB_CONFIGURED:
+            try:
+                _fc_sha = _get_github_sha()
+                if _fc_sha:
+                    _fc_src_df = _parquet_bytes_to_df(_read_parquet_from_github())
+            except Exception:
+                _fc_src_df = None
+        if _fc_src_df is not None and not _fc_src_df.empty:
+            with st.spinner("Retraining forecast models…"):
+                _retrain_all_forecasts(_fc_src_df)
+            st.success("Forecast models retrained.")
+        else:
+            st.warning("No data available to train forecasts on.")
+
     # ── Pending action: reset entire dataset ────────────────────────────────
     if _ss.pop("pending_reset", False):
         try:
@@ -1513,6 +1699,9 @@ with st.sidebar:
                 st.cache_data.clear()
                 _ss.pop("fresh_df", None)
                 st.success("Master dataset cleared.")
+            # Clear stale forecast cache — no data to retrain on
+            for _mt in MAP_TYPES:
+                _ss.pop(f"forecasts_{_mt}", None)
         except Exception as _rst_err:
             st.error(f"Reset failed: {_rst_err}")
 
@@ -1549,6 +1738,14 @@ with st.sidebar:
                 f"Deleted {rows_before - len(new_df):,} rows "
                 f"({del_info['start']} → {del_info['end']})."
             )
+            # Retrain forecasts on the trimmed dataset
+            if not new_df.empty:
+                with st.spinner("Retraining forecast models on updated dataset…"):
+                    _retrain_all_forecasts(new_df)
+                st.success("Forecast models updated.")
+            else:
+                for _mt in MAP_TYPES:
+                    _ss.pop(f"forecasts_{_mt}", None)
         except Exception as _dr_err:
             st.error(f"Delete failed: {_dr_err}")
 
@@ -1632,6 +1829,15 @@ with st.sidebar:
                     st.cache_data.clear()
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
+
+                # ── Refresh Forecast ─────────────────────────────────────────
+                if st.button(
+                    "⟳  Refresh Forecast", use_container_width=True,
+                    key="refresh_forecast_btn",
+                    disabled=(raw_df is None or raw_df.empty),
+                ):
+                    _ss["pending_forecast_retrain"] = True
+                    st.rerun()
 
                 # ── Current dataset summary ──────────────────────────────────
                 if raw_df is not None and not raw_df.empty:
@@ -1851,6 +2057,30 @@ with st.sidebar:
 
             st.caption(f"Day {_cur_idx + 1} of {len(available_dates)}")
 
+            # ── Forecast window indicator & stale-cache warning ───────────
+            _fc_data = load_forecasts(map_type)
+            if _fc_data:
+                _fc_start_d = _max_d + timedelta(days=1)
+                _fc_end_d   = _fc_data["forecast_end"]
+                st.caption(
+                    f"Forecast: **{_fc_start_d.strftime('%b %d')}** – "
+                    f"**{_fc_end_d.strftime('%b %d')}**"
+                )
+                # Stale-cache check: last_data_date in cache vs actual data
+                _fc_trained_on = _fc_data.get("last_data_date")
+                if _fc_trained_on is not None and _fc_trained_on != _max_d:
+                    st.markdown(
+                        '<div style="background:#7a3800;color:#FFE0B2;padding:0.5rem 0.7rem;'
+                        'border-radius:6px;font-size:0.78rem;margin-top:0.3rem;">'
+                        "⚠ Forecast is out of date. Open Data Management and "
+                        "re-upload or use the <strong>Refresh Forecast</strong> "
+                        "button to retrain."
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption("No forecast available")
+
             # ── Hour range slider ─────────────────────────────────────────────────────────────────────
             st.markdown("---")
             st.markdown("### Hour Range")
@@ -1995,6 +2225,11 @@ if _ss.get("pending_upload"):
             # without waiting for the GitHub CDN to reflect the new commit.
             _ss["fresh_df"] = merged_df
             _ss.pop("pending_upload", None)
+
+            # ── Retrain forecast models on the updated master ──────────────
+            st.write("**Step 5** — Retraining forecast models…")
+            _retrain_all_forecasts(merged_df)
+            st.write("Forecast models updated.")
 
             _upload_status.update(
                 label=f"Done — added {rows_added:,} rows to master dataset.",
