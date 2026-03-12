@@ -1200,6 +1200,38 @@ def build_pivot(
     return pivot, df_dh, df_date, hours
 
 
+def build_forecast_pivot(
+    fc_data: dict,
+    selected_date: "date",
+    hour_range: tuple,
+) -> "tuple[pd.DataFrame | None, list[int]]":
+    """Build a procedure × hour pivot from forecast predictions for a future date.
+
+    Reads from the cached forecast payload instead of actual lab data.
+    Returns (pivot_df, hours_list).  pivot_df is None when no predictions exist.
+    """
+    h_start, h_end = hour_range
+    hours = list(range(h_start, h_end + 1))
+    preds = fc_data.get("predictions", {})
+
+    rows: dict = {}
+    for (proc, hour), date_map in preds.items():
+        if hour not in hours:
+            continue
+        val = date_map.get(selected_date, 0.0)
+        if val:
+            rows.setdefault(proc, {})[hour] = val
+
+    if not rows:
+        return None, hours
+
+    pivot = pd.DataFrame(rows).T.reindex(columns=hours, fill_value=0.0)
+    pivot["Total"] = pivot.sum(axis=1)
+    pivot = pivot.sort_values("Total", ascending=False).head(30)
+    pivot.columns = [HOUR_LABELS[c] if isinstance(c, int) else c for c in pivot.columns]
+    return pivot, hours
+
+
 def style_pivot(pivot: pd.DataFrame, vmax: int):
     """Apply viridis_r background-gradient styling to the pivot DataFrame."""
     hour_cols = [c for c in pivot.columns if c != "Total"]
@@ -1956,6 +1988,23 @@ with st.sidebar:
             _min_d = available_dates[0]
             _max_d = available_dates[-1]
 
+            # ── Load forecast data and compute selectable date range ─────────
+            # Forecast dates (future) extend the calendar beyond _max_d so users
+            # can navigate into the 14-day forecast window.
+            _fc_data = load_forecasts(map_type)
+            forecast_dates: list = []
+            _fc_max_d = _max_d   # default: no forecast → picker stops at last data date
+            if _fc_data:
+                _fc_start_d = _max_d + timedelta(days=1)
+                _fc_end_d   = _fc_data["forecast_end"]
+                forecast_dates = [
+                    _fc_start_d + timedelta(days=_i)
+                    for _i in range((_fc_end_d - _fc_start_d).days + 1)
+                ]
+                _fc_max_d = _fc_end_d
+            # All dates the user is allowed to pick (historical + forecast)
+            all_selectable_dates = available_dates + forecast_dates
+
             # ── Apply any pending navigation from the previous run ──────────
             # Prev/Next buttons cannot set _ss["date_picker"] directly after
             # the date_input widget has rendered (Streamlit raises
@@ -1964,18 +2013,23 @@ with st.sidebar:
             # and we apply it here — before the widget renders — which is safe.
             if "_pending_date" in _ss:
                 _pending = _ss.pop("_pending_date")
-                if _min_d <= _pending <= _max_d:
+                if _min_d <= _pending <= _fc_max_d:
                     _ss["date_picker"] = _pending
 
             # ── Initialise / clamp date_picker (safe: widget not yet rendered) ─
             if (
                 "date_picker" not in _ss
                 or _ss["date_picker"] < _min_d
-                or _ss["date_picker"] > _max_d
+                or _ss["date_picker"] > _fc_max_d
             ):
                 _ss["date_picker"] = _max_d
 
-            if _ss["date_picker"] not in available_dates:
+            # Clamp to nearest selectable date only for historical gaps;
+            # forecast dates are valid even though they're not in available_dates.
+            if (
+                _ss["date_picker"] not in all_selectable_dates
+                and _ss["date_picker"] <= _max_d
+            ):
                 _dates_arr = pd.to_datetime(available_dates)
                 if len(_dates_arr) == 0:
                     st.info(
@@ -1990,9 +2044,12 @@ with st.sidebar:
                 _ss["date_picker"] = available_dates[_idx_near]
 
             st.markdown("### Date")
+            _fc_note = (
+                f"  +  forecast to **{_fc_max_d}**" if forecast_dates else ""
+            )
             st.caption(
                 f"{len(available_dates)} date(s) with data  ·  "
-                f"{_min_d} → {_max_d}"
+                f"{_min_d} → {_max_d}{_fc_note}"
             )
 
             # ── Render the date picker widget ───────────────────────────────
@@ -2002,14 +2059,14 @@ with st.sidebar:
             picked_date = st.date_input(
                 "Select date",
                 min_value=_min_d,
-                max_value=_max_d,
+                max_value=_fc_max_d,
                 label_visibility="collapsed",
                 key="date_picker",
             )
 
-            # If the user typed a date with no data, show nearest and queue a
-            # correction for the next run via _pending_date (not the widget key)
-            if picked_date not in available_dates:
+            # If the user typed a date outside all selectable dates, snap to
+            # nearest historical date.  Forecast dates are always valid.
+            if picked_date not in all_selectable_dates:
                 _dates_arr = pd.to_datetime(available_dates)
                 if len(_dates_arr) == 0:
                     st.info(
@@ -2028,12 +2085,14 @@ with st.sidebar:
                 )
                 _ss["_pending_date"] = _nearest   # corrected on next rerun
                 picked_date = _nearest
+            elif picked_date not in available_dates and picked_date in forecast_dates:
+                pass  # forecast date — always valid, no snap needed
 
             selected_date = picked_date
 
-            # Compute index — safe linear search on the (small) list
+            # Compute index across all selectable dates (historical + forecast)
             try:
-                _cur_idx = available_dates.index(selected_date)
+                _cur_idx = all_selectable_dates.index(selected_date)
             except ValueError:
                 _cur_idx = len(available_dates) - 1
                 selected_date = available_dates[_cur_idx]
@@ -2045,28 +2104,20 @@ with st.sidebar:
                     "◄ Prev", use_container_width=True,
                     disabled=(_cur_idx == 0),
                 ):
-                    _ss["_pending_date"] = available_dates[_cur_idx - 1]
+                    _ss["_pending_date"] = all_selectable_dates[_cur_idx - 1]
                     st.rerun()
             with _nc2:
                 if st.button(
                     "Next ►", use_container_width=True,
-                    disabled=(_cur_idx == len(available_dates) - 1),
+                    disabled=(_cur_idx == len(all_selectable_dates) - 1),
                 ):
-                    _ss["_pending_date"] = available_dates[_cur_idx + 1]
+                    _ss["_pending_date"] = all_selectable_dates[_cur_idx + 1]
                     st.rerun()
 
-            st.caption(f"Day {_cur_idx + 1} of {len(available_dates)}")
+            st.caption(f"Day {_cur_idx + 1} of {len(all_selectable_dates)}")
 
-            # ── Forecast window indicator & stale-cache warning ───────────
-            _fc_data = load_forecasts(map_type)
+            # ── Stale-cache warning ───────────────────────────────────────
             if _fc_data:
-                _fc_start_d = _max_d + timedelta(days=1)
-                _fc_end_d   = _fc_data["forecast_end"]
-                st.caption(
-                    f"Forecast: **{_fc_start_d.strftime('%b %d')}** – "
-                    f"**{_fc_end_d.strftime('%b %d')}**"
-                )
-                # Stale-cache check: last_data_date in cache vs actual data
                 _fc_trained_on = _fc_data.get("last_data_date")
                 if _fc_trained_on is not None and _fc_trained_on != _max_d:
                     st.markdown(
@@ -2079,7 +2130,7 @@ with st.sidebar:
                         unsafe_allow_html=True,
                     )
             else:
-                st.caption("No forecast available")
+                st.caption("No forecast available — use Refresh Forecast to generate one.")
 
             # ── Hour range slider ─────────────────────────────────────────────────────────────────────
             st.markdown("---")
@@ -2274,17 +2325,47 @@ if raw_df is None or raw_df.empty:
 # ═════════════════════════════════════════════════════════════════════════════
 
 if view_mode == "Daily":
+    # ── Determine whether the selected date is a forecast (future) date ───────
+    _is_forecast_view = selected_date > _max_d
+
     # ── Build pivot ────────────────────────────────────────────────────────────────────────────
-    pivot, df_date_hour, df_date, hours = build_pivot(filtered_df, selected_date, hour_range)
+    if _is_forecast_view:
+        # Use the cached forecast predictions instead of actual data
+        _fc_panel_data = load_forecasts(map_type)
+        if _fc_panel_data is None:
+            st.warning(
+                f"No forecast data available for **{map_type}**.  "
+                "Open Data Management and click **Refresh Forecast** to generate predictions."
+            )
+            st.stop()
+        pivot, hours = build_forecast_pivot(_fc_panel_data, selected_date, hour_range)
+        df_date_hour = None
+        df_date      = pd.DataFrame()
+    else:
+        pivot, df_date_hour, df_date, hours = build_pivot(filtered_df, selected_date, hour_range)
 
     date_str = pd.Timestamp(selected_date).strftime("%B %d, %Y")
-    _render_header(map_type, date_str)
+    _header_suffix = "  ·  Forecast" if _is_forecast_view else ""
+    _render_header(map_type, date_str + _header_suffix)
+
+    if _is_forecast_view:
+        st.info(
+            "Viewing **forecast** data — these are predicted values, not actual completions. "
+            "Use the date picker or ◄ Prev / Next ► to return to historical dates."
+        )
 
     if pivot is None:
-        st.warning(
-            f"No data found for **{map_type}** on **{date_str}** "
-            f"within the selected hour range.  Try widening the hour slider."
-        )
+        if _is_forecast_view:
+            st.warning(
+                f"No forecast predictions available for **{map_type}** on **{date_str}** "
+                f"within the selected hour range.  Try widening the hour slider or "
+                f"refreshing the forecast from Data Management."
+            )
+        else:
+            st.warning(
+                f"No data found for **{map_type}** on **{date_str}** "
+                f"within the selected hour range.  Try widening the hour slider."
+            )
         st.stop()
 
     # ── Metrics row ────────────────────────────────────────────────────────────────────────────
@@ -2295,23 +2376,25 @@ if view_mode == "Daily":
             "The date may have no activity, or you may need to widen the hour range."
         )
         st.stop()
-    total_vol   = int(pivot["Total"].sum())
+    total_vol   = int(round(pivot["Total"].sum()))
     top_proc    = pivot["Total"].idxmax()
     peak_hour   = pivot[_hour_cols].sum().idxmax()
     num_procs   = len(pivot)
     avg_per_hr  = round(total_vol / max(len(_hour_cols), 1), 1)
 
+    _vol_label  = "Forecast Volume" if _is_forecast_view else "Total Volume"
+
     _m1, _m2, _m3, _m4, _m5 = st.columns(5)
     with _m1:
-        st.markdown(_metric_card("Total Volume", f"{total_vol:,}", accent=True),
+        st.markdown(_metric_card(_vol_label, f"{total_vol:,}", accent=True),
                     unsafe_allow_html=True)
     with _m2:
         _tp_disp = top_proc[:28] + "…" if len(top_proc) > 28 else top_proc
-        st.markdown(_metric_card("Top Procedure", _tp_disp, sub=f"{int(pivot.loc[top_proc, 'Total']):,} total"),
+        st.markdown(_metric_card("Top Procedure", _tp_disp, sub=f"{int(round(pivot.loc[top_proc, 'Total'])):,} total"),
                     unsafe_allow_html=True)
     with _m3:
         st.markdown(_metric_card("Peak Hour", peak_hour,
-                                 sub=f"{int(pivot[_hour_cols].sum()[peak_hour])} completions"),
+                                 sub=f"{int(round(pivot[_hour_cols].sum()[peak_hour]))} {'predicted' if _is_forecast_view else 'completions'}"),
                     unsafe_allow_html=True)
     with _m4:
         st.markdown(_metric_card("Procedures", str(num_procs), sub="shown (top 30)"),
@@ -2324,8 +2407,9 @@ if view_mode == "Daily":
     st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
 
     # ── Heatmap table ─────────────────────────────────────────────────────────────────────────────
+    _heading_label = "Forecast Volume by Procedure &amp; Hour" if _is_forecast_view else "Completed Volume by Procedure &amp; Hour"
     st.markdown(
-        '<div class="section-heading">Completed Volume by Procedure &amp; Hour</div>',
+        f'<div class="section-heading">{_heading_label}</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -2340,22 +2424,23 @@ if view_mode == "Daily":
     _table_h = min(80 + 35 * len(pivot), 900)
     st.dataframe(style_pivot(pivot, VMAX[map_type]), use_container_width=True, height=_table_h)
 
-    # ── PNG download (lazy — rendered only on explicit request) ─────────────────────────────────────────
-    _file_prefix = map_type.replace(" ", "_")
-    _date_tag    = pd.Timestamp(selected_date).strftime("%Y-%m-%d")
+    # ── PNG download (historical dates only — forecast has no df_date_hour) ───
+    if not _is_forecast_view:
+        _file_prefix = map_type.replace(" ", "_")
+        _date_tag    = pd.Timestamp(selected_date).strftime("%Y-%m-%d")
 
-    if st.button("Generate PNG for download"):
-        _ss["show_png"] = True
+        if st.button("Generate PNG for download"):
+            _ss["show_png"] = True
 
-    if _ss.get("show_png"):
-        with st.spinner("Rendering PNG…"):
-            _png_bytes = build_png(df_date_hour, map_type, selected_date, hours)
-        st.download_button(
-            label="⬇  Download PNG",
-            data=_png_bytes,
-            file_name=f"{_file_prefix}_Top30_{_date_tag}.png",
-            mime="image/png",
-        )
+        if _ss.get("show_png"):
+            with st.spinner("Rendering PNG…"):
+                _png_bytes = build_png(df_date_hour, map_type, selected_date, hours)
+            st.download_button(
+                label="⬇  Download PNG",
+                data=_png_bytes,
+                file_name=f"{_file_prefix}_Top30_{_date_tag}.png",
+                mime="image/png",
+            )
 
     st.markdown("---")
 
@@ -2365,58 +2450,59 @@ if view_mode == "Daily":
         _hourly.columns = ["Hour", "Total Volume"]
         st.bar_chart(_hourly.set_index("Hour"), height=220)
 
-    # ── Cell drill-down ────────────────────────────────────────────────────────────────────────────
-    with st.expander("Drill into a cell — individual completion events", expanded=False):
-        st.markdown(
-            "Select a **procedure** and **hour** to inspect every individual "
-            "completion event recorded in that cell."
-        )
-        _dd1, _dd2 = st.columns(2)
-        with _dd1:
-            sel_proc       = st.selectbox("Procedure", pivot.index.tolist(), key="drill_proc")
-        with _dd2:
-            sel_hour_label = st.selectbox("Hour", _hour_cols, key="drill_hour")
-
-        sel_hour_int = LABEL_TO_HOUR[sel_hour_label]
-        detail       = df_date[
-            (df_date["Order Procedure"] == sel_proc) &
-            (df_date["hour"] == sel_hour_int)
-        ].copy().sort_values("Date/Time - Complete")
-
-        _show_cols = {k: v for k, v in {
-            "Date/Time - Complete":        "Completed At",
-            "Performing Service Resource": "Resource",
-            "Complete Volume":             "Volume",
-        }.items() if k in detail.columns}
-
-        detail_display = (
-            detail[list(_show_cols.keys())]
-            .rename(columns=_show_cols)
-            .reset_index(drop=True)
-        )
-        if "Completed At" in detail_display.columns:
-            detail_display["Completed At"] = (
-                pd.to_datetime(detail_display["Completed At"])
-                .dt.strftime("%Y-%m-%d  %H:%M:%S")
-            )
-
-        if detail_display.empty:
-            st.info(
-                f"No completions for **{sel_proc}** during **{sel_hour_label}** on {date_str}."
-            )
-        else:
-            _cell_vol = (
-                int(detail_display["Volume"].sum())
-                if "Volume" in detail_display.columns else len(detail_display)
-            )
+    # ── Cell drill-down (historical dates only — forecast has no individual events) ───────────────
+    if not _is_forecast_view:
+        with st.expander("Drill into a cell — individual completion events", expanded=False):
             st.markdown(
-                f"**{len(detail_display)} event(s)** &nbsp;·&nbsp; *{sel_proc}* &nbsp;·&nbsp; "
-                f"**{sel_hour_label}** &nbsp;·&nbsp; Total volume: **{_cell_vol}**"
+                "Select a **procedure** and **hour** to inspect every individual "
+                "completion event recorded in that cell."
             )
-            st.dataframe(
-                detail_display, use_container_width=True,
-                height=min(80 + 35 * len(detail_display), 500),
+            _dd1, _dd2 = st.columns(2)
+            with _dd1:
+                sel_proc       = st.selectbox("Procedure", pivot.index.tolist(), key="drill_proc")
+            with _dd2:
+                sel_hour_label = st.selectbox("Hour", _hour_cols, key="drill_hour")
+
+            sel_hour_int = LABEL_TO_HOUR[sel_hour_label]
+            detail       = df_date[
+                (df_date["Order Procedure"] == sel_proc) &
+                (df_date["hour"] == sel_hour_int)
+            ].copy().sort_values("Date/Time - Complete")
+
+            _show_cols = {k: v for k, v in {
+                "Date/Time - Complete":        "Completed At",
+                "Performing Service Resource": "Resource",
+                "Complete Volume":             "Volume",
+            }.items() if k in detail.columns}
+
+            detail_display = (
+                detail[list(_show_cols.keys())]
+                .rename(columns=_show_cols)
+                .reset_index(drop=True)
             )
+            if "Completed At" in detail_display.columns:
+                detail_display["Completed At"] = (
+                    pd.to_datetime(detail_display["Completed At"])
+                    .dt.strftime("%Y-%m-%d  %H:%M:%S")
+                )
+
+            if detail_display.empty:
+                st.info(
+                    f"No completions for **{sel_proc}** during **{sel_hour_label}** on {date_str}."
+                )
+            else:
+                _cell_vol = (
+                    int(detail_display["Volume"].sum())
+                    if "Volume" in detail_display.columns else len(detail_display)
+                )
+                st.markdown(
+                    f"**{len(detail_display)} event(s)** &nbsp;·&nbsp; *{sel_proc}* &nbsp;·&nbsp; "
+                    f"**{sel_hour_label}** &nbsp;·&nbsp; Total volume: **{_cell_vol}**"
+                )
+                st.dataframe(
+                    detail_display, use_container_width=True,
+                    height=min(80 + 35 * len(detail_display), 500),
+                )
 
 else:
     # ── Monthly view ──────────────────────────────────────────────────────────────────────────────────
