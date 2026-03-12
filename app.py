@@ -1366,6 +1366,67 @@ def build_png(
     return buf.getvalue()
 
 
+def build_monthly_png(
+    monthly_pivot: pd.DataFrame,
+    map_type: str,
+    year: int,
+    month: int,
+    n_days: int,
+) -> bytes:
+    """Render the monthly average heatmap as a high-DPI PNG and return raw PNG bytes.
+
+    monthly_pivot already has string hour-label columns and a 'Total' column
+    (daily-average values), so no re-pivoting is needed.
+    Only called when the user explicitly requests a download.
+    """
+    vmax      = VMAX[map_type]
+    hour_cols = [c for c in monthly_pivot.columns if c != "Total"]
+    n_hours   = len(hour_cols)
+
+    mat        = monthly_pivot[hour_cols].to_numpy()
+    row_totals = monthly_pivot["Total"].values
+    ylabels    = monthly_pivot.index.tolist()
+    month_label = f"{_cal.month_name[month]} {year}"
+
+    fig_w = max(10, 0.6 * n_hours)
+    fig_h = max(5,  0.35 * len(ylabels))
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=150)
+
+    im = ax.imshow(mat, aspect="auto", cmap="viridis_r", vmin=0, vmax=vmax)
+    ax.set_title(
+        f"{map_type} – Monthly Average (Top 30)  |  "
+        f"{month_label}  |  N = {n_days} days",
+        fontsize=11, pad=10,
+    )
+    ax.set_xticks(np.arange(n_hours))
+    ax.set_xticklabels(hour_cols, rotation=45, ha="right", fontsize=8)
+    ax.set_yticks(np.arange(len(ylabels)))
+    ax.set_yticklabels(ylabels, fontsize=8)
+
+    cbar = fig.colorbar(im, ax=ax, fraction=0.02, pad=0.005)
+    cbar.set_label("Avg completed volume per day in hour", fontsize=8)
+
+    for i in range(mat.shape[0]):
+        for j in range(mat.shape[1]):
+            ax.text(j, i, f"{mat[i, j]:.1f}", ha="center", va="center",
+                    fontsize=6.5, color="black")
+
+    total_x = n_hours - 0.25
+    ax.text(total_x, -0.75, "Total", ha="center", va="center",
+            fontsize=8, fontweight="bold", transform=ax.transData)
+    for i, t in enumerate(row_totals):
+        ax.text(total_x, i, f"{t:.1f}", ha="center", va="center",
+                fontsize=8, fontweight="bold", transform=ax.transData)
+    ax.set_xlim(-0.5, n_hours + 0.25)
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=250, bbox_inches="tight")
+    buf.seek(0)
+    plt.close(fig)
+    return buf.getvalue()
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # UI HELPERS
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2167,6 +2228,28 @@ else:
         style_monthly_pivot(monthly_pivot, VMAX[map_type]),
         use_container_width=True, height=_m_table_h,
     )
+
+    # ── PNG download (lazy — rendered only on explicit request) ──────────────
+    _m_file_prefix = map_type.replace(" ", "_")
+    _m_month_tag   = f"{selected_year}_{selected_month:02d}"
+
+    if st.button("Generate PNG for download", key="monthly_png_btn"):
+        _ss["show_monthly_png"] = True
+
+    if _ss.get("show_monthly_png"):
+        with st.spinner("Rendering PNG…"):
+            _m_png_bytes = build_monthly_png(
+                monthly_pivot, map_type, selected_year, selected_month, n_days
+            )
+        st.download_button(
+            label="⬇  Download PNG",
+            data=_m_png_bytes,
+            file_name=f"{_m_file_prefix}_Monthly_Top30_{_m_month_tag}.png",
+            mime="image/png",
+            key="monthly_png_download",
+        )
+
+    st.markdown("---")
 
 # ── File merge log (only shown when using direct file upload) ─────────────────────────────
 if merge_log:
