@@ -1771,6 +1771,13 @@ with st.sidebar:
 
             if _ss["date_picker"] not in available_dates:
                 _dates_arr = pd.to_datetime(available_dates)
+                if len(_dates_arr) == 0:
+                    st.info(
+                        "No data is available for this site yet. "
+                        "Try selecting a different map type, or ask your "
+                        "administrator to upload data for this site."
+                    )
+                    st.stop()
                 _idx_near  = (
                     (_dates_arr - pd.Timestamp(_ss["date_picker"])).abs().argmin()
                 )
@@ -1798,6 +1805,13 @@ with st.sidebar:
             # correction for the next run via _pending_date (not the widget key)
             if picked_date not in available_dates:
                 _dates_arr = pd.to_datetime(available_dates)
+                if len(_dates_arr) == 0:
+                    st.info(
+                        "No data is available for this site yet. "
+                        "Try selecting a different map type, or ask your "
+                        "administrator to upload data for this site."
+                    )
+                    st.stop()
                 _idx_near  = (
                     (_dates_arr - pd.Timestamp(picked_date)).abs().argmin()
                 )
@@ -2040,6 +2054,12 @@ if view_mode == "Daily":
 
     # ── Metrics row ────────────────────────────────────────────────────────────────────────────
     _hour_cols  = [c for c in pivot.columns if c != "Total"]
+    if not _hour_cols or pivot.empty:
+        st.info(
+            "No completed procedures were found for this site on the selected date. "
+            "The date may have no activity, or you may need to widen the hour range."
+        )
+        st.stop()
     total_vol   = int(pivot["Total"].sum())
     top_proc    = pivot["Total"].idxmax()
     peak_hour   = pivot[_hour_cols].sum().idxmax()
