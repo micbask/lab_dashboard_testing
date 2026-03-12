@@ -2210,10 +2210,18 @@ if view_mode == "Daily":
             key="daily_png_dl",
         )
     with _dl2:
+        _daily_raw_csv = (
+            df_date[["Order Procedure", "Performing Service Resource",
+                      "Date/Time - Complete", "Complete Volume"]]
+            .sort_values("Date/Time - Complete")
+            .reset_index(drop=True)
+            .to_csv(index=False)
+            .encode()
+        )
         st.download_button(
             "Download CSV",
-            data=pivot.to_csv(index=True).encode(),
-            file_name=f"{_file_prefix}_{_date_tag}.csv",
+            data=_daily_raw_csv,
+            file_name=f"{_file_prefix}_raw_{_date_tag}.csv",
             mime="text/csv",
             use_container_width=True,
             key="daily_csv_dl",
@@ -2363,10 +2371,24 @@ else:
             key="monthly_png_dl",
         )
     with _mdl2:
+        _m_raw_start = date(selected_year, selected_month, 1)
+        _m_raw_end   = date(selected_year, selected_month,
+                            _cal.monthrange(selected_year, selected_month)[1])
+        _monthly_raw_csv = (
+            filtered_df[
+                (filtered_df["complete_date"] >= _m_raw_start) &
+                (filtered_df["complete_date"] <= _m_raw_end)
+            ][["Order Procedure", "Performing Service Resource",
+               "Date/Time - Complete", "Complete Volume"]]
+            .sort_values("Date/Time - Complete")
+            .reset_index(drop=True)
+            .to_csv(index=False)
+            .encode()
+        )
         st.download_button(
             "Download CSV",
-            data=monthly_pivot.to_csv(index=True).encode(),
-            file_name=f"{_m_file_prefix}_{_m_file_tag}.csv",
+            data=_monthly_raw_csv,
+            file_name=f"{_m_file_prefix}_raw_{_m_file_tag}.csv",
             mime="text/csv",
             use_container_width=True,
             key="monthly_csv_dl",
