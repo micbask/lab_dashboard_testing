@@ -1294,6 +1294,64 @@ def style_monthly_pivot(pivot: pd.DataFrame, vmax: int):
         ])
     )
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+# WEEKDAY PIVOT
+# ═════════════════════════════════════════════════════════════════════════════
+
+def build_weekday_pivot(
+    month_df: pd.DataFrame,
+    year: int,
+    month: int,
+) -> "tuple[pd.DataFrame | None, dict[int, int]]":
+    """Build a weekday × hour pivot of average total volume for a calendar month.
+
+    Uses the same filtered month data as the monthly heatmap (top-30 procedures
+    already applied).  Cell values = average total volume (all procedures summed)
+    per occurrence of that weekday/hour during the selected month.
+
+    Returns (pivot_df, weekday_counts_dict) or (None, {}) when no data.
+    Rows are always ordered Monday → Sunday regardless of volume.
+    Row labels include occurrence count, e.g. "Monday  (×5)".
+    """
+    if month_df.empty:
+        return None, {}
+
+    df = month_df.copy()
+    df["weekday"] = pd.to_datetime(df["complete_date"]).dt.dayofweek
+
+    # Sum Complete Volume across all procedures per weekday/hour
+    pivot = (
+        df.pivot_table(
+            index="weekday",
+            columns="hour",
+            values="Complete Volume",
+            aggfunc="sum",
+            fill_value=0,
+        ).reindex(index=list(range(7)), columns=list(range(24)), fill_value=0)
+    )
+
+    # Count how many times each weekday actually occurs in this calendar month
+    month_start = date(year, month, 1)
+    month_end   = date(year, month, _cal.monthrange(year, month)[1])
+    wd_counts: dict[int, int] = {wd: 0 for wd in range(7)}
+    for d in pd.date_range(month_start, month_end):
+        wd_counts[d.dayofweek] += 1
+
+    # Divide each row by its occurrence count → true per-weekday average
+    for wd in range(7):
+        pivot.loc[wd] = pivot.loc[wd] / max(wd_counts[wd], 1)
+
+    pivot["Total"] = pivot[list(range(24))].sum(axis=1)
+
+    _day_names = ["Monday", "Tuesday", "Wednesday", "Thursday",
+                  "Friday", "Saturday", "Sunday"]
+    pivot.index = [f"{_day_names[wd]}  (×{wd_counts[wd]})" for wd in range(7)]
+    pivot.columns = [HOUR_LABELS[c] if isinstance(c, int) else c for c in pivot.columns]
+
+    return pivot, wd_counts
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # PNG EXPORT
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1416,6 +1474,59 @@ def build_monthly_png(
             fontsize=8, fontweight="bold", transform=ax.transData)
     for i, t in enumerate(row_totals):
         ax.text(total_x, i, f"{t:.1f}", ha="center", va="center",
+                fontsize=8, fontweight="bold", transform=ax.transData)
+    ax.set_xlim(-0.5, n_hours + 0.25)
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=250, bbox_inches="tight")
+    buf.seek(0)
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def build_weekday_png(
+    weekday_pivot: pd.DataFrame,
+    map_type: str,
+    year: int,
+    month: int,
+) -> bytes:
+    """Render the weekday × hour average heatmap as a high-DPI PNG."""
+    hour_cols  = [c for c in weekday_pivot.columns if c != "Total"]
+    n_hours    = len(hour_cols)
+    mat        = weekday_pivot[hour_cols].to_numpy()
+    row_totals = weekday_pivot["Total"].values
+    ylabels    = weekday_pivot.index.tolist()
+    vmax       = max(1, int(mat.max()))
+    month_label = f"{_cal.month_name[month]} {year}"
+
+    fig_w = max(10, 0.6 * n_hours)
+    fig_h = max(3,  0.55 * len(ylabels))
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=150)
+
+    im = ax.imshow(mat, aspect="auto", cmap="viridis_r", vmin=0, vmax=vmax)
+    ax.set_title(
+        f"{map_type} — Weekday Pattern  |  {month_label}",
+        fontsize=11, pad=10,
+    )
+    ax.set_xticks(np.arange(n_hours))
+    ax.set_xticklabels(hour_cols, rotation=45, ha="right", fontsize=8)
+    ax.set_yticks(np.arange(len(ylabels)))
+    ax.set_yticklabels(ylabels, fontsize=9)
+
+    cbar = fig.colorbar(im, ax=ax, fraction=0.02, pad=0.005)
+    cbar.set_label("Avg completed volume per weekday occurrence", fontsize=8)
+
+    for i in range(mat.shape[0]):
+        for j in range(mat.shape[1]):
+            ax.text(j, i, str(int(round(mat[i, j]))), ha="center", va="center",
+                    fontsize=6.5, color="black")
+
+    total_x = n_hours - 0.25
+    ax.text(total_x, -0.75, "Total", ha="center", va="center",
+            fontsize=8, fontweight="bold", transform=ax.transData)
+    for i, t in enumerate(row_totals):
+        ax.text(total_x, i, str(int(round(t))), ha="center", va="center",
                 fontsize=8, fontweight="bold", transform=ax.transData)
     ax.set_xlim(-0.5, n_hours + 0.25)
     fig.tight_layout()
@@ -2085,21 +2196,27 @@ if view_mode == "Daily":
     _table_h = min(80 + 35 * len(pivot), 900)
     st.dataframe(style_pivot(pivot, VMAX[map_type]), use_container_width=True, height=_table_h)
 
-    # ── PNG download (lazy — rendered only on explicit request) ─────────────────────────────────────────
+    # ── Single-click PNG + CSV downloads ─────────────────────────────────────
     _file_prefix = map_type.replace(" ", "_")
     _date_tag    = pd.Timestamp(selected_date).strftime("%Y-%m-%d")
-
-    if st.button("Generate PNG for download"):
-        _ss["show_png"] = True
-
-    if _ss.get("show_png"):
-        with st.spinner("Rendering PNG…"):
-            _png_bytes = build_png(df_date_hour, map_type, selected_date, hours)
+    _dl1, _dl2   = st.columns(2)
+    with _dl1:
         st.download_button(
-            label="⬇  Download PNG",
-            data=_png_bytes,
-            file_name=f"{_file_prefix}_Top30_{_date_tag}.png",
+            "Download PNG",
+            data=build_png(df_date_hour, map_type, selected_date, hours),
+            file_name=f"{_file_prefix}_{_date_tag}.png",
             mime="image/png",
+            use_container_width=True,
+            key="daily_png_dl",
+        )
+    with _dl2:
+        st.download_button(
+            "Download CSV",
+            data=pivot.to_csv(index=True).encode(),
+            file_name=f"{_file_prefix}_{_date_tag}.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="daily_csv_dl",
         )
 
     st.markdown("---")
@@ -2229,27 +2346,120 @@ else:
         use_container_width=True, height=_m_table_h,
     )
 
-    # ── PNG download (lazy — rendered only on explicit request) ──────────────
+    # ── Single-click PNG + CSV downloads ─────────────────────────────────────
     _m_file_prefix = map_type.replace(" ", "_")
-    _m_month_tag   = f"{selected_year}_{selected_month:02d}"
-
-    if st.button("Generate PNG for download", key="monthly_png_btn"):
-        _ss["show_monthly_png"] = True
-
-    if _ss.get("show_monthly_png"):
-        with st.spinner("Rendering PNG…"):
-            _m_png_bytes = build_monthly_png(
-                monthly_pivot, map_type, selected_year, selected_month, n_days
-            )
+    _m_month_label = _cal.month_name[selected_month]
+    _m_file_tag    = f"{_m_month_label}_{selected_year}"
+    _mdl1, _mdl2   = st.columns(2)
+    with _mdl1:
         st.download_button(
-            label="⬇  Download PNG",
-            data=_m_png_bytes,
-            file_name=f"{_m_file_prefix}_Monthly_Top30_{_m_month_tag}.png",
+            "Download PNG",
+            data=build_monthly_png(
+                monthly_pivot, map_type, selected_year, selected_month, n_days
+            ),
+            file_name=f"{_m_file_prefix}_{_m_file_tag}.png",
             mime="image/png",
-            key="monthly_png_download",
+            use_container_width=True,
+            key="monthly_png_dl",
+        )
+    with _mdl2:
+        st.download_button(
+            "Download CSV",
+            data=monthly_pivot.to_csv(index=True).encode(),
+            file_name=f"{_m_file_prefix}_{_m_file_tag}.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="monthly_csv_dl",
         )
 
     st.markdown("---")
+
+    # ── Weekday pattern expander ──────────────────────────────────────────────
+    with st.expander("Hourly Volume by Day of Week", expanded=False):
+        weekday_pivot, _wd_counts = build_weekday_pivot(
+            month_raw_df, selected_year, selected_month
+        )
+
+        if weekday_pivot is None:
+            st.info("No data available for weekday breakdown.")
+        else:
+            _wd_hour_cols    = [c for c in weekday_pivot.columns if c != "Total"]
+            _wd_busiest_day  = weekday_pivot["Total"].idxmax()
+            _wd_lightest_day = weekday_pivot["Total"].idxmin()
+            _wd_peak_hour    = weekday_pivot[_wd_hour_cols].sum().idxmax()
+            _wd_peak_disp    = _wd_peak_hour.replace("AM", " AM").replace("PM", " PM")
+
+            _wc1, _wc2, _wc3 = st.columns(3)
+            with _wc1:
+                st.markdown(
+                    _metric_card(
+                        "Busiest Day",
+                        _wd_busiest_day.split("  ")[0],
+                        sub=f"avg {int(round(weekday_pivot.loc[_wd_busiest_day, 'Total']))} vol / day",
+                    ),
+                    unsafe_allow_html=True,
+                )
+            with _wc2:
+                st.markdown(
+                    _metric_card("Peak Hour", _wd_peak_disp,
+                                 sub="highest avg volume across weekdays"),
+                    unsafe_allow_html=True,
+                )
+            with _wc3:
+                st.markdown(
+                    _metric_card(
+                        "Lightest Day",
+                        _wd_lightest_day.split("  ")[0],
+                        sub=f"avg {int(round(weekday_pivot.loc[_wd_lightest_day, 'Total']))} vol / day",
+                    ),
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown(
+                f'<div class="section-heading">'
+                f'{map_type} — Weekday Pattern | {month_name_str}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            _wd_vmax = max(1, int(weekday_pivot[_wd_hour_cols].values.max()))
+            st.markdown(
+                f'<div class="heatmap-legend">'
+                f'Values = avg completed volume per occurrence of that weekday. '
+                f'Colour scale: &nbsp;<strong style="color:#f5e642;">■</strong> low &nbsp;→&nbsp; '
+                f'<strong style="color:#3b0f70;">■</strong> high (≥ {_wd_vmax}). &nbsp;'
+                f'<strong>Total</strong> column = avg daily total for that weekday.'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            st.dataframe(
+                style_monthly_pivot(weekday_pivot, _wd_vmax),
+                use_container_width=True,
+                height=min(80 + 35 * 7, 400),
+            )
+
+            # Download buttons for weekday data
+            _wdl1, _wdl2 = st.columns(2)
+            with _wdl1:
+                st.download_button(
+                    "Download PNG",
+                    data=build_weekday_png(
+                        weekday_pivot, map_type, selected_year, selected_month
+                    ),
+                    file_name=f"{_m_file_prefix}_Weekday_{_m_file_tag}.png",
+                    mime="image/png",
+                    use_container_width=True,
+                    key="weekday_png_dl",
+                )
+            with _wdl2:
+                st.download_button(
+                    "Download CSV",
+                    data=weekday_pivot.to_csv(index=True).encode(),
+                    file_name=f"{_m_file_prefix}_Weekday_{_m_file_tag}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    key="weekday_csv_dl",
+                )
 
 # ── File merge log (only shown when using direct file upload) ─────────────────────────────
 if merge_log:
