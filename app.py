@@ -970,8 +970,8 @@ def _write_parquet_to_github(parquet_bytes: bytes) -> None:
 # DATA PARSING & MERGING
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _apply_proc_name_corrections(df: pd.DataFrame) -> None:
-    """Normalise known procedure-name encoding artefacts in-place.
+def clean_procedure_names(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise known procedure-name encoding artefacts; returns the df.
 
     The source system occasionally emits non-breaking spaces (\\xa0) inside
     procedure names.  Fix every known variant so all downstream grouping,
@@ -989,6 +989,7 @@ def _apply_proc_name_corrections(df: pd.DataFrame) -> None:
         "Complete Blood Count With Auto  Differen",
         regex=False,
     )
+    return df
 
 
 def parse_single_file(file_bytes: bytes, filename: str = "") -> pd.DataFrame:
@@ -1015,7 +1016,7 @@ def parse_single_file(file_bytes: bytes, filename: str = "") -> pd.DataFrame:
     df.columns = [c.strip() if isinstance(c, str) else c for c in df.columns]
     df["Performing Service Resource"] = df["Performing Service Resource"].astype(str).str.strip()
     df["Order Procedure"]             = df["Order Procedure"].astype(str).str.strip()
-    _apply_proc_name_corrections(df)  # normalise encoding artefacts in new data
+    df = clean_procedure_names(df)  # normalise encoding artefacts in new data
 
     # Apply resource remaps defined in RESOURCE_REMAPS
     for (proc, old_res), new_res in RESOURCE_REMAPS.items():
@@ -1114,7 +1115,6 @@ def _parquet_bytes_to_df(raw: bytes) -> pd.DataFrame:
         df["complete_date"] = pd.to_datetime(df["Date/Time - Complete"]).dt.date
     if "hour" not in df.columns:
         df["hour"] = pd.to_datetime(df["Date/Time - Complete"]).dt.hour.astype(int)
-    _apply_proc_name_corrections(df)  # clean stored data on every load
     return df
 
 
@@ -1720,7 +1720,25 @@ with st.sidebar:
             try:
                 _fc_sha = _get_github_sha()
                 if _fc_sha:
-                    _fc_src_df = _parquet_bytes_to_df(_read_parquet_from_github())
+                    _fc_raw_bytes = _read_parquet_from_github()
+                    _fc_src_df    = _parquet_bytes_to_df(_fc_raw_bytes)
+                    # Check and permanently fix any \xa0 encoding artefacts
+                    _fc_bad = int(
+                        _fc_src_df["Order Procedure"]
+                        .str.contains("\xa0", regex=False, na=False)
+                        .sum()
+                    )
+                    if _fc_bad > 0:
+                        _fc_src_df = clean_procedure_names(_fc_src_df)
+                        with st.spinner("Correcting procedure name encoding in stored data…"):
+                            _write_parquet_to_github(df_to_parquet_bytes(_fc_src_df))
+                            _get_github_sha.clear()
+                            st.cache_data.clear()
+                        _ss["fresh_df"] = _fc_src_df
+                        st.success(
+                            f"Procedure names corrected and parquet updated "
+                            f"({_fc_bad:,} row(s) fixed)."
+                        )
             except Exception:
                 _fc_src_df = None
         if _fc_src_df is not None and not _fc_src_df.empty:
@@ -1794,12 +1812,7 @@ with st.sidebar:
                 f"Deleted {rows_before - len(new_df):,} rows "
                 f"({del_info['start']} → {del_info['end']})."
             )
-            # Retrain forecasts on the trimmed dataset
-            if not new_df.empty:
-                with st.spinner("Retraining forecast models on updated dataset…"):
-                    _retrain_all_forecasts(new_df)
-                st.success("Forecast models updated.")
-            else:
+            if new_df.empty:
                 for _mt in MAP_TYPES:
                     _ss.pop(f"forecasts_{_mt}", None)
         except Exception as _dr_err:
@@ -1853,56 +1866,6 @@ with st.sidebar:
             _status_chip("Load error", level="error")
             st.error(f"Could not load data: {_load_err}")
 
-        # ── One-time procedure-name cleanup ──────────────────────────────────
-        # Runs once per session (guarded by session-state flag).  Reads the raw
-        # stored parquet without corrections so we can detect whether the bad
-        # \xa0 variant is present, and writes the fixed parquet back to GitHub
-        # only when a correction is actually needed.  Skipped when fresh_df is
-        # in session (data was already corrected during that session's upload).
-        if (
-            GITHUB_CONFIGURED
-            and raw_df is not None
-            and not raw_df.empty
-            and not _ss.get("_proc_cleanup_checked")
-            and "fresh_df" not in _ss
-        ):
-            _ss["_proc_cleanup_checked"] = True  # prevent re-run this session
-            try:
-                _raw_pq_bytes = _read_parquet_from_github()
-                _df_uncorr    = pd.read_parquet(io.BytesIO(_raw_pq_bytes))
-                # Ensure derived columns exist (needed for retrain)
-                if "complete_date" not in _df_uncorr.columns:
-                    _df_uncorr["complete_date"] = (
-                        pd.to_datetime(_df_uncorr["Date/Time - Complete"]).dt.date
-                    )
-                if "hour" not in _df_uncorr.columns:
-                    _df_uncorr["hour"] = (
-                        pd.to_datetime(_df_uncorr["Date/Time - Complete"]).dt.hour.astype(int)
-                    )
-                _bad_count = int(
-                    _df_uncorr["Order Procedure"]
-                    .str.contains("\xa0", regex=False, na=False)
-                    .sum()
-                )
-                if _bad_count > 0:
-                    _apply_proc_name_corrections(_df_uncorr)
-                    with st.spinner(
-                        "One-time fix: correcting procedure name encoding in stored data…"
-                    ):
-                        _write_parquet_to_github(df_to_parquet_bytes(_df_uncorr))
-                        _get_github_sha.clear()
-                        st.cache_data.clear()
-                    _ss["fresh_df"] = _df_uncorr
-                    st.success(
-                        f"Procedure name encoding fixed ({_bad_count:,} row(s) corrected)."
-                    )
-                    with st.spinner("Retraining forecast models on corrected data…"):
-                        _retrain_all_forecasts(_df_uncorr)
-                    st.success("Forecast models retrained.")
-                    st.rerun()
-            except Exception:
-                pass  # non-critical — silently skip on any error
-
         # ── Data Management expander ─────────────────────────────────────────
         st.markdown("---")
         with st.expander("Data Management", expanded=not _data_exists):
@@ -1933,6 +1896,7 @@ with st.sidebar:
                 if st.button("↺  Refresh data", use_container_width=True, key="refresh_data_btn"):
                     _ss.pop("fresh_df", None)
                     st.cache_data.clear()
+                    _ss["pending_forecast_retrain"] = True
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
 
@@ -2331,6 +2295,15 @@ if _ss.get("pending_upload"):
 
             # Step 4 — validate the payload then write to remote storage
             st.write("**Step 4 / 4** — Validating and saving…")
+            # Ensure procedure names are clean before persisting
+            _up_bad = int(
+                merged_df["Order Procedure"]
+                .str.contains("\xa0", regex=False, na=False)
+                .sum()
+            )
+            if _up_bad > 0:
+                merged_df = clean_procedure_names(merged_df)
+                st.write(f"Procedure names corrected ({_up_bad:,} row(s) fixed).")
             pq_bytes = df_to_parquet_bytes(merged_df)
             _check   = pd.read_parquet(io.BytesIO(pq_bytes))
             if len(_check) == 0:
