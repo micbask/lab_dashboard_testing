@@ -1226,18 +1226,19 @@ def build_forecast_pivot(
         return None, hours
 
     pivot = pd.DataFrame(rows).T.reindex(columns=hours, fill_value=0.0)
+    pivot = pivot.fillna(0)  # guard against stray NaN → black cells in colormap
     pivot["Total"] = pivot.sum(axis=1)
     pivot = pivot.sort_values("Total", ascending=False).head(30)
     pivot.columns = [HOUR_LABELS[c] if isinstance(c, int) else c for c in pivot.columns]
     return pivot, hours
 
 
-def style_pivot(pivot: pd.DataFrame, vmax: int):
-    """Apply viridis_r background-gradient styling to the pivot DataFrame."""
+def style_pivot(pivot: pd.DataFrame, vmax: int, cmap: str = "viridis_r"):
+    """Apply colormap background-gradient styling to the pivot DataFrame."""
     hour_cols = [c for c in pivot.columns if c != "Total"]
     return (
         pivot.style
-        .background_gradient(cmap="viridis_r", vmin=0, vmax=vmax, subset=hour_cols)
+        .background_gradient(cmap=cmap, vmin=0, vmax=vmax, subset=hour_cols)
         .format("{:.0f}")
         .set_properties(**{"text-align": "center"})
         .set_properties(subset=["Total"], **{
@@ -2349,6 +2350,16 @@ if view_mode == "Daily":
     _render_header(map_type, date_str + _header_suffix)
 
     if _is_forecast_view:
+        st.markdown(
+            '<div style="background:#1a1a1a;color:#e0e0e0;border-left:4px solid #FFCC00;'
+            'border-radius:6px;padding:0.85rem 1rem;font-size:0.82rem;margin-bottom:0.5rem;">'
+            "This forecast is generated using Prophet, a forecasting ML model trained on all "
+            "available historical order completion data. It learns weekly patterns in procedure "
+            "volume by hour of day. It is automatically retrained each time new data is uploaded. "
+            "Predictions are based on limited training data and should be treated as estimates only."
+            "</div>",
+            unsafe_allow_html=True,
+        )
         st.info(
             "Viewing **forecast** data — these are predicted values, not actual completions. "
             "Use the date picker or ◄ Prev / Next ► to return to historical dates."
@@ -2422,24 +2433,40 @@ if view_mode == "Daily":
     )
 
     _table_h = min(80 + 35 * len(pivot), 900)
-    st.dataframe(style_pivot(pivot, VMAX[map_type]), use_container_width=True, height=_table_h)
+    _heatmap_cmap = "YlOrRd" if _is_forecast_view else "viridis_r"
+    if _is_forecast_view:
+        pivot = pivot.fillna(0)
+    st.dataframe(style_pivot(pivot, VMAX[map_type], cmap=_heatmap_cmap), use_container_width=True, height=_table_h)
 
-    # ── PNG download (historical dates only — forecast has no df_date_hour) ───
+    # ── Downloads (historical dates only — not shown for forecast) ───────────
     if not _is_forecast_view:
         _file_prefix = map_type.replace(" ", "_")
         _date_tag    = pd.Timestamp(selected_date).strftime("%Y-%m-%d")
 
-        if st.button("Generate PNG for download"):
-            _ss["show_png"] = True
+        _png_bytes = build_png(df_date_hour, map_type, selected_date, hours)
 
-        if _ss.get("show_png"):
-            with st.spinner("Rendering PNG…"):
-                _png_bytes = build_png(df_date_hour, map_type, selected_date, hours)
+        _csv_export_cols = [c for c in [
+            "Order Procedure", "Performing Service Resource",
+            "Date/Time - Complete", "Complete Volume",
+        ] if c in df_date.columns]
+        _csv_bytes = df_date[_csv_export_cols].to_csv(index=False).encode("utf-8")
+
+        _dl1, _dl2 = st.columns(2)
+        with _dl1:
             st.download_button(
-                label="⬇  Download PNG",
+                label="⬇ Download PNG",
                 data=_png_bytes,
-                file_name=f"{_file_prefix}_Top30_{_date_tag}.png",
+                file_name=f"{_file_prefix}_{_date_tag}.png",
                 mime="image/png",
+                key="daily_png_download",
+            )
+        with _dl2:
+            st.download_button(
+                label="⬇ Download CSV",
+                data=_csv_bytes,
+                file_name=f"{_file_prefix}_raw_{_date_tag}.csv",
+                mime="text/csv",
+                key="daily_csv_download",
             )
 
     st.markdown("---")
@@ -2570,24 +2597,43 @@ else:
         use_container_width=True, height=_m_table_h,
     )
 
-    # ── PNG download (lazy — rendered only on explicit request) ──────────────
+    # ── Downloads ────────────────────────────────────────────────────────────
     _m_file_prefix = map_type.replace(" ", "_")
-    _m_month_tag   = f"{selected_year}_{selected_month:02d}"
+    _m_month_name  = _cal.month_name[selected_month]
 
-    if st.button("Generate PNG for download", key="monthly_png_btn"):
-        _ss["show_monthly_png"] = True
+    _m_png_bytes = build_monthly_png(
+        monthly_pivot, map_type, selected_year, selected_month, n_days
+    )
 
-    if _ss.get("show_monthly_png"):
-        with st.spinner("Rendering PNG…"):
-            _m_png_bytes = build_monthly_png(
-                monthly_pivot, map_type, selected_year, selected_month, n_days
-            )
+    _m_month_start = date(selected_year, selected_month, 1)
+    _m_month_end   = date(selected_year, selected_month,
+                          _cal.monthrange(selected_year, selected_month)[1])
+    _m_csv_df = filtered_df[
+        (filtered_df["complete_date"] >= _m_month_start) &
+        (filtered_df["complete_date"] <= _m_month_end)
+    ].copy()
+    _m_csv_cols  = [c for c in [
+        "Order Procedure", "Performing Service Resource",
+        "Date/Time - Complete", "Complete Volume",
+    ] if c in _m_csv_df.columns]
+    _m_csv_bytes = _m_csv_df[_m_csv_cols].to_csv(index=False).encode("utf-8")
+
+    _mdl1, _mdl2 = st.columns(2)
+    with _mdl1:
         st.download_button(
-            label="⬇  Download PNG",
+            label="⬇ Download PNG",
             data=_m_png_bytes,
-            file_name=f"{_m_file_prefix}_Monthly_Top30_{_m_month_tag}.png",
+            file_name=f"{_m_file_prefix}_{_m_month_name}_{selected_year}.png",
             mime="image/png",
             key="monthly_png_download",
+        )
+    with _mdl2:
+        st.download_button(
+            label="⬇ Download CSV",
+            data=_m_csv_bytes,
+            file_name=f"{_m_file_prefix}_raw_{_m_month_name}_{selected_year}.csv",
+            mime="text/csv",
+            key="monthly_csv_download",
         )
 
     st.markdown("---")
