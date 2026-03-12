@@ -214,12 +214,40 @@ html body [data-testid="stBaseButton-primary"]:disabled {
    DATE PICKER POPUP (BaseWeb calendar portal)
    Ensure month/year header, nav arrows and day labels are
    clearly readable on the popup's white background.
+
+   KEY: the month/year header uses [data-baseweb="select"] internally.
+   Streamlit/BaseWeb dark-theme CSS can make those selects have a dark
+   background, causing dark text to disappear.  We force white bg + dark
+   text for every element inside the calendar container.
    ══════════════════════════════════════════════════════════ */
-[data-baseweb="calendar"] {
+/* Entire calendar popup — white background */
+[data-baseweb="calendar"],
+[data-baseweb="calendarContainer"] {
     background-color: #ffffff !important;
     color: #0f172a !important;
 }
-/* Month / year header buttons and navigation arrows */
+/* Force ALL divs/spans inside the calendar to white bg and dark text,
+   so any inherited dark backgrounds from global select/input rules are
+   cancelled out.  Specific overrides below restore colours where needed. */
+[data-baseweb="calendar"] div,
+[data-baseweb="calendar"] span {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+}
+/* Month / year SELECT dropdowns inside the calendar header */
+[data-baseweb="calendar"] [data-baseweb="select"] > div:first-child,
+[data-baseweb="calendar"] [data-baseweb="select"] [role="combobox"],
+[data-baseweb="calendar"] [data-baseweb="select"] [data-baseweb="input"] {
+    background-color: #f1f5f9 !important;
+    color: #0f172a !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 4px !important;
+}
+[data-baseweb="calendar"] [data-baseweb="select"] svg {
+    fill: #0f172a !important;
+    color: #0f172a !important;
+}
+/* Prev / Next navigation buttons */
 [data-baseweb="calendar"] button {
     color: #0f172a !important;
     background-color: transparent !important;
@@ -236,6 +264,7 @@ html body [data-testid="stBaseButton-primary"]:disabled {
 [data-baseweb="calendar"] [data-testid="calendar-day-label"],
 [data-baseweb="calendar"] abbr {
     color: #64748b !important;
+    background-color: #ffffff !important;
 }
 /* Individual day cells */
 [data-baseweb="calendar"] [role="gridcell"] button,
@@ -249,6 +278,11 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     background-color: #6F1828 !important;
     color: #ffffff !important;
     border-radius: 50% !important;
+}
+[data-baseweb="calendar"] [aria-selected="true"] div,
+[data-baseweb="calendar"] [aria-selected="true"] span {
+    background-color: transparent !important;
+    color: #ffffff !important;
 }
 /* Today marker */
 [data-baseweb="calendar"] [data-today="true"] button {
