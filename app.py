@@ -675,6 +675,7 @@ REQUIRED_COLS: set[str] = {
     "Performing Service Resource",
     "Order Procedure",
     "Date/Time - Complete",
+    "Date/Time - In Lab",
     "Complete Volume",
 }
 
@@ -1027,6 +1028,17 @@ def parse_single_file(file_bytes: bytes, filename: str = "") -> pd.DataFrame:
     df = df.dropna(subset=["Date/Time - Complete"])
     df["hour"]          = df["Date/Time - Complete"].dt.hour.astype(int)
     df["complete_date"] = df["Date/Time - Complete"].dt.date
+
+    # "Date/Time - In Lab" is optional — create derived columns when present
+    if "Date/Time - In Lab" in df.columns:
+        df["Date/Time - In Lab"] = pd.to_datetime(df["Date/Time - In Lab"], errors="coerce")
+        df["inlab_hour"] = df["Date/Time - In Lab"].dt.hour.astype("Int64")
+        df["inlab_date"] = df["Date/Time - In Lab"].dt.date
+    else:
+        df["Date/Time - In Lab"] = pd.NaT
+        df["inlab_hour"] = pd.array([pd.NA] * len(df), dtype="Int64")
+        df["inlab_date"] = None
+
     df["Complete Volume"] = (
         pd.to_numeric(df["Complete Volume"], errors="coerce").fillna(0).astype(float)
     )
@@ -1115,6 +1127,14 @@ def _parquet_bytes_to_df(raw: bytes) -> pd.DataFrame:
         df["complete_date"] = pd.to_datetime(df["Date/Time - Complete"]).dt.date
     if "hour" not in df.columns:
         df["hour"] = pd.to_datetime(df["Date/Time - Complete"]).dt.hour.astype(int)
+    # In-Lab derived columns (may be absent in older parquet files)
+    if "Date/Time - In Lab" in df.columns:
+        if "inlab_date" not in df.columns:
+            df["inlab_date"] = pd.to_datetime(df["Date/Time - In Lab"], errors="coerce").dt.date
+        if "inlab_hour" not in df.columns:
+            df["inlab_hour"] = pd.to_datetime(
+                df["Date/Time - In Lab"], errors="coerce"
+            ).dt.hour.astype("Int64")
     return df
 
 
@@ -1712,6 +1732,13 @@ with st.sidebar:
         horizontal=True, label_visibility="collapsed",
     )
 
+    # ── Time-basis toggle ─────────────────────────────────────────────────────
+    st.markdown("### Time Basis")
+    time_basis = st.radio(
+        "Time Basis", ["Completed", "In-Lab"],
+        horizontal=True, label_visibility="collapsed",
+    )
+
     # ── Pending action: retrain forecast models ──────────────────────────────
     if _ss.pop("pending_forecast_retrain", False):
         # raw_df is not yet loaded at this point in the sidebar; load it inline
@@ -1961,30 +1988,28 @@ with st.sidebar:
 
                     st.markdown("---")
 
-                # ── Upload new file ──────────────────────────────────────────
-                st.markdown("**Step 1 — Select XLSX export**")
-                new_file = st.file_uploader(
+                # ── Upload new file(s) ─────────────────────────────────────────
+                st.markdown("**Step 1 — Select XLSX export(s)**")
+                new_files = st.file_uploader(
                     "Upload XLSX", type=["xlsx", "xls"], key="admin_upload",
                     label_visibility="collapsed",
+                    accept_multiple_files=True,
                 )
-                if new_file is not None:
-                    if (
-                        "staged_bytes" not in _ss
-                        or _ss.get("staged_name") != new_file.name
-                    ):
-                        _ss["staged_bytes"] = new_file.read()
-                        _ss["staged_name"]  = new_file.name
-                    st.caption(f"Ready: **{new_file.name}**")
+                if new_files:
+                    # Stage all files in session state
+                    _staged = []
+                    for _uf in new_files:
+                        _staged.append({"bytes": _uf.read(), "name": _uf.name})
+                    _ss["staged_files"] = _staged
+                    _names = ", ".join(f"**{s['name']}**" for s in _staged)
+                    st.caption(f"Ready: {_names}  ({len(_staged)} file(s))")
 
                     st.markdown("**Step 2 — Add to master dataset**")
                     if st.button(
                         "Process & add to master",
                         type="primary", use_container_width=True,
                     ):
-                        _ss["pending_upload"] = {
-                            "bytes": _ss.pop("staged_bytes"),
-                            "name":  _ss.pop("staged_name"),
-                        }
+                        _ss["pending_upload"] = _ss.pop("staged_files")
                         st.rerun()
 
                 # ── Danger zone ──────────────────────────────────────────────
@@ -2015,6 +2040,20 @@ with st.sidebar:
 
     if raw_df is not None and not raw_df.empty:
         filtered_df = filter_for_map(raw_df, map_type)
+
+        # ── Apply time-basis swap ─────────────────────────────────────────
+        _has_inlab = "inlab_date" in filtered_df.columns and filtered_df["inlab_date"].notna().any()
+        if time_basis == "In-Lab":
+            if _has_inlab:
+                filtered_df = filtered_df[filtered_df["inlab_date"].notna()].copy()
+                filtered_df["complete_date"] = filtered_df["inlab_date"]
+                filtered_df["hour"] = filtered_df["inlab_hour"].astype(int)
+            else:
+                st.warning(
+                    "No 'Date/Time - In Lab' data available. "
+                    "Upload files that include this column, then switch to In-Lab view."
+                )
+                st.stop()
 
         if view_mode == "Daily":
             available_dates = sorted(filtered_df["complete_date"].unique())
@@ -2243,18 +2282,31 @@ with st.sidebar:
 # Runs in the main panel (not the sidebar) so st.status is fully visible.
 # ═════════════════════════════════════════════════════════════════════════════
 if _ss.get("pending_upload"):
-    upload_info = _ss["pending_upload"]
+    upload_list = _ss["pending_upload"]
+    # Normalise legacy single-file format to a list
+    if isinstance(upload_list, dict):
+        upload_list = [upload_list]
+    _n_files = len(upload_list)
+    _file_names = ", ".join(f['name'] for f in upload_list)
     _render_header(map_type if "map_type" in dir() else "—", "Processing upload…")
 
-    with st.status(f"Processing  {upload_info['name']}…", expanded=True) as _upload_status:
+    with st.status(f"Processing {_n_files} file(s)…", expanded=True) as _upload_status:
         try:
-            # Step 1 — parse the uploaded file
-            st.write(f"**Step 1 / 4** — Parsing `{upload_info['name']}`…")
-            new_df = parse_single_file(upload_info["bytes"], filename=upload_info["name"])
-            st.write(
-                f"Parsed **{len(new_df):,}** rows  "
-                f"({new_df['complete_date'].min()} → {new_df['complete_date'].max()})"
-            )
+            # Step 1 — parse all uploaded files into one combined dataframe
+            st.write(f"**Step 1 / 4** — Parsing {_n_files} file(s): {_file_names}")
+            _parsed_frames = []
+            for _uf_info in upload_list:
+                _uf_df = parse_single_file(_uf_info["bytes"], filename=_uf_info["name"])
+                st.write(
+                    f"  • `{_uf_info['name']}`: **{len(_uf_df):,}** rows "
+                    f"({_uf_df['complete_date'].min()} → {_uf_df['complete_date'].max()})"
+                )
+                _parsed_frames.append((_uf_info["name"], _uf_df))
+            if len(_parsed_frames) == 1:
+                new_df = _parsed_frames[0][1]
+            else:
+                new_df, _ = deduplicate_and_merge(_parsed_frames)
+            st.write(f"Combined: **{len(new_df):,}** rows from {_n_files} file(s)")
 
             # Step 2 — load existing master (read-only until merge is validated)
             st.write("**Step 2 / 4** — Loading existing master dataset…")
@@ -2493,7 +2545,7 @@ if view_mode == "Daily":
 
         _csv_export_cols = [c for c in [
             "Order Procedure", "Performing Service Resource",
-            "Date/Time - Complete", "Complete Volume",
+            "Date/Time - In Lab", "Date/Time - Complete", "Complete Volume",
         ] if c in df_date.columns]
         _csv_bytes = df_date[_csv_export_cols].to_csv(index=False).encode("utf-8")
 
@@ -2660,7 +2712,7 @@ else:
     ].copy()
     _m_csv_cols  = [c for c in [
         "Order Procedure", "Performing Service Resource",
-        "Date/Time - Complete", "Complete Volume",
+        "Date/Time - In Lab", "Date/Time - Complete", "Complete Volume",
     ] if c in _m_csv_df.columns]
     _m_csv_bytes = _m_csv_df[_m_csv_cols].to_csv(index=False).encode("utf-8")
 
