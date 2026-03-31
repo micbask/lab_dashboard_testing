@@ -16,9 +16,10 @@ import base64
 import calendar as _cal
 import io
 import json
+import pickle
 import time
 from copy import deepcopy
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -674,6 +675,7 @@ REQUIRED_COLS: set[str] = {
     "Performing Service Resource",
     "Order Procedure",
     "Date/Time - Complete",
+    "Date/Time - In Lab",
     "Complete Volume",
 }
 
@@ -969,6 +971,28 @@ def _write_parquet_to_github(parquet_bytes: bytes) -> None:
 # DATA PARSING & MERGING
 # ═════════════════════════════════════════════════════════════════════════════
 
+def clean_procedure_names(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise known procedure-name encoding artefacts; returns the df.
+
+    The source system occasionally emits non-breaking spaces (\\xa0) inside
+    procedure names.  Fix every known variant so all downstream grouping,
+    filtering, and forecasting operates on a single canonical string.
+    """
+    # Variant 1: \xa0 followed by a regular space (renders as "Auto¬† Differen")
+    df["Order Procedure"] = df["Order Procedure"].str.replace(
+        "Complete Blood Count With Auto\xa0 Differen",
+        "Complete Blood Count With Auto  Differen",
+        regex=False,
+    )
+    # Variant 2: \xa0 without a trailing regular space
+    df["Order Procedure"] = df["Order Procedure"].str.replace(
+        "Complete Blood Count With Auto\xa0Differen",
+        "Complete Blood Count With Auto  Differen",
+        regex=False,
+    )
+    return df
+
+
 def parse_single_file(file_bytes: bytes, filename: str = "") -> pd.DataFrame:
     """Parse a CSV or Excel export into a clean, analysis-ready DataFrame.
 
@@ -993,6 +1017,7 @@ def parse_single_file(file_bytes: bytes, filename: str = "") -> pd.DataFrame:
     df.columns = [c.strip() if isinstance(c, str) else c for c in df.columns]
     df["Performing Service Resource"] = df["Performing Service Resource"].astype(str).str.strip()
     df["Order Procedure"]             = df["Order Procedure"].astype(str).str.strip()
+    df = clean_procedure_names(df)  # normalise encoding artefacts in new data
 
     # Apply resource remaps defined in RESOURCE_REMAPS
     for (proc, old_res), new_res in RESOURCE_REMAPS.items():
@@ -1003,6 +1028,17 @@ def parse_single_file(file_bytes: bytes, filename: str = "") -> pd.DataFrame:
     df = df.dropna(subset=["Date/Time - Complete"])
     df["hour"]          = df["Date/Time - Complete"].dt.hour.astype(int)
     df["complete_date"] = df["Date/Time - Complete"].dt.date
+
+    # "Date/Time - In Lab" is optional — create derived columns when present
+    if "Date/Time - In Lab" in df.columns:
+        df["Date/Time - In Lab"] = pd.to_datetime(df["Date/Time - In Lab"], errors="coerce")
+        df["inlab_hour"] = df["Date/Time - In Lab"].dt.hour.astype("Int64")
+        df["inlab_date"] = df["Date/Time - In Lab"].dt.date
+    else:
+        df["Date/Time - In Lab"] = pd.NaT
+        df["inlab_hour"] = pd.array([pd.NA] * len(df), dtype="Int64")
+        df["inlab_date"] = None
+
     df["Complete Volume"] = (
         pd.to_numeric(df["Complete Volume"], errors="coerce").fillna(0).astype(float)
     )
@@ -1091,6 +1127,14 @@ def _parquet_bytes_to_df(raw: bytes) -> pd.DataFrame:
         df["complete_date"] = pd.to_datetime(df["Date/Time - Complete"]).dt.date
     if "hour" not in df.columns:
         df["hour"] = pd.to_datetime(df["Date/Time - Complete"]).dt.hour.astype(int)
+    # In-Lab derived columns (may be absent in older parquet files)
+    if "Date/Time - In Lab" in df.columns:
+        if "inlab_date" not in df.columns:
+            df["inlab_date"] = pd.to_datetime(df["Date/Time - In Lab"], errors="coerce").dt.date
+        if "inlab_hour" not in df.columns:
+            df["inlab_hour"] = pd.to_datetime(
+                df["Date/Time - In Lab"], errors="coerce"
+            ).dt.hour.astype("Int64")
     return df
 
 
@@ -1199,12 +1243,45 @@ def build_pivot(
     return pivot, df_dh, df_date, hours
 
 
-def style_pivot(pivot: pd.DataFrame, vmax: int):
-    """Apply viridis_r background-gradient styling to the pivot DataFrame."""
+def build_forecast_pivot(
+    fc_data: dict,
+    selected_date: "date",
+    hour_range: tuple,
+) -> "tuple[pd.DataFrame | None, list[int]]":
+    """Build a procedure × hour pivot from forecast predictions for a future date.
+
+    Reads from the cached forecast payload instead of actual lab data.
+    Returns (pivot_df, hours_list).  pivot_df is None when no predictions exist.
+    """
+    h_start, h_end = hour_range
+    hours = list(range(h_start, h_end + 1))
+    preds = fc_data.get("predictions", {})
+
+    rows: dict = {}
+    for (proc, hour), date_map in preds.items():
+        if hour not in hours:
+            continue
+        val = date_map.get(selected_date, 0.0)
+        if val:
+            rows.setdefault(proc, {})[hour] = val
+
+    if not rows:
+        return None, hours
+
+    pivot = pd.DataFrame(rows).T.reindex(columns=hours, fill_value=0.0)
+    pivot = pivot.fillna(0)  # guard against stray NaN → black cells in colormap
+    pivot["Total"] = pivot.sum(axis=1)
+    pivot = pivot.sort_values("Total", ascending=False).head(30)
+    pivot.columns = [HOUR_LABELS[c] if isinstance(c, int) else c for c in pivot.columns]
+    return pivot, hours
+
+
+def style_pivot(pivot: pd.DataFrame, vmax: int, cmap: str = "viridis_r"):
+    """Apply colormap background-gradient styling to the pivot DataFrame."""
     hour_cols = [c for c in pivot.columns if c != "Total"]
     return (
         pivot.style
-        .background_gradient(cmap="viridis_r", vmin=0, vmax=vmax, subset=hour_cols)
+        .background_gradient(cmap=cmap, vmin=0, vmax=vmax, subset=hour_cols)
         .format("{:.0f}")
         .set_properties(**{"text-align": "center"})
         .set_properties(subset=["Total"], **{
@@ -1539,6 +1616,173 @@ def build_weekday_png(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# PROPHET FORECAST — TRAINING & CACHING
+# ═════════════════════════════════════════════════════════════════════════════
+
+FORECAST_HORIZON = 14  # forecast days ahead
+
+
+def _forecast_gh_path(map_type: str) -> str:
+    """GitHub path for the forecast pickle for a given map type."""
+    return f"data/forecasts_{map_type.replace(' ', '_')}.pkl"
+
+
+def _write_forecast_to_github(map_type: str, payload: dict) -> None:
+    """Serialise payload as pickle and push to GitHub."""
+    if not GITHUB_CONFIGURED:
+        return
+    owner, repo, _ = _gh_coords()
+    gh_path = _forecast_gh_path(map_type)
+    url     = f"https://api.github.com/repos/{owner}/{repo}/contents/{gh_path}"
+    headers = _gh_headers()
+
+    pkl_bytes = pickle.dumps(payload)
+    b64       = base64.b64encode(pkl_bytes).decode()
+
+    resp = requests.get(url, headers=headers, timeout=15)
+    sha  = resp.json().get("sha") if resp.status_code == 200 else None
+
+    body: dict = {"message": f"Update forecasts for {map_type}", "content": b64}
+    if sha:
+        body["sha"] = sha
+    requests.put(url, headers=headers, json=body, timeout=30)
+
+
+def _read_forecast_from_github(map_type: str) -> dict | None:
+    """Download and unpickle the forecast payload from GitHub, or None."""
+    if not GITHUB_CONFIGURED:
+        return None
+    owner, repo, _ = _gh_coords()
+    url     = f"https://api.github.com/repos/{owner}/{repo}/contents/{_forecast_gh_path(map_type)}"
+    headers = _gh_headers()
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return None
+        return pickle.loads(base64.b64decode(resp.json()["content"]))
+    except Exception:
+        return None
+
+
+def train_and_cache_forecasts(df: pd.DataFrame, map_type: str) -> None:
+    """Train one Prophet model per procedure × hour for the top-30 procedures.
+
+    Payload written to GitHub and stored in session state:
+      {
+        "last_data_date": date,          # last date in the training set
+        "forecast_end":   date,          # last_data_date + FORECAST_HORIZON
+        "predictions":    {(proc, hour): {date: float, ...}, ...},
+      }
+    Sparse combinations (<7 non-zero days) fall back to weekday averages.
+    """
+    from prophet import Prophet  # lazy import — only when training
+
+    filtered = filter_for_map(df, map_type)
+    if filtered.empty:
+        return
+
+    last_data_date: date = filtered["complete_date"].max()
+    forecast_end:   date = last_data_date + timedelta(days=FORECAST_HORIZON)
+
+    top30 = (
+        filtered.groupby("Order Procedure")["Complete Volume"]
+        .sum().sort_values(ascending=False).head(30).index.tolist()
+    )
+    filtered = filtered[filtered["Order Procedure"].isin(top30)].copy()
+
+    predictions: dict[tuple[str, int], dict[date, float]] = {}
+
+    for proc in top30:
+        proc_df = filtered[filtered["Order Procedure"] == proc]
+        for hour in range(24):
+            hour_df = proc_df[proc_df["hour"] == hour]
+            daily = (
+                hour_df.groupby("complete_date")["Complete Volume"]
+                .sum().reset_index()
+            )
+            daily.columns = ["ds", "y"]
+            daily["ds"] = pd.to_datetime(daily["ds"])
+
+            if not daily.empty:
+                full_range = pd.date_range(daily["ds"].min(), last_data_date)
+                daily = (
+                    daily.set_index("ds")
+                    .reindex(full_range, fill_value=0)
+                    .reset_index()
+                    .rename(columns={"index": "ds"})
+                )
+
+            non_zero = int((daily["y"] > 0).sum()) if not daily.empty else 0
+
+            if non_zero < 7:
+                # Weekday-average fallback
+                if daily.empty:
+                    preds = {
+                        last_data_date + timedelta(days=d): 0.0
+                        for d in range(1, FORECAST_HORIZON + 1)
+                    }
+                else:
+                    daily["weekday"] = daily["ds"].dt.dayofweek
+                    wd_avg = daily.groupby("weekday")["y"].mean().to_dict()
+                    preds = {}
+                    for d in range(1, FORECAST_HORIZON + 1):
+                        fdate = last_data_date + timedelta(days=d)
+                        preds[fdate] = max(
+                            0.0, round(wd_avg.get(pd.Timestamp(fdate).dayofweek, 0.0), 1)
+                        )
+                predictions[(proc, hour)] = preds
+            else:
+                m = Prophet(
+                    weekly_seasonality=True,
+                    daily_seasonality=False,
+                    yearly_seasonality=False,
+                    changepoint_prior_scale=0.05,
+                )
+                m.fit(daily)
+                future = m.make_future_dataframe(periods=FORECAST_HORIZON)
+                fc = m.predict(future)
+                fc = fc[fc["ds"] > pd.Timestamp(last_data_date)]
+                preds = {
+                    row["ds"].date(): max(0.0, round(row["yhat"], 1))
+                    for _, row in fc.iterrows()
+                }
+                predictions[(proc, hour)] = preds
+
+    payload = {
+        "last_data_date": last_data_date,
+        "forecast_end":   forecast_end,
+        "predictions":    predictions,
+    }
+
+    _write_forecast_to_github(map_type, payload)
+    _ss[f"forecasts_{map_type}"] = payload
+
+
+def load_forecasts(map_type: str) -> dict | None:
+    """Return the cached forecast payload for map_type, or None if unavailable.
+
+    Checks session state first, then falls back to GitHub.
+    """
+    cache_key = f"forecasts_{map_type}"
+    if cache_key in _ss:
+        return _ss[cache_key]
+    payload = _read_forecast_from_github(map_type)
+    if payload is not None:
+        _ss[cache_key] = payload
+    return payload
+
+
+def _retrain_all_forecasts(df: pd.DataFrame) -> None:
+    """Train and cache forecasts for every map type, clearing stale session cache first."""
+    for mt in MAP_TYPES:
+        _ss.pop(f"forecasts_{mt}", None)  # clear stale session cache
+        try:
+            train_and_cache_forecasts(df, mt)
+        except Exception as _fc_err:
+            st.write(f"⚠ Forecast training skipped for {mt}: {_fc_err}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # UI HELPERS
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -1599,6 +1843,49 @@ with st.sidebar:
         horizontal=True, label_visibility="collapsed",
     )
 
+    # ── Time-basis toggle ─────────────────────────────────────────────────────
+    st.markdown("### Time Basis")
+    time_basis = st.radio(
+        "Time Basis", ["Completed", "In-Lab"],
+        horizontal=True, label_visibility="collapsed",
+    )
+
+    # ── Pending action: retrain forecast models ──────────────────────────────
+    if _ss.pop("pending_forecast_retrain", False):
+        # raw_df is not yet loaded at this point in the sidebar; load it inline
+        _fc_src_df = _ss.get("fresh_df")
+        if _fc_src_df is None and GITHUB_CONFIGURED:
+            try:
+                _fc_sha = _get_github_sha()
+                if _fc_sha:
+                    _fc_raw_bytes = _read_parquet_from_github()
+                    _fc_src_df    = _parquet_bytes_to_df(_fc_raw_bytes)
+                    # Check and permanently fix any \xa0 encoding artefacts
+                    _fc_bad = int(
+                        _fc_src_df["Order Procedure"]
+                        .str.contains("\xa0", regex=False, na=False)
+                        .sum()
+                    )
+                    if _fc_bad > 0:
+                        _fc_src_df = clean_procedure_names(_fc_src_df)
+                        with st.spinner("Correcting procedure name encoding in stored data…"):
+                            _write_parquet_to_github(df_to_parquet_bytes(_fc_src_df))
+                            _get_github_sha.clear()
+                            st.cache_data.clear()
+                        _ss["fresh_df"] = _fc_src_df
+                        st.success(
+                            f"Procedure names corrected and parquet updated "
+                            f"({_fc_bad:,} row(s) fixed)."
+                        )
+            except Exception:
+                _fc_src_df = None
+        if _fc_src_df is not None and not _fc_src_df.empty:
+            with st.spinner("Retraining forecast models…"):
+                _retrain_all_forecasts(_fc_src_df)
+            st.success("Forecast models retrained.")
+        else:
+            st.warning("No data available to train forecasts on.")
+
     # ── Pending action: reset entire dataset ────────────────────────────────
     if _ss.pop("pending_reset", False):
         try:
@@ -1624,6 +1911,9 @@ with st.sidebar:
                 st.cache_data.clear()
                 _ss.pop("fresh_df", None)
                 st.success("Master dataset cleared.")
+            # Clear stale forecast cache — no data to retrain on
+            for _mt in MAP_TYPES:
+                _ss.pop(f"forecasts_{_mt}", None)
         except Exception as _rst_err:
             st.error(f"Reset failed: {_rst_err}")
 
@@ -1660,6 +1950,9 @@ with st.sidebar:
                 f"Deleted {rows_before - len(new_df):,} rows "
                 f"({del_info['start']} → {del_info['end']})."
             )
+            if new_df.empty:
+                for _mt in MAP_TYPES:
+                    _ss.pop(f"forecasts_{_mt}", None)
         except Exception as _dr_err:
             st.error(f"Delete failed: {_dr_err}")
 
@@ -1741,8 +2034,18 @@ with st.sidebar:
                 if st.button("↺  Refresh data", use_container_width=True, key="refresh_data_btn"):
                     _ss.pop("fresh_df", None)
                     st.cache_data.clear()
+                    _ss["pending_forecast_retrain"] = True
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
+
+                # ── Refresh Forecast ─────────────────────────────────────────
+                if st.button(
+                    "⟳  Refresh Forecast", use_container_width=True,
+                    key="refresh_forecast_btn",
+                    disabled=(raw_df is None or raw_df.empty),
+                ):
+                    _ss["pending_forecast_retrain"] = True
+                    st.rerun()
 
                 # ── Current dataset summary ──────────────────────────────────
                 if raw_df is not None and not raw_df.empty:
@@ -1796,30 +2099,28 @@ with st.sidebar:
 
                     st.markdown("---")
 
-                # ── Upload new file ──────────────────────────────────────────
-                st.markdown("**Step 1 — Select XLSX export**")
-                new_file = st.file_uploader(
+                # ── Upload new file(s) ─────────────────────────────────────────
+                st.markdown("**Step 1 — Select XLSX export(s)**")
+                new_files = st.file_uploader(
                     "Upload XLSX", type=["xlsx", "xls"], key="admin_upload",
                     label_visibility="collapsed",
+                    accept_multiple_files=True,
                 )
-                if new_file is not None:
-                    if (
-                        "staged_bytes" not in _ss
-                        or _ss.get("staged_name") != new_file.name
-                    ):
-                        _ss["staged_bytes"] = new_file.read()
-                        _ss["staged_name"]  = new_file.name
-                    st.caption(f"Ready: **{new_file.name}**")
+                if new_files:
+                    # Stage all files in session state
+                    _staged = []
+                    for _uf in new_files:
+                        _staged.append({"bytes": _uf.read(), "name": _uf.name})
+                    _ss["staged_files"] = _staged
+                    _names = ", ".join(f"**{s['name']}**" for s in _staged)
+                    st.caption(f"Ready: {_names}  ({len(_staged)} file(s))")
 
                     st.markdown("**Step 2 — Add to master dataset**")
                     if st.button(
                         "Process & add to master",
                         type="primary", use_container_width=True,
                     ):
-                        _ss["pending_upload"] = {
-                            "bytes": _ss.pop("staged_bytes"),
-                            "name":  _ss.pop("staged_name"),
-                        }
+                        _ss["pending_upload"] = _ss.pop("staged_files")
                         st.rerun()
 
                 # ── Danger zone ──────────────────────────────────────────────
@@ -1851,6 +2152,20 @@ with st.sidebar:
     if raw_df is not None and not raw_df.empty:
         filtered_df = filter_for_map(raw_df, map_type)
 
+        # ── Apply time-basis swap ─────────────────────────────────────────
+        _has_inlab = "inlab_date" in filtered_df.columns and filtered_df["inlab_date"].notna().any()
+        if time_basis == "In-Lab":
+            if _has_inlab:
+                filtered_df = filtered_df[filtered_df["inlab_date"].notna()].copy()
+                filtered_df["complete_date"] = filtered_df["inlab_date"]
+                filtered_df["hour"] = filtered_df["inlab_hour"].astype(int)
+            else:
+                st.warning(
+                    "No 'Date/Time - In Lab' data available. "
+                    "Upload files that include this column, then switch to In-Lab view."
+                )
+                st.stop()
+
         if view_mode == "Daily":
             available_dates = sorted(filtered_df["complete_date"].unique())
 
@@ -1861,6 +2176,23 @@ with st.sidebar:
             _min_d = available_dates[0]
             _max_d = available_dates[-1]
 
+            # ── Load forecast data and compute selectable date range ─────────
+            # Forecast dates (future) extend the calendar beyond _max_d so users
+            # can navigate into the 14-day forecast window.
+            _fc_data = load_forecasts(map_type)
+            forecast_dates: list = []
+            _fc_max_d = _max_d   # default: no forecast → picker stops at last data date
+            if _fc_data:
+                _fc_start_d = _max_d + timedelta(days=1)
+                _fc_end_d   = _fc_data["forecast_end"]
+                forecast_dates = [
+                    _fc_start_d + timedelta(days=_i)
+                    for _i in range((_fc_end_d - _fc_start_d).days + 1)
+                ]
+                _fc_max_d = _fc_end_d
+            # All dates the user is allowed to pick (historical + forecast)
+            all_selectable_dates = available_dates + forecast_dates
+
             # ── Apply any pending navigation from the previous run ──────────
             # Prev/Next buttons cannot set _ss["date_picker"] directly after
             # the date_input widget has rendered (Streamlit raises
@@ -1869,28 +2201,43 @@ with st.sidebar:
             # and we apply it here — before the widget renders — which is safe.
             if "_pending_date" in _ss:
                 _pending = _ss.pop("_pending_date")
-                if _min_d <= _pending <= _max_d:
+                if _min_d <= _pending <= _fc_max_d:
                     _ss["date_picker"] = _pending
 
             # ── Initialise / clamp date_picker (safe: widget not yet rendered) ─
             if (
                 "date_picker" not in _ss
                 or _ss["date_picker"] < _min_d
-                or _ss["date_picker"] > _max_d
+                or _ss["date_picker"] > _fc_max_d
             ):
                 _ss["date_picker"] = _max_d
 
-            if _ss["date_picker"] not in available_dates:
+            # Clamp to nearest selectable date only for historical gaps;
+            # forecast dates are valid even though they're not in available_dates.
+            if (
+                _ss["date_picker"] not in all_selectable_dates
+                and _ss["date_picker"] <= _max_d
+            ):
                 _dates_arr = pd.to_datetime(available_dates)
+                if len(_dates_arr) == 0:
+                    st.info(
+                        "No data is available for this site yet. "
+                        "Try selecting a different map type, or ask your "
+                        "administrator to upload data for this site."
+                    )
+                    st.stop()
                 _idx_near  = (
                     (_dates_arr - pd.Timestamp(_ss["date_picker"])).abs().argmin()
                 )
                 _ss["date_picker"] = available_dates[_idx_near]
 
             st.markdown("### Date")
+            _fc_note = (
+                f"  +  forecast to **{_fc_max_d}**" if forecast_dates else ""
+            )
             st.caption(
                 f"{len(available_dates)} date(s) with data  ·  "
-                f"{_min_d} → {_max_d}"
+                f"{_min_d} → {_max_d}{_fc_note}"
             )
 
             # ── Render the date picker widget ───────────────────────────────
@@ -1900,15 +2247,22 @@ with st.sidebar:
             picked_date = st.date_input(
                 "Select date",
                 min_value=_min_d,
-                max_value=_max_d,
+                max_value=_fc_max_d,
                 label_visibility="collapsed",
                 key="date_picker",
             )
 
-            # If the user typed a date with no data, show nearest and queue a
-            # correction for the next run via _pending_date (not the widget key)
-            if picked_date not in available_dates:
+            # If the user typed a date outside all selectable dates, snap to
+            # nearest historical date.  Forecast dates are always valid.
+            if picked_date not in all_selectable_dates:
                 _dates_arr = pd.to_datetime(available_dates)
+                if len(_dates_arr) == 0:
+                    st.info(
+                        "No data is available for this site yet. "
+                        "Try selecting a different map type, or ask your "
+                        "administrator to upload data for this site."
+                    )
+                    st.stop()
                 _idx_near  = (
                     (_dates_arr - pd.Timestamp(picked_date)).abs().argmin()
                 )
@@ -1919,12 +2273,14 @@ with st.sidebar:
                 )
                 _ss["_pending_date"] = _nearest   # corrected on next rerun
                 picked_date = _nearest
+            elif picked_date not in available_dates and picked_date in forecast_dates:
+                pass  # forecast date — always valid, no snap needed
 
             selected_date = picked_date
 
-            # Compute index — safe linear search on the (small) list
+            # Compute index across all selectable dates (historical + forecast)
             try:
-                _cur_idx = available_dates.index(selected_date)
+                _cur_idx = all_selectable_dates.index(selected_date)
             except ValueError:
                 _cur_idx = len(available_dates) - 1
                 selected_date = available_dates[_cur_idx]
@@ -1936,17 +2292,33 @@ with st.sidebar:
                     "◄ Prev", use_container_width=True,
                     disabled=(_cur_idx == 0),
                 ):
-                    _ss["_pending_date"] = available_dates[_cur_idx - 1]
+                    _ss["_pending_date"] = all_selectable_dates[_cur_idx - 1]
                     st.rerun()
             with _nc2:
                 if st.button(
                     "Next ►", use_container_width=True,
-                    disabled=(_cur_idx == len(available_dates) - 1),
+                    disabled=(_cur_idx == len(all_selectable_dates) - 1),
                 ):
-                    _ss["_pending_date"] = available_dates[_cur_idx + 1]
+                    _ss["_pending_date"] = all_selectable_dates[_cur_idx + 1]
                     st.rerun()
 
-            st.caption(f"Day {_cur_idx + 1} of {len(available_dates)}")
+            st.caption(f"Day {_cur_idx + 1} of {len(all_selectable_dates)}")
+
+            # ── Stale-cache warning ───────────────────────────────────────
+            if _fc_data:
+                _fc_trained_on = _fc_data.get("last_data_date")
+                if _fc_trained_on is not None and _fc_trained_on != _max_d:
+                    st.markdown(
+                        '<div style="background:#7a3800;color:#FFE0B2;padding:0.5rem 0.7rem;'
+                        'border-radius:6px;font-size:0.78rem;margin-top:0.3rem;">'
+                        "⚠ Forecast is out of date. Open Data Management and "
+                        "re-upload or use the <strong>Refresh Forecast</strong> "
+                        "button to retrain."
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption("No forecast available — use Refresh Forecast to generate one.")
 
             # ── Hour range slider ─────────────────────────────────────────────────────────────────────
             st.markdown("---")
@@ -2021,18 +2393,31 @@ with st.sidebar:
 # Runs in the main panel (not the sidebar) so st.status is fully visible.
 # ═════════════════════════════════════════════════════════════════════════════
 if _ss.get("pending_upload"):
-    upload_info = _ss["pending_upload"]
+    upload_list = _ss["pending_upload"]
+    # Normalise legacy single-file format to a list
+    if isinstance(upload_list, dict):
+        upload_list = [upload_list]
+    _n_files = len(upload_list)
+    _file_names = ", ".join(f['name'] for f in upload_list)
     _render_header(map_type if "map_type" in dir() else "—", "Processing upload…")
 
-    with st.status(f"Processing  {upload_info['name']}…", expanded=True) as _upload_status:
+    with st.status(f"Processing {_n_files} file(s)…", expanded=True) as _upload_status:
         try:
-            # Step 1 — parse the uploaded file
-            st.write(f"**Step 1 / 4** — Parsing `{upload_info['name']}`…")
-            new_df = parse_single_file(upload_info["bytes"], filename=upload_info["name"])
-            st.write(
-                f"Parsed **{len(new_df):,}** rows  "
-                f"({new_df['complete_date'].min()} → {new_df['complete_date'].max()})"
-            )
+            # Step 1 — parse all uploaded files into one combined dataframe
+            st.write(f"**Step 1 / 4** — Parsing {_n_files} file(s): {_file_names}")
+            _parsed_frames = []
+            for _uf_info in upload_list:
+                _uf_df = parse_single_file(_uf_info["bytes"], filename=_uf_info["name"])
+                st.write(
+                    f"  • `{_uf_info['name']}`: **{len(_uf_df):,}** rows "
+                    f"({_uf_df['complete_date'].min()} → {_uf_df['complete_date'].max()})"
+                )
+                _parsed_frames.append((_uf_info["name"], _uf_df))
+            if len(_parsed_frames) == 1:
+                new_df = _parsed_frames[0][1]
+            else:
+                new_df, _ = deduplicate_and_merge(_parsed_frames)
+            st.write(f"Combined: **{len(new_df):,}** rows from {_n_files} file(s)")
 
             # Step 2 — load existing master (read-only until merge is validated)
             st.write("**Step 2 / 4** — Loading existing master dataset…")
@@ -2073,6 +2458,15 @@ if _ss.get("pending_upload"):
 
             # Step 4 — validate the payload then write to remote storage
             st.write("**Step 4 / 4** — Validating and saving…")
+            # Ensure procedure names are clean before persisting
+            _up_bad = int(
+                merged_df["Order Procedure"]
+                .str.contains("\xa0", regex=False, na=False)
+                .sum()
+            )
+            if _up_bad > 0:
+                merged_df = clean_procedure_names(merged_df)
+                st.write(f"Procedure names corrected ({_up_bad:,} row(s) fixed).")
             pq_bytes = df_to_parquet_bytes(merged_df)
             _check   = pd.read_parquet(io.BytesIO(pq_bytes))
             if len(_check) == 0:
@@ -2092,6 +2486,11 @@ if _ss.get("pending_upload"):
             # without waiting for the GitHub CDN to reflect the new commit.
             _ss["fresh_df"] = merged_df
             _ss.pop("pending_upload", None)
+
+            # ── Retrain forecast models on the updated master ──────────────
+            st.write("**Step 5** — Retraining forecast models…")
+            _retrain_all_forecasts(merged_df)
+            st.write("Forecast models updated.")
 
             _upload_status.update(
                 label=f"Done — added {rows_added:,} rows to master dataset.",
@@ -2136,38 +2535,86 @@ if raw_df is None or raw_df.empty:
 # ═════════════════════════════════════════════════════════════════════════════
 
 if view_mode == "Daily":
+    # ── Determine whether the selected date is a forecast (future) date ───────
+    _is_forecast_view = selected_date > _max_d
+
     # ── Build pivot ────────────────────────────────────────────────────────────────────────────
-    pivot, df_date_hour, df_date, hours = build_pivot(filtered_df, selected_date, hour_range)
+    if _is_forecast_view:
+        # Use the cached forecast predictions instead of actual data
+        _fc_panel_data = load_forecasts(map_type)
+        if _fc_panel_data is None:
+            st.warning(
+                f"No forecast data available for **{map_type}**.  "
+                "Open Data Management and click **Refresh Forecast** to generate predictions."
+            )
+            st.stop()
+        pivot, hours = build_forecast_pivot(_fc_panel_data, selected_date, hour_range)
+        df_date_hour = None
+        df_date      = pd.DataFrame()
+    else:
+        pivot, df_date_hour, df_date, hours = build_pivot(filtered_df, selected_date, hour_range)
 
     date_str = pd.Timestamp(selected_date).strftime("%B %d, %Y")
-    _render_header(map_type, date_str)
+    _header_suffix = "  ·  Forecast" if _is_forecast_view else ""
+    _render_header(map_type, date_str + _header_suffix)
+
+    if _is_forecast_view:
+        st.markdown(
+            '<div style="background:#1a1a1a;color:#e0e0e0;border-left:4px solid #FFCC00;'
+            'border-radius:6px;padding:0.85rem 1rem;font-size:0.82rem;margin-bottom:0.5rem;">'
+            "This forecast is generated using Prophet, a forecasting ML model trained on all "
+            "available historical order completion data. It learns weekly patterns in procedure "
+            "volume by hour of day. It is automatically retrained each time new data is uploaded. "
+            "Predictions are based on limited training data and should be treated as estimates only."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        st.info(
+            "Viewing **forecast** data — these are predicted values, not actual completions. "
+            "Use the date picker or ◄ Prev / Next ► to return to historical dates."
+        )
 
     if pivot is None:
-        st.warning(
-            f"No data found for **{map_type}** on **{date_str}** "
-            f"within the selected hour range.  Try widening the hour slider."
-        )
+        if _is_forecast_view:
+            st.warning(
+                f"No forecast predictions available for **{map_type}** on **{date_str}** "
+                f"within the selected hour range.  Try widening the hour slider or "
+                f"refreshing the forecast from Data Management."
+            )
+        else:
+            st.warning(
+                f"No data found for **{map_type}** on **{date_str}** "
+                f"within the selected hour range.  Try widening the hour slider."
+            )
         st.stop()
 
     # ── Metrics row ────────────────────────────────────────────────────────────────────────────
     _hour_cols  = [c for c in pivot.columns if c != "Total"]
-    total_vol   = int(pivot["Total"].sum())
+    if not _hour_cols or pivot.empty:
+        st.info(
+            "No completed procedures were found for this site on the selected date. "
+            "The date may have no activity, or you may need to widen the hour range."
+        )
+        st.stop()
+    total_vol   = int(round(pivot["Total"].sum()))
     top_proc    = pivot["Total"].idxmax()
     peak_hour   = pivot[_hour_cols].sum().idxmax()
     num_procs   = len(pivot)
     avg_per_hr  = round(total_vol / max(len(_hour_cols), 1), 1)
 
+    _vol_label  = "Forecast Volume" if _is_forecast_view else "Total Volume"
+
     _m1, _m2, _m3, _m4, _m5 = st.columns(5)
     with _m1:
-        st.markdown(_metric_card("Total Volume", f"{total_vol:,}", accent=True),
+        st.markdown(_metric_card(_vol_label, f"{total_vol:,}", accent=True),
                     unsafe_allow_html=True)
     with _m2:
         _tp_disp = top_proc[:28] + "…" if len(top_proc) > 28 else top_proc
-        st.markdown(_metric_card("Top Procedure", _tp_disp, sub=f"{int(pivot.loc[top_proc, 'Total']):,} total"),
+        st.markdown(_metric_card("Top Procedure", _tp_disp, sub=f"{int(round(pivot.loc[top_proc, 'Total'])):,} total"),
                     unsafe_allow_html=True)
     with _m3:
         st.markdown(_metric_card("Peak Hour", peak_hour,
-                                 sub=f"{int(pivot[_hour_cols].sum()[peak_hour])} completions"),
+                                 sub=f"{int(round(pivot[_hour_cols].sum()[peak_hour]))} {'predicted' if _is_forecast_view else 'completions'}"),
                     unsafe_allow_html=True)
     with _m4:
         st.markdown(_metric_card("Procedures", str(num_procs), sub="shown (top 30)"),
@@ -2180,8 +2627,9 @@ if view_mode == "Daily":
     st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
 
     # ── Heatmap table ─────────────────────────────────────────────────────────────────────────────
+    _heading_label = "Forecast Volume by Procedure &amp; Hour" if _is_forecast_view else "Completed Volume by Procedure &amp; Hour"
     st.markdown(
-        '<div class="section-heading">Completed Volume by Procedure &amp; Hour</div>',
+        f'<div class="section-heading">{_heading_label}</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -2235,58 +2683,59 @@ if view_mode == "Daily":
         _hourly.columns = ["Hour", "Total Volume"]
         st.bar_chart(_hourly.set_index("Hour"), height=220)
 
-    # ── Cell drill-down ────────────────────────────────────────────────────────────────────────────
-    with st.expander("Drill into a cell — individual completion events", expanded=False):
-        st.markdown(
-            "Select a **procedure** and **hour** to inspect every individual "
-            "completion event recorded in that cell."
-        )
-        _dd1, _dd2 = st.columns(2)
-        with _dd1:
-            sel_proc       = st.selectbox("Procedure", pivot.index.tolist(), key="drill_proc")
-        with _dd2:
-            sel_hour_label = st.selectbox("Hour", _hour_cols, key="drill_hour")
-
-        sel_hour_int = LABEL_TO_HOUR[sel_hour_label]
-        detail       = df_date[
-            (df_date["Order Procedure"] == sel_proc) &
-            (df_date["hour"] == sel_hour_int)
-        ].copy().sort_values("Date/Time - Complete")
-
-        _show_cols = {k: v for k, v in {
-            "Date/Time - Complete":        "Completed At",
-            "Performing Service Resource": "Resource",
-            "Complete Volume":             "Volume",
-        }.items() if k in detail.columns}
-
-        detail_display = (
-            detail[list(_show_cols.keys())]
-            .rename(columns=_show_cols)
-            .reset_index(drop=True)
-        )
-        if "Completed At" in detail_display.columns:
-            detail_display["Completed At"] = (
-                pd.to_datetime(detail_display["Completed At"])
-                .dt.strftime("%Y-%m-%d  %H:%M:%S")
-            )
-
-        if detail_display.empty:
-            st.info(
-                f"No completions for **{sel_proc}** during **{sel_hour_label}** on {date_str}."
-            )
-        else:
-            _cell_vol = (
-                int(detail_display["Volume"].sum())
-                if "Volume" in detail_display.columns else len(detail_display)
-            )
+    # ── Cell drill-down (historical dates only — forecast has no individual events) ───────────────
+    if not _is_forecast_view:
+        with st.expander("Drill into a cell — individual completion events", expanded=False):
             st.markdown(
-                f"**{len(detail_display)} event(s)** &nbsp;·&nbsp; *{sel_proc}* &nbsp;·&nbsp; "
-                f"**{sel_hour_label}** &nbsp;·&nbsp; Total volume: **{_cell_vol}**"
+                "Select a **procedure** and **hour** to inspect every individual "
+                "completion event recorded in that cell."
             )
-            st.dataframe(
-                detail_display, use_container_width=True,
-                height=min(80 + 35 * len(detail_display), 500),
+            _dd1, _dd2 = st.columns(2)
+            with _dd1:
+                sel_proc       = st.selectbox("Procedure", pivot.index.tolist(), key="drill_proc")
+            with _dd2:
+                sel_hour_label = st.selectbox("Hour", _hour_cols, key="drill_hour")
+
+            sel_hour_int = LABEL_TO_HOUR[sel_hour_label]
+            detail       = df_date[
+                (df_date["Order Procedure"] == sel_proc) &
+                (df_date["hour"] == sel_hour_int)
+            ].copy().sort_values("Date/Time - Complete")
+
+            _show_cols = {k: v for k, v in {
+                "Date/Time - Complete":        "Completed At",
+                "Performing Service Resource": "Resource",
+                "Complete Volume":             "Volume",
+            }.items() if k in detail.columns}
+
+            detail_display = (
+                detail[list(_show_cols.keys())]
+                .rename(columns=_show_cols)
+                .reset_index(drop=True)
             )
+            if "Completed At" in detail_display.columns:
+                detail_display["Completed At"] = (
+                    pd.to_datetime(detail_display["Completed At"])
+                    .dt.strftime("%Y-%m-%d  %H:%M:%S")
+                )
+
+            if detail_display.empty:
+                st.info(
+                    f"No completions for **{sel_proc}** during **{sel_hour_label}** on {date_str}."
+                )
+            else:
+                _cell_vol = (
+                    int(detail_display["Volume"].sum())
+                    if "Volume" in detail_display.columns else len(detail_display)
+                )
+                st.markdown(
+                    f"**{len(detail_display)} event(s)** &nbsp;·&nbsp; *{sel_proc}* &nbsp;·&nbsp; "
+                    f"**{sel_hour_label}** &nbsp;·&nbsp; Total volume: **{_cell_vol}**"
+                )
+                st.dataframe(
+                    detail_display, use_container_width=True,
+                    height=min(80 + 35 * len(detail_display), 500),
+                )
 
 else:
     # ── Monthly view ──────────────────────────────────────────────────────────────────────────────────
@@ -2392,6 +2841,14 @@ else:
             mime="text/csv",
             use_container_width=True,
             key="monthly_csv_dl",
+        )
+    with _mdl2:
+        st.download_button(
+            label="⬇ Download CSV",
+            data=_m_csv_bytes,
+            file_name=f"{_m_file_prefix}_raw_{_m_month_name}_{selected_year}.csv",
+            mime="text/csv",
+            key="monthly_csv_download",
         )
 
     st.markdown("---")
