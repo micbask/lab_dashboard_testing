@@ -40,5 +40,26 @@
     "min_date": "2025-06-01",
     "max_date": "2025-06-30",
     "size_bytes": 7205312
+  },
+  "2025-07": {
+    "sha": "309ca6caa70283089dcaeac98d8a9b6d0a238ce9",
+    "rows": 259099,
+    "min_date": "2025-07-01",
+    "max_date": "2025-07-31",
+    "size_bytes": 6688316
+  },
+  "2025-08": {
+    "sha": "547890e7a3349a46cb782f0251d249ffbdf53bef",
+    "rows": 249305,
+    "min_date": "2025-08-01",
+    "max_date": "2025-08-31",
+    "size_bytes": 6495608
+  },
+  "2025-09": {
+    "sha": "1d718ee7d854eaa6a77922e4aa248cbbb327f523",
+    "rows": 253339,
+    "min_date": "2025-09-01",
+    "max_date": "2025-09-30",
+    "size_bytes": 6583159
   }
 }
