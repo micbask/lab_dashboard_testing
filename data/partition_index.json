@@ -98,10 +98,17 @@
     "size_bytes": 6226019
   },
   "2026-03": {
-    "sha": "0a819be8a7b696386b86d543de152d23be7f62d3",
-    "rows": 267171,
+    "sha": "105cac1eaa76e133f7c38c87483887d2cae55ccb",
+    "rows": 277634,
     "min_date": "2026-03-01",
-    "max_date": "2026-03-30",
-    "size_bytes": 6833118
+    "max_date": "2026-03-31",
+    "size_bytes": 7704822
+  },
+  "2026-04": {
+    "sha": "ef726175f914451e4c34c25feb345b4a50edee80",
+    "rows": 10203,
+    "min_date": "2026-04-01",
+    "max_date": "2026-04-01",
+    "size_bytes": 300579
   }
 }
