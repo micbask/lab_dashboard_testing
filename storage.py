@@ -429,6 +429,23 @@ def load_filtered_data(
         ).fetchdf()
 
     con.close()
+
+    # DuckDB's fetchdf() converts DATE columns to datetime64[ns] and Int
+    # columns to nullable Int64. Restore the native dtypes the rest of the
+    # app expects (Python date objects, plain int hours) so downstream
+    # comparisons like `df["complete_date"] >= some_date` work.
+    if "complete_date" in result.columns and not result.empty:
+        result["complete_date"] = pd.to_datetime(result["complete_date"]).dt.date
+    if "hour" in result.columns and not result.empty:
+        result["hour"] = result["hour"].astype(int)
+    if "inlab_date" in result.columns and not result.empty:
+        result["inlab_date"] = pd.to_datetime(
+            result["inlab_date"], errors="coerce"
+        ).dt.date
+    if "inlab_hour" in result.columns and not result.empty:
+        result["inlab_hour"] = pd.to_numeric(
+            result["inlab_hour"], errors="coerce"
+        ).astype("Int64")
     return result
 
 
