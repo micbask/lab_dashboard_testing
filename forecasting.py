@@ -196,13 +196,160 @@ def load_forecasts(map_type: str) -> dict | None:
 
 
 def retrain_all_forecasts(df: pd.DataFrame, resource_assignments: dict) -> None:
-    """Train and cache forecasts for every map type."""
+    """Train and cache forecasts for every map type (in-memory df version)."""
     for mt in MAP_TYPES:
         st.session_state.pop(f"forecasts_{mt}", None)
         try:
             train_and_cache_forecasts(df, mt, resource_assignments)
         except Exception as _fc_err:
             st.write(f"Forecast training skipped for {mt}: {_fc_err}")
+
+
+def retrain_all_forecasts_streaming(resource_assignments: dict) -> None:
+    """Train forecasts by streaming partitions — never loads full dataset.
+
+    For each map type:
+      1. Stream partitions one at a time
+      2. Filter to the map's resources and aggregate daily volumes
+         per (procedure, hour) into a dict of {(proc, hour): {date: volume}}
+      3. Determine top-30 procedures by total volume
+      4. Train Prophet models on the aggregated daily series
+    """
+    from storage import iter_partitions
+
+    for mt in MAP_TYPES:
+        st.session_state.pop(f"forecasts_{mt}", None)
+        try:
+            _train_forecasts_streaming(mt, resource_assignments)
+        except Exception as _fc_err:
+            st.write(f"Forecast training skipped for {mt}: {_fc_err}")
+
+
+def _train_forecasts_streaming(map_type: str, resource_assignments: dict) -> None:
+    """Stream partitions and train forecasts without loading all data."""
+    from prophet import Prophet
+    from storage import iter_partitions
+
+    resources = set(resource_assignments[map_type])
+    exclude = EXCLUDE_PROCS
+
+    # Phase 1: Stream partitions and aggregate daily volumes per (proc, hour)
+    # Also track total volume per procedure and find last data date.
+    daily_agg: dict[tuple[str, int], dict] = {}   # {(proc, hour): {date: float}}
+    proc_totals: dict[str, float] = {}
+    last_data_date = None
+
+    for _key, partition_df in iter_partitions():
+        # Filter to this map's resources
+        filt = partition_df[
+            partition_df["Performing Service Resource"].isin(resources) &
+            ~partition_df["Order Procedure"].isin(exclude)
+        ]
+        if filt.empty:
+            continue
+
+        # Track last data date
+        part_max = filt["complete_date"].max()
+        if last_data_date is None or part_max > last_data_date:
+            last_data_date = part_max
+
+        # Aggregate daily volumes per (proc, hour)
+        grouped = (
+            filt.groupby(["Order Procedure", "hour", "complete_date"])["Complete Volume"]
+            .sum()
+            .reset_index()
+        )
+        for _, row in grouped.iterrows():
+            proc = row["Order Procedure"]
+            hour = int(row["hour"])
+            d = row["complete_date"]
+            vol = float(row["Complete Volume"])
+
+            key = (proc, hour)
+            if key not in daily_agg:
+                daily_agg[key] = {}
+            daily_agg[key][d] = daily_agg[key].get(d, 0.0) + vol
+
+            proc_totals[proc] = proc_totals.get(proc, 0.0) + vol
+
+        # Free partition memory
+        del filt, grouped
+
+    if last_data_date is None:
+        return
+
+    # Phase 2: Determine top-30 procedures
+    top30 = sorted(proc_totals.keys(), key=lambda p: proc_totals[p], reverse=True)[:30]
+    top30_set = set(top30)
+
+    forecast_end = last_data_date + timedelta(days=FORECAST_HORIZON)
+    predictions: dict[tuple[str, int], dict] = {}
+
+    # Phase 3: Train models
+    for proc in top30:
+        for hour in range(24):
+            key = (proc, hour)
+            daily_dict = daily_agg.get(key, {})
+
+            if not daily_dict:
+                predictions[key] = {
+                    last_data_date + timedelta(days=d): 0.0
+                    for d in range(1, FORECAST_HORIZON + 1)
+                }
+                continue
+
+            daily = pd.DataFrame([
+                {"ds": pd.Timestamp(d), "y": v}
+                for d, v in daily_dict.items()
+            ]).sort_values("ds")
+
+            # Fill gaps with zeros
+            full_range = pd.date_range(daily["ds"].min(), last_data_date)
+            daily = (
+                daily.set_index("ds")
+                .reindex(full_range, fill_value=0)
+                .reset_index()
+                .rename(columns={"index": "ds"})
+            )
+
+            non_zero = int((daily["y"] > 0).sum())
+
+            if non_zero < 7:
+                # Weekday-average fallback
+                daily["weekday"] = daily["ds"].dt.dayofweek
+                wd_avg = daily.groupby("weekday")["y"].mean().to_dict()
+                preds = {}
+                for d in range(1, FORECAST_HORIZON + 1):
+                    fdate = last_data_date + timedelta(days=d)
+                    preds[fdate] = max(
+                        0.0, round(wd_avg.get(pd.Timestamp(fdate).dayofweek, 0.0), 1)
+                    )
+                predictions[key] = preds
+            else:
+                m = Prophet(
+                    weekly_seasonality=True,
+                    daily_seasonality=False,
+                    yearly_seasonality=False,
+                    changepoint_prior_scale=0.05,
+                )
+                m.fit(daily)
+                future = m.make_future_dataframe(periods=FORECAST_HORIZON)
+                fc = m.predict(future)
+                fc = fc[fc["ds"] > pd.Timestamp(last_data_date)]
+                preds = {
+                    row["ds"].date(): max(0.0, round(row["yhat"], 1))
+                    for _, row in fc.iterrows()
+                }
+                predictions[key] = preds
+
+    payload = {
+        "last_data_date": last_data_date,
+        "forecast_end": forecast_end,
+        "predictions": predictions,
+    }
+
+    _write_forecast_to_github(map_type, payload)
+    st.session_state[f"forecasts_{map_type}"] = payload
 
 
 # ═════════════════════════════════════════════════════════════════════════════
