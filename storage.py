@@ -6,14 +6,16 @@ Data architecture for 5M+ rows:
   - A lightweight JSON index (data/partition_index.json) tracks each
     partition's date range, row count, and GitHub blob SHA.
   - Uploads only read/write the affected monthly partitions.
-  - DuckDB serves as an in-process SQL query layer over partitioned
-    Parquet files, enabling filtered reads without loading everything.
+  - Reads only load the partition(s) needed for the current view.
+  - DuckDB filters rows at read time — never loads full dataset into RAM.
   - Legacy single-file (data/lab_data.parquet) is auto-migrated on
     first access.
 
-GitHub API constraints:
-  - Contents API has ~100 MB file size limit.
-  - Monthly partitions stay well under this limit even at 5M+ total rows.
+CRITICAL DESIGN RULE: The dashboard query path NEVER loads more than one
+month of data into memory at a time.  For daily view, only one partition
+is read.  For monthly view, only the month's partition.  The full dataset
+is NEVER materialized except during forecast training (which streams
+partition-by-partition).
 """
 
 import base64
@@ -118,39 +120,39 @@ def _gh_delete_file(path: str, sha: str, message: str) -> None:
     )
 
 
-def _gh_list_dir(path: str) -> list[dict]:
-    """List files in a GitHub directory. Returns list of {name, path, sha, size}."""
-    owner, repo = _gh_repo()
-    resp = requests.get(
-        f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
-        headers=_gh_headers(), timeout=15,
-    )
-    if resp.status_code == 404:
-        return []
-    resp.raise_for_status()
-    items = resp.json()
-    if isinstance(items, list):
-        return [{"name": i["name"], "path": i["path"], "sha": i["sha"], "size": i.get("size", 0)} for i in items]
-    return []
-
-
 # ═════════════════════════════════════════════════════════════════════════════
-# PARTITION INDEX
+# PARTITION INDEX — cached in session state to avoid repeated GitHub reads
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _load_partition_index() -> dict:
-    """Load the partition index from GitHub. Returns {} if not found."""
+    """Load the partition index, using session-state cache.
+
+    The index is a tiny JSON file (<1KB) — cache it in session state so
+    we only hit GitHub once per session (or after explicit invalidation).
+    """
+    _ss = st.session_state
+    if "_partition_index" in _ss:
+        return _ss["_partition_index"]
+
     raw, _ = _gh_get_file(PARTITION_INDEX_PATH)
     if raw is None:
+        _ss["_partition_index"] = {}
         return {}
     try:
-        return json.loads(raw.decode("utf-8"))
+        index = json.loads(raw.decode("utf-8"))
     except Exception:
-        return {}
+        index = {}
+    _ss["_partition_index"] = index
+    return index
+
+
+def _invalidate_index_cache() -> None:
+    """Clear the cached partition index so the next call re-reads from GitHub."""
+    st.session_state.pop("_partition_index", None)
 
 
 def _save_partition_index(index: dict) -> None:
-    """Save the partition index to GitHub."""
+    """Save the partition index to GitHub and update session-state cache."""
     content = json.dumps(index, indent=2, default=str).encode("utf-8")
     _, sha = _gh_get_file(PARTITION_INDEX_PATH)
     _gh_put_file(
@@ -158,6 +160,7 @@ def _save_partition_index(index: dict) -> None:
         "Update partition index",
         sha=sha,
     )
+    st.session_state["_partition_index"] = index
 
 
 def _partition_key(dt: date) -> str:
@@ -199,14 +202,39 @@ def _parquet_bytes_to_df(raw: bytes) -> pd.DataFrame:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# PARTITION READ — cached per-partition by SHA
+# ═════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(show_spinner=False, ttl=600)
+def _read_partition_cached(key: str, sha: str) -> pd.DataFrame:
+    """Read a single partition from GitHub, cached by (key, sha).
+
+    The sha parameter ensures the cache is busted when the partition is
+    rewritten.  TTL=600s provides a safety net.
+    """
+    raw, _ = _gh_get_file(_partition_path(key))
+    if raw is None:
+        return pd.DataFrame()
+    return _parquet_bytes_to_df(raw)
+
+
+def _read_partition(key: str) -> Optional[pd.DataFrame]:
+    """Read a partition, using per-SHA caching."""
+    index = _load_partition_index()
+    meta = index.get(key)
+    if meta is None:
+        return None
+    sha = meta.get("sha", "")
+    df = _read_partition_cached(key, sha)
+    return df if not df.empty else None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # LEGACY MIGRATION
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _migrate_legacy_parquet() -> bool:
-    """Migrate the legacy single-file parquet to partitioned storage.
-
-    Returns True if migration was performed, False if no legacy file found.
-    """
+    """Migrate the legacy single-file parquet to partitioned storage."""
     raw, legacy_sha = _gh_get_file(LEGACY_PARQUET_PATH)
     if raw is None or len(raw) < 100:
         return False
@@ -215,28 +243,20 @@ def _migrate_legacy_parquet() -> bool:
     if df.empty:
         return False
 
-    # Write partitions
     _write_partitions_from_df(df)
 
-    # Delete legacy file
     if legacy_sha:
         try:
-            _gh_delete_file(LEGACY_PARQUET_PATH, legacy_sha, "Remove legacy monolithic parquet (migrated to partitions)")
+            _gh_delete_file(LEGACY_PARQUET_PATH, legacy_sha,
+                            "Remove legacy monolithic parquet (migrated to partitions)")
         except Exception:
-            pass  # Non-critical: legacy file can coexist
+            pass
 
     return True
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# PARTITION READ/WRITE
-# ═════════════════════════════════════════════════════════════════════════════
-
 def _write_partitions_from_df(df: pd.DataFrame) -> dict:
-    """Split a DataFrame by month and write each partition to GitHub.
-
-    Returns the updated partition index.
-    """
+    """Split a DataFrame by month and write each partition to GitHub."""
     if "complete_date" not in df.columns:
         if "Date/Time - Complete" in df.columns:
             df["complete_date"] = pd.to_datetime(df["Date/Time - Complete"]).dt.date
@@ -244,19 +264,15 @@ def _write_partitions_from_df(df: pd.DataFrame) -> dict:
             return {}
 
     df["_partition_key"] = df["complete_date"].apply(_partition_key)
-
     index = _load_partition_index()
 
     for key, group in df.groupby("_partition_key"):
         group = group.drop(columns=["_partition_key"])
         pq_bytes = df_to_parquet_bytes(group)
-
-        # Get existing SHA if partition already exists
         existing_sha = index.get(key, {}).get("sha")
-        path = _partition_path(key)
 
         new_sha = _gh_put_file(
-            path, pq_bytes,
+            _partition_path(key), pq_bytes,
             f"Write partition {key} ({len(group):,} rows)",
             sha=existing_sha,
         )
@@ -269,20 +285,11 @@ def _write_partitions_from_df(df: pd.DataFrame) -> dict:
             "size_bytes": len(pq_bytes),
         }
 
-    # Clean up temp column from original df
     if "_partition_key" in df.columns:
         df.drop(columns=["_partition_key"], inplace=True)
 
     _save_partition_index(index)
     return index
-
-
-def _read_partition(key: str) -> Optional[pd.DataFrame]:
-    """Read a single partition from GitHub."""
-    raw, _ = _gh_get_file(_partition_path(key))
-    if raw is None:
-        return None
-    return _parquet_bytes_to_df(raw)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -295,7 +302,11 @@ def storage_is_configured() -> bool:
 
 
 def get_data_summary() -> dict:
-    """Return summary of stored data: total_rows, min_date, max_date, partitions."""
+    """Return summary from the partition index — NO data loading.
+
+    This is O(1) — reads a small JSON file, not any Parquet data.
+    Returns {total_rows, min_date, max_date, partitions} or empty dict.
+    """
     index = _load_partition_index()
     if not index:
         return {"total_rows": 0, "partitions": 0}
@@ -311,33 +322,72 @@ def get_data_summary() -> dict:
     }
 
 
-@st.cache_data(show_spinner="Loading data…", ttl=300)
-def load_data_for_date_range(
+def get_available_dates_for_resources(resources: list[str]) -> list:
+    """Get sorted list of unique dates that have data for given resources.
+
+    Reads only the partition index to determine which partitions to check,
+    then reads each partition and filters with DuckDB.  This is still
+    reading all partitions, but it's unavoidable for date-list discovery.
+    Results are cached.
+    """
+    index = _load_partition_index()
+    if not index:
+        return []
+
+    all_dates = set()
+    for key in sorted(index.keys()):
+        df = _read_partition(key)
+        if df is None or df.empty:
+            continue
+        # Filter by resources using DuckDB
+        con = duckdb.connect()
+        con.register("part", df)
+        result = con.execute(
+            "SELECT DISTINCT complete_date FROM part "
+            "WHERE \"Performing Service Resource\" IN (SELECT UNNEST(?))",
+            [resources],
+        ).fetchdf()
+        con.close()
+        if not result.empty:
+            all_dates.update(result["complete_date"].tolist())
+
+    return sorted(all_dates)
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def load_filtered_data(
     start_date: date,
     end_date: date,
-    _cache_key: str = "",
+    resources: tuple[str, ...],
+    exclude_procs: tuple[str, ...],
+    _index_hash: str = "",
 ) -> pd.DataFrame:
-    """Load only the partitions covering the requested date range.
+    """Load ONLY the data needed for a specific view.
 
-    Uses DuckDB to filter rows efficiently. _cache_key is for Streamlit
-    cache busting (pass partition index hash or similar).
+    This is the primary read function for the dashboard.  It:
+      1. Reads only the partition(s) overlapping [start_date, end_date]
+      2. Filters by resources and excluded procedures via DuckDB
+      3. Returns a small DataFrame (typically 5K-20K rows, not 5M)
+
+    Parameters are tuples (not lists) so Streamlit can hash them for caching.
+    _index_hash busts cache when partitions change.
     """
-    # Determine which partitions to load
     index = _load_partition_index()
     if not index:
         return pd.DataFrame()
 
-    needed_keys = set()
+    # Find partitions overlapping the date range
+    needed_keys = []
     for key, meta in index.items():
         p_min = date.fromisoformat(meta["min_date"])
         p_max = date.fromisoformat(meta["max_date"])
         if p_min <= end_date and p_max >= start_date:
-            needed_keys.add(key)
+            needed_keys.append(key)
 
     if not needed_keys:
         return pd.DataFrame()
 
-    # Download needed partitions and combine
+    # Read needed partitions (each is individually cached by SHA)
     frames = []
     for key in sorted(needed_keys):
         df = _read_partition(key)
@@ -349,55 +399,93 @@ def load_data_for_date_range(
 
     combined = pd.concat(frames, ignore_index=True)
 
-    # Use DuckDB to filter to exact date range
+    # Push down ALL filters via DuckDB — date range, resources, procedure exclusions
     con = duckdb.connect()
     con.register("data", combined)
-    result = con.execute(
-        "SELECT * FROM data WHERE complete_date >= ? AND complete_date <= ?",
-        [start_date, end_date],
-    ).fetchdf()
-    con.close()
 
+    resource_list = list(resources)
+    exclude_list = list(exclude_procs)
+
+    if resource_list and exclude_list:
+        result = con.execute(
+            "SELECT * FROM data "
+            "WHERE complete_date >= ? AND complete_date <= ? "
+            "AND \"Performing Service Resource\" IN (SELECT UNNEST(?)) "
+            "AND \"Order Procedure\" NOT IN (SELECT UNNEST(?))",
+            [start_date, end_date, resource_list, exclude_list],
+        ).fetchdf()
+    elif resource_list:
+        result = con.execute(
+            "SELECT * FROM data "
+            "WHERE complete_date >= ? AND complete_date <= ? "
+            "AND \"Performing Service Resource\" IN (SELECT UNNEST(?))",
+            [start_date, end_date, resource_list],
+        ).fetchdf()
+    else:
+        result = con.execute(
+            "SELECT * FROM data "
+            "WHERE complete_date >= ? AND complete_date <= ?",
+            [start_date, end_date],
+        ).fetchdf()
+
+    con.close()
     return result
 
 
-def load_all_data(_cache_key: str = "") -> pd.DataFrame:
-    """Load all partitions into a single DataFrame.
+@st.cache_data(show_spinner=False, ttl=300)
+def load_partition_for_month(
+    year: int,
+    month: int,
+    _index_hash: str = "",
+) -> pd.DataFrame:
+    """Load a single month's partition — no filtering applied.
 
-    For operations that truly need the full dataset (e.g. forecast training).
-    Uses caching to avoid repeated downloads within the same session.
+    Used by the sidebar to discover available dates and by forecast training
+    to stream one partition at a time.
     """
-    index = _load_partition_index()
-    if not index:
-        return pd.DataFrame()
-
-    frames = []
-    for key in sorted(index.keys()):
-        df = _read_partition(key)
-        if df is not None and not df.empty:
-            frames.append(df)
-
-    if not frames:
-        return pd.DataFrame()
-
-    return pd.concat(frames, ignore_index=True)
+    key = f"{year:04d}-{month:02d}"
+    df = _read_partition(key)
+    return df if df is not None else pd.DataFrame()
 
 
-def get_partition_index_hash() -> str:
-    """Return a hash of the partition index for cache-busting."""
+def get_index_hash() -> str:
+    """Return a short hash of the partition index for cache-busting."""
     index = _load_partition_index()
     return str(hash(json.dumps(index, sort_keys=True, default=str)))
 
 
+def count_rows_in_date_range(start: date, end: date) -> int:
+    """Count rows in a date range using the partition index metadata.
+
+    For exact counts, reads the affected partitions. For a quick estimate
+    from the index (e.g. to check if data exists), use get_data_summary().
+    """
+    index = _load_partition_index()
+    if not index:
+        return 0
+
+    total = 0
+    for key, meta in index.items():
+        p_min = date.fromisoformat(meta["min_date"])
+        p_max = date.fromisoformat(meta["max_date"])
+        if p_min <= end and p_max >= start:
+            # Need exact count — read partition and filter
+            df = _read_partition(key)
+            if df is not None:
+                total += int(
+                    ((df["complete_date"] >= start) & (df["complete_date"] <= end)).sum()
+                )
+    return total
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# WRITE OPERATIONS — partition-scoped
+# ═════════════════════════════════════════════════════════════════════════════
+
 def ingest_new_data(new_df: pd.DataFrame) -> dict:
     """Ingest a new DataFrame into the partitioned storage.
 
-    For each month in the new data:
-      1. Read the existing partition (if any)
-      2. Merge using time-window deduplication
-      3. Write the updated partition back
-
-    Returns stats dict.
+    Only reads/writes the affected monthly partitions.
     """
     if new_df.empty:
         return {"rows_added": 0}
@@ -411,16 +499,11 @@ def ingest_new_data(new_df: pd.DataFrame) -> dict:
 
     for key, new_group in new_df.groupby("_partition_key"):
         new_group = new_group.drop(columns=["_partition_key"])
-
-        # Read existing partition
         existing_df = _read_partition(key)
 
         if existing_df is not None and not existing_df.empty:
-            # Merge: time-window deduplication
-            # New data takes priority in overlap window
             new_min = new_group["Date/Time - Complete"].min()
             new_max = new_group["Date/Time - Complete"].max()
-            # Remove rows from existing that fall in the new data's time window
             existing_trimmed = existing_df[
                 (existing_df["Date/Time - Complete"] < new_min) |
                 (existing_df["Date/Time - Complete"] > new_max)
@@ -430,13 +513,11 @@ def ingest_new_data(new_df: pd.DataFrame) -> dict:
         else:
             merged = new_group.reset_index(drop=True)
 
-        # Write partition
         pq_bytes = df_to_parquet_bytes(merged)
         existing_sha = index.get(key, {}).get("sha")
-        path = _partition_path(key)
 
         new_sha = _gh_put_file(
-            path, pq_bytes,
+            _partition_path(key), pq_bytes,
             f"Update partition {key} ({len(merged):,} rows)",
             sha=existing_sha,
         )
@@ -449,13 +530,15 @@ def ingest_new_data(new_df: pd.DataFrame) -> dict:
             "size_bytes": len(pq_bytes),
         }
 
-    # Clean up temp column
     if "_partition_key" in new_df.columns:
         new_df.drop(columns=["_partition_key"], inplace=True)
 
     _save_partition_index(index)
-    total_after = sum(p["rows"] for p in index.values())
+    _invalidate_index_cache()
+    # Re-cache the new index
+    st.session_state["_partition_index"] = index
 
+    total_after = sum(p["rows"] for p in index.values())
     return {
         "rows_before": total_before,
         "rows_after": total_after,
@@ -464,17 +547,12 @@ def ingest_new_data(new_df: pd.DataFrame) -> dict:
 
 
 def delete_date_range(start: date, end: date) -> dict:
-    """Delete all rows in [start, end] (inclusive) from affected partitions.
-
-    Returns stats dict with rows removed.
-    """
+    """Delete all rows in [start, end] (inclusive) from affected partitions only."""
     index = _load_partition_index()
     if not index:
         return {"rows_removed": 0}
 
     total_removed = 0
-
-    # Find affected partitions
     affected_keys = []
     for key, meta in index.items():
         p_min = date.fromisoformat(meta["min_date"])
@@ -494,22 +572,18 @@ def delete_date_range(start: date, end: date) -> dict:
         total_removed += removed
 
         if df.empty:
-            # Delete empty partition
             sha = index[key]["sha"]
             try:
-                _gh_delete_file(
-                    _partition_path(key), sha,
-                    f"Delete empty partition {key}",
-                )
+                _gh_delete_file(_partition_path(key), sha,
+                                f"Delete empty partition {key}")
             except Exception:
                 pass
             del index[key]
         else:
-            # Rewrite partition
             pq_bytes = df_to_parquet_bytes(df)
             new_sha = _gh_put_file(
                 _partition_path(key), pq_bytes,
-                f"Update partition {key} after date range delete ({removed} rows removed)",
+                f"Update partition {key} after delete ({removed} rows removed)",
                 sha=index[key]["sha"],
             )
             index[key] = {
@@ -521,6 +595,8 @@ def delete_date_range(start: date, end: date) -> dict:
             }
 
     _save_partition_index(index)
+    _invalidate_index_cache()
+    st.session_state["_partition_index"] = index
     return {"rows_removed": total_removed}
 
 
@@ -529,61 +605,53 @@ def reset_all_data() -> None:
     index = _load_partition_index()
     for key, meta in index.items():
         try:
-            _gh_delete_file(
-                _partition_path(key), meta["sha"],
-                f"Delete partition {key} (full reset)",
-            )
+            _gh_delete_file(_partition_path(key), meta["sha"],
+                            f"Delete partition {key} (full reset)")
         except Exception:
             pass
 
-    # Delete index
     _, sha = _gh_get_file(PARTITION_INDEX_PATH)
     if sha:
         try:
-            _gh_delete_file(PARTITION_INDEX_PATH, sha, "Delete partition index (full reset)")
+            _gh_delete_file(PARTITION_INDEX_PATH, sha,
+                            "Delete partition index (full reset)")
         except Exception:
             pass
 
-    # Also delete legacy file if present
     _, legacy_sha = _gh_get_file(LEGACY_PARQUET_PATH)
     if legacy_sha:
         try:
-            _gh_delete_file(LEGACY_PARQUET_PATH, legacy_sha, "Delete legacy parquet (full reset)")
+            _gh_delete_file(LEGACY_PARQUET_PATH, legacy_sha,
+                            "Delete legacy parquet (full reset)")
         except Exception:
             pass
 
+    _invalidate_index_cache()
+
 
 def ensure_partitioned_storage() -> bool:
-    """Ensure data is in partitioned format. Migrates legacy if needed.
-
-    Returns True if data exists (in any format), False if no data at all.
-    """
+    """Ensure data is in partitioned format. Migrates legacy if needed."""
     index = _load_partition_index()
     if index:
         return True
-
-    # Check for legacy file and migrate
     if _migrate_legacy_parquet():
+        _invalidate_index_cache()
         return True
-
     return False
 
 
-def query_data(sql: str, params: list = None) -> pd.DataFrame:
-    """Run a DuckDB SQL query across all partitions.
+# ═════════════════════════════════════════════════════════════════════════════
+# STREAMING PARTITION READER (for forecast training)
+# ═════════════════════════════════════════════════════════════════════════════
 
-    Loads needed partitions into DuckDB and runs the query.
-    The 'data' table is available in the query.
+def iter_partitions():
+    """Yield (key, DataFrame) for each partition, one at a time.
+
+    Used by forecast training to process data partition-by-partition
+    without loading the entire dataset into memory at once.
     """
-    all_df = load_all_data()
-    if all_df.empty:
-        return pd.DataFrame()
-
-    con = duckdb.connect()
-    con.register("data", all_df)
-    if params:
-        result = con.execute(sql, params).fetchdf()
-    else:
-        result = con.execute(sql).fetchdf()
-    con.close()
-    return result
+    index = _load_partition_index()
+    for key in sorted(index.keys()):
+        df = _read_partition(key)
+        if df is not None and not df.empty:
+            yield key, df

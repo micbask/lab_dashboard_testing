@@ -2,13 +2,14 @@
 app.py — Lab Productivity Heatmap Dashboard (Orchestrator)
 Keck Medicine of USC
 
-Modular architecture:
-  - config.py:        Constants, site configuration, column definitions
-  - parsing.py:       File ingestion (SpreadsheetML, multi-sheet, forward-fill)
-  - storage.py:       Partitioned Parquet on GitHub + DuckDB query layer
-  - forecasting.py:   Prophet forecast training & caching (manual trigger only)
-  - ui_components.py: CSS, headers, metric cards, pivot styling, PNG export
-  - app.py (this):    Streamlit orchestrator — sidebar, main panel, data flow
+CRITICAL DATA ACCESS PATTERN:
+  The dashboard NEVER loads the full dataset into memory.
+  - Sidebar metadata comes from the partition index (a tiny JSON file).
+  - Heatmap data comes from load_filtered_data() which reads ONLY the
+    partition(s) covering the selected date/month, filtered by resources
+    and procedure exclusions via DuckDB.
+  - No fresh_df in session state — after writes, we invalidate the cache
+    and let the next render re-read only what it needs.
 """
 
 import calendar as _cal
@@ -25,13 +26,13 @@ from config import (
 from parsing import parse_single_file, deduplicate_and_merge, clean_procedure_names
 from storage import (
     storage_is_configured, get_data_summary,
-    load_all_data, ingest_new_data,
+    load_filtered_data, ingest_new_data,
     delete_date_range, reset_all_data,
-    ensure_partitioned_storage, get_partition_index_hash,
-    df_to_parquet_bytes,
+    ensure_partitioned_storage, get_index_hash,
+    count_rows_in_date_range,
 )
 from forecasting import (
-    load_forecasts, retrain_all_forecasts,
+    load_forecasts, retrain_all_forecasts_streaming,
     build_forecast_pivot,
 )
 from ui_components import (
@@ -159,23 +160,18 @@ if "last_map_type" not in _ss:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# LOCAL HELPER FUNCTIONS (tightly coupled to UI flow)
+# LOCAL HELPER FUNCTIONS
 # ═════════════════════════════════════════════════════════════════════════════
-
-def filter_for_map_ui(df: pd.DataFrame, map_type: str) -> pd.DataFrame:
-    """Filter dataset to the resources and procedures for one map type."""
-    resources = _ss.resource_assignments[map_type]
-    out = df[df["Performing Service Resource"].isin(resources)].copy()
-    out = out[~out["Order Procedure"].isin(EXCLUDE_PROCS)]
-    return out
-
 
 def build_pivot(
     df: pd.DataFrame,
     selected_date: date,
     hour_range: tuple[int, int],
 ) -> tuple:
-    """Build the procedure x hour pivot table for a given date and hour window."""
+    """Build the procedure x hour pivot table for a given date and hour window.
+
+    df is already filtered to the correct resources/site by load_filtered_data.
+    """
     h_start, h_end = hour_range
     hours   = list(range(h_start, h_end + 1))
     df_date = df[df["complete_date"] == selected_date].copy()
@@ -207,7 +203,10 @@ def build_pivot(
 def build_monthly_pivot(
     df: pd.DataFrame, year: int, month: int,
 ) -> tuple:
-    """Build a procedure x hour pivot of daily-average volumes for a calendar month."""
+    """Build a procedure x hour pivot of daily-average volumes.
+
+    df is already filtered to the correct resources/site and month.
+    """
     month_start = date(year, month, 1)
     month_end   = date(year, month, _cal.monthrange(year, month)[1])
     month_df    = df[
@@ -242,7 +241,7 @@ def build_monthly_pivot(
 def build_weekday_pivot(
     month_df: pd.DataFrame, year: int, month: int,
 ) -> tuple:
-    """Build a weekday x hour pivot of average total volume for a calendar month."""
+    """Build a weekday x hour pivot of average total volume."""
     if month_df.empty:
         return None, {}
 
@@ -303,26 +302,12 @@ with st.sidebar:
 
     # ── Pending action: retrain forecast models ──────────────────────────────
     if _ss.pop("pending_forecast_retrain", False):
-        _fc_src_df = _ss.get("fresh_df")
-        if _fc_src_df is None and storage_is_configured():
-            try:
-                _fc_src_df = load_all_data()
-                if _fc_src_df is not None and not _fc_src_df.empty:
-                    _fc_bad = int(
-                        _fc_src_df["Order Procedure"]
-                        .str.contains("\xa0", regex=False, na=False)
-                        .sum()
-                    )
-                    if _fc_bad > 0:
-                        _fc_src_df = clean_procedure_names(_fc_src_df)
-            except Exception:
-                _fc_src_df = None
-        if _fc_src_df is not None and not _fc_src_df.empty:
+        if storage_is_configured():
             with st.spinner("Retraining forecast models…"):
-                retrain_all_forecasts(_fc_src_df, _ss.resource_assignments)
+                retrain_all_forecasts_streaming(_ss.resource_assignments)
             st.success("Forecast models retrained.")
         else:
-            st.warning("No data available to train forecasts on.")
+            st.warning("No storage configured — cannot retrain forecasts.")
 
     # ── Pending action: reset entire dataset ─────────────────────────────────
     if _ss.pop("pending_reset", False):
@@ -330,7 +315,6 @@ with st.sidebar:
             if storage_is_configured():
                 reset_all_data()
                 st.cache_data.clear()
-                _ss.pop("fresh_df", None)
                 st.success("Master dataset cleared.")
             for _mt in MAP_TYPES:
                 _ss.pop(f"forecasts_{_mt}", None)
@@ -342,7 +326,6 @@ with st.sidebar:
         del_info = _ss.pop("pending_delete_range")
         try:
             result = delete_date_range(del_info["start"], del_info["end"])
-            _ss.pop("fresh_df", None)
             st.cache_data.clear()
             st.success(
                 f"Deleted {result['rows_removed']:,} rows "
@@ -352,41 +335,37 @@ with st.sidebar:
             st.error(f"Delete failed: {_dr_err}")
 
     # ── Data source & loading ────────────────────────────────────────────────
+    # CRITICAL: We do NOT load any data here.  We only read the partition
+    # index (a tiny JSON) to show summary stats.  Actual data is loaded
+    # lazily when the main panel renders, filtered to exactly what's needed.
     st.markdown("---")
     st.markdown("### Data Source")
 
-    raw_df    = None
-    merge_log = []
+    _data_exists = False
+    _data_summary = {"total_rows": 0, "partitions": 0}
 
     if storage_is_configured():
         st.caption("Storage: GitHub (partitioned)")
 
-        _data_exists = False
         try:
-            if "fresh_df" in _ss:
-                raw_df       = _ss["fresh_df"]
-                _data_exists = True
-            else:
-                # Ensure partitioned storage (migrates legacy if needed)
-                _data_exists = ensure_partitioned_storage()
-                if _data_exists:
-                    raw_df = load_all_data()
-                    if raw_df is not None and raw_df.empty:
-                        raw_df = None
-                        _data_exists = False
-                else:
-                    status_chip("No data yet — upload below", level="warn")
+            _data_exists = ensure_partitioned_storage()
+            if _data_exists:
+                _data_summary = get_data_summary()
+                if _data_summary["total_rows"] == 0:
+                    _data_exists = False
 
-            if raw_df is not None and not raw_df.empty:
-                _chip_text = (
-                    f"{len(raw_df):,} rows · "
-                    f"{raw_df['complete_date'].min()} → {raw_df['complete_date'].max()}"
+            if _data_exists:
+                status_chip(
+                    f"{_data_summary['total_rows']:,} rows · "
+                    f"{_data_summary['min_date']} → {_data_summary['max_date']}",
+                    level="ok",
                 )
-                status_chip(_chip_text, level="ok")
+            else:
+                status_chip("No data yet — upload below", level="warn")
 
         except Exception as _load_err:
             status_chip("Load error", level="error")
-            st.error(f"Could not load data: {_load_err}")
+            st.error(f"Could not read data index: {_load_err}")
 
         # ── Data Management expander ─────────────────────────────────────────
         st.markdown("---")
@@ -413,8 +392,8 @@ with st.sidebar:
                 # ── Refresh data ─────────────────────────────────────────────
                 st.markdown('<div class="refresh-btn">', unsafe_allow_html=True)
                 if st.button("↺  Refresh data", use_container_width=True, key="refresh_data_btn"):
-                    _ss.pop("fresh_df", None)
                     st.cache_data.clear()
+                    _ss.pop("_partition_index", None)
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
 
@@ -422,19 +401,19 @@ with st.sidebar:
                 if st.button(
                     "⟳  Refresh Forecast", use_container_width=True,
                     key="refresh_forecast_btn",
-                    disabled=(raw_df is None or (raw_df is not None and raw_df.empty)),
+                    disabled=(not _data_exists),
                 ):
                     _ss["pending_forecast_retrain"] = True
                     st.rerun()
 
                 # ── Current dataset summary ──────────────────────────────────
-                if raw_df is not None and not raw_df.empty:
+                if _data_exists:
                     st.markdown("**Current dataset**")
                     st.caption(
-                        f"Rows: **{len(raw_df):,}**  \n"
-                        f"Date range: **{raw_df['complete_date'].min()}** → "
-                        f"**{raw_df['complete_date'].max()}**  \n"
-                        f"Unique dates: **{raw_df['complete_date'].nunique()}**"
+                        f"Rows: **{_data_summary['total_rows']:,}**  \n"
+                        f"Date range: **{_data_summary['min_date']}** → "
+                        f"**{_data_summary['max_date']}**  \n"
+                        f"Partitions: **{_data_summary['partitions']}**"
                     )
 
                     # ── Remove a date range ──────────────────────────────────
@@ -443,8 +422,8 @@ with st.sidebar:
                             "Permanently deletes all rows in the chosen window "
                             "from the master dataset.  This cannot be undone."
                         )
-                        _dr_min = raw_df["complete_date"].min()
-                        _dr_max = raw_df["complete_date"].max()
+                        _dr_min = date.fromisoformat(_data_summary["min_date"])
+                        _dr_max = date.fromisoformat(_data_summary["max_date"])
                         _dc1, _dc2 = st.columns(2)
                         with _dc1:
                             del_start = st.date_input(
@@ -458,19 +437,17 @@ with st.sidebar:
                                 min_value=_dr_min, max_value=_dr_max,
                                 key="del_end",
                             )
-                        _affected = int(
-                            ((raw_df["complete_date"] >= del_start) &
-                             (raw_df["complete_date"] <= del_end)).sum()
-                        )
                         if del_start > del_end:
                             st.error("'From' date must be on or before 'To' date.")
-                        elif _affected:
-                            st.warning(f"Will delete **{_affected:,}** rows.")
+                        else:
+                            _affected = count_rows_in_date_range(del_start, del_end)
+                            if _affected:
+                                st.warning(f"Will delete **{_affected:,}** rows.")
 
                         if st.button(
                             "Delete this range", type="primary",
                             use_container_width=True, key="btn_del_range",
-                            disabled=(del_start > del_end or _affected == 0),
+                            disabled=(del_start > del_end),
                         ):
                             _ss["pending_delete_range"] = {
                                 "start": del_start, "end": del_end
@@ -522,6 +499,8 @@ with st.sidebar:
             "Upload Excel file(s)", type=["xlsx", "xls", "csv"],
             accept_multiple_files=True,
         )
+        _local_df = pd.DataFrame()
+        merge_log = []
         if uploaded_files:
             _parsed = []
             for f in uploaded_files:
@@ -529,38 +508,32 @@ with st.sidebar:
                 if not _df.empty:
                     _parsed.append((f.name, _df))
             if _parsed:
-                raw_df, merge_log = deduplicate_and_merge(_parsed)
+                _local_df, merge_log = deduplicate_and_merge(_parsed)
+                _data_exists = not _local_df.empty
 
     # ── Date / Month selector ────────────────────────────────────────────────
     st.markdown("---")
 
-    if raw_df is not None and not raw_df.empty:
-        filtered_df = filter_for_map_ui(raw_df, map_type)
+    # We need available dates for the date picker.  For remote storage,
+    # we derive them from the partition index metadata (min/max dates per
+    # partition) — NOT by loading all data.
+    # For local uploads, we derive them from the small in-memory df.
 
-        # ── Apply time-basis swap ────────────────────────────────────────────
-        _has_inlab = "inlab_date" in filtered_df.columns and filtered_df["inlab_date"].notna().any()
-        if time_basis == "In-Lab":
-            if _has_inlab:
-                filtered_df = filtered_df[filtered_df["inlab_date"].notna()].copy()
-                filtered_df["complete_date"] = filtered_df["inlab_date"]
-                filtered_df["hour"] = filtered_df["inlab_hour"].astype(int)
-            else:
-                st.warning(
-                    "No 'Date/Time - In Lab' data available. "
-                    "Upload files that include this column, then switch to In-Lab view."
-                )
-                st.stop()
+    if _data_exists:
+        # Get current resources for the selected map type
+        _current_resources = tuple(sorted(_ss.resource_assignments[map_type]))
+        _current_excludes = tuple(sorted(EXCLUDE_PROCS))
+        _idx_hash = get_index_hash() if storage_is_configured() else ""
+
+        if storage_is_configured():
+            # Derive date range from partition index (no data loading)
+            _min_d = date.fromisoformat(_data_summary["min_date"])
+            _max_d = date.fromisoformat(_data_summary["max_date"])
+        else:
+            _min_d = _local_df["complete_date"].min()
+            _max_d = _local_df["complete_date"].max()
 
         if view_mode == "Daily":
-            available_dates = sorted(filtered_df["complete_date"].unique())
-
-            if not available_dates:
-                st.warning("No data found for this map type.")
-                st.stop()
-
-            _min_d = available_dates[0]
-            _max_d = available_dates[-1]
-
             _fc_data = load_forecasts(map_type)
             forecast_dates: list = []
             _fc_max_d = _max_d
@@ -572,7 +545,6 @@ with st.sidebar:
                     for _i in range((_fc_end_d - _fc_start_d).days + 1)
                 ]
                 _fc_max_d = _fc_end_d
-            all_selectable_dates = available_dates + forecast_dates
 
             if "_pending_date" in _ss:
                 _pending = _ss.pop("_pending_date")
@@ -586,27 +558,11 @@ with st.sidebar:
             ):
                 _ss["date_picker"] = _max_d
 
-            if (
-                _ss["date_picker"] not in all_selectable_dates
-                and _ss["date_picker"] <= _max_d
-            ):
-                _dates_arr = pd.to_datetime(available_dates)
-                if len(_dates_arr) == 0:
-                    st.info("No data is available for this site yet.")
-                    st.stop()
-                _idx_near  = (
-                    (_dates_arr - pd.Timestamp(_ss["date_picker"])).abs().argmin()
-                )
-                _ss["date_picker"] = available_dates[_idx_near]
-
             st.markdown("### Date")
             _fc_note = (
                 f"  +  forecast to **{_fc_max_d}**" if forecast_dates else ""
             )
-            st.caption(
-                f"{len(available_dates)} date(s) with data  ·  "
-                f"{_min_d} → {_max_d}{_fc_note}"
-            )
+            st.caption(f"{_min_d} → {_max_d}{_fc_note}")
 
             picked_date = st.date_input(
                 "Select date",
@@ -615,51 +571,28 @@ with st.sidebar:
                 label_visibility="collapsed",
                 key="date_picker",
             )
-
-            if picked_date not in all_selectable_dates:
-                _dates_arr = pd.to_datetime(available_dates)
-                if len(_dates_arr) == 0:
-                    st.info("No data is available for this site yet.")
-                    st.stop()
-                _idx_near  = (
-                    (_dates_arr - pd.Timestamp(picked_date)).abs().argmin()
-                )
-                _nearest = available_dates[_idx_near]
-                st.caption(
-                    f"No data on {picked_date} for **{map_type}** — "
-                    f"showing nearest: **{_nearest}**"
-                )
-                _ss["_pending_date"] = _nearest
-                picked_date = _nearest
-            elif picked_date not in available_dates and picked_date in forecast_dates:
-                pass
-
             selected_date = picked_date
 
-            try:
-                _cur_idx = all_selectable_dates.index(selected_date)
-            except ValueError:
-                _cur_idx = len(available_dates) - 1
-                selected_date = available_dates[_cur_idx]
-                _ss["_pending_date"] = selected_date
+            # Determine if this is a forecast date
+            _is_forecast_date = selected_date > _max_d
 
+            # Prev/Next buttons — navigate by day across full range
+            # Use simple prev/next day since we don't load all dates
             _nc1, _nc2 = st.columns(2)
             with _nc1:
                 if st.button(
                     "◄ Prev", use_container_width=True,
-                    disabled=(_cur_idx == 0),
+                    disabled=(selected_date <= _min_d),
                 ):
-                    _ss["_pending_date"] = all_selectable_dates[_cur_idx - 1]
+                    _ss["_pending_date"] = selected_date - timedelta(days=1)
                     st.rerun()
             with _nc2:
                 if st.button(
                     "Next ►", use_container_width=True,
-                    disabled=(_cur_idx == len(all_selectable_dates) - 1),
+                    disabled=(selected_date >= _fc_max_d),
                 ):
-                    _ss["_pending_date"] = all_selectable_dates[_cur_idx + 1]
+                    _ss["_pending_date"] = selected_date + timedelta(days=1)
                     st.rerun()
-
-            st.caption(f"Day {_cur_idx + 1} of {len(all_selectable_dates)}")
 
             if _fc_data:
                 _fc_trained_on = _fc_data.get("last_data_date")
@@ -689,8 +622,17 @@ with st.sidebar:
             st.caption(f"{_fmt_h(hour_range[0])} → {_fmt_h(hour_range[1])}")
 
         else:  # Monthly view
-            _all_dates    = sorted(filtered_df["complete_date"].unique())
-            _avail_months = sorted({(d.year, d.month) for d in _all_dates})
+            # Build month list from partition index dates
+            import itertools
+            _avail_months = []
+            d = date(_min_d.year, _min_d.month, 1)
+            end_m = date(_max_d.year, _max_d.month, 1)
+            while d <= end_m:
+                _avail_months.append((d.year, d.month))
+                if d.month == 12:
+                    d = date(d.year + 1, 1, 1)
+                else:
+                    d = date(d.year, d.month + 1, 1)
 
             if not _avail_months:
                 st.warning("No data found for this map type.")
@@ -783,7 +725,7 @@ if _ss.get("pending_upload"):
                 new_df = clean_procedure_names(new_df)
                 st.write(f"Procedure names corrected ({_up_bad:,} row(s) fixed).")
 
-            # Step 3 — Ingest into partitioned storage
+            # Step 3 — Ingest into partitioned storage (only affected partitions)
             st.write("**Step 3 / 3** — Ingesting into partitioned storage…")
             stats = ingest_new_data(new_df)
             st.write(
@@ -791,13 +733,11 @@ if _ss.get("pending_upload"):
                 f"**{stats['rows_after']:,}** rows (+{stats['rows_added']:,} new)"
             )
 
-            # Reload full dataset to update session state
-            _ss["fresh_df"] = load_all_data()
+            # Clear caches so the next render picks up new data
+            # NO fresh_df — the next render will read only what it needs
             _ss.pop("pending_upload", None)
             st.cache_data.clear()
-
-            # NOTE: Forecasts NOT retrained on upload (issue #7)
-            # Use "Refresh Forecast" button to retrain manually.
+            _ss.pop("_partition_index", None)
 
             _upload_status.update(
                 label=f"Done — added {stats['rows_added']:,} rows.",
@@ -818,7 +758,7 @@ if _ss.get("pending_upload"):
 # ═════════════════════════════════════════════════════════════════════════════
 # MAIN PANEL — no data guard
 # ═════════════════════════════════════════════════════════════════════════════
-if raw_df is None or raw_df.empty:
+if not _data_exists:
     st.markdown("""
     <div class="keck-header">
       <div>
@@ -836,8 +776,10 @@ if raw_df is None or raw_df.empty:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# MAIN PANEL — heatmap (branched by view mode)
+# MAIN PANEL — LOAD DATA (filtered, lazy, partition-aware)
 # ═════════════════════════════════════════════════════════════════════════════
+# THIS is where data loading happens — only the data needed for the current
+# view, filtered by date range, resources, and excluded procedures.
 
 if view_mode == "Daily":
     _is_forecast_view = selected_date > _max_d
@@ -854,6 +796,34 @@ if view_mode == "Daily":
         df_date_hour = None
         df_date      = pd.DataFrame()
     else:
+        # Load ONLY this date's data, filtered to the right resources
+        if storage_is_configured():
+            filtered_df = load_filtered_data(
+                start_date=selected_date,
+                end_date=selected_date,
+                resources=_current_resources,
+                exclude_procs=_current_excludes,
+                _index_hash=_idx_hash,
+            )
+        else:
+            from config import EXCLUDE_PROCS as _EP
+            resources = _ss.resource_assignments[map_type]
+            filtered_df = _local_df[
+                _local_df["Performing Service Resource"].isin(resources) &
+                ~_local_df["Order Procedure"].isin(_EP)
+            ].copy()
+
+        # Apply time-basis swap
+        if time_basis == "In-Lab":
+            _has_inlab = "inlab_date" in filtered_df.columns and filtered_df["inlab_date"].notna().any()
+            if _has_inlab:
+                filtered_df = filtered_df[filtered_df["inlab_date"].notna()].copy()
+                filtered_df["complete_date"] = filtered_df["inlab_date"]
+                filtered_df["hour"] = filtered_df["inlab_hour"].astype(int)
+            else:
+                st.warning("No 'Date/Time - In Lab' data available.")
+                st.stop()
+
         pivot, df_date_hour, df_date, hours = build_pivot(filtered_df, selected_date, hour_range)
 
     date_str = pd.Timestamp(selected_date).strftime("%B %d, %Y")
@@ -935,7 +905,6 @@ if view_mode == "Daily":
     )
 
     if _is_forecast_view:
-        # Forecast legend with orange scale (issue #8)
         st.markdown(
             f'<div class="heatmap-legend">'
             f'Colour scale: &nbsp;<strong style="color:#FFE0B2;">■</strong> low &nbsp;→&nbsp; '
@@ -1064,6 +1033,37 @@ else:
     month_name_str = f"{_cal.month_name[selected_month]} {selected_year}"
     render_header(map_type, month_name_str)
 
+    # Load ONLY this month's data, filtered to the right resources
+    _month_start = date(selected_year, selected_month, 1)
+    _month_end = date(selected_year, selected_month,
+                      _cal.monthrange(selected_year, selected_month)[1])
+
+    if storage_is_configured():
+        filtered_df = load_filtered_data(
+            start_date=_month_start,
+            end_date=_month_end,
+            resources=_current_resources,
+            exclude_procs=_current_excludes,
+            _index_hash=_idx_hash,
+        )
+    else:
+        resources = _ss.resource_assignments[map_type]
+        filtered_df = _local_df[
+            _local_df["Performing Service Resource"].isin(resources) &
+            ~_local_df["Order Procedure"].isin(EXCLUDE_PROCS)
+        ].copy()
+
+    # Apply time-basis swap
+    if time_basis == "In-Lab":
+        _has_inlab = "inlab_date" in filtered_df.columns and filtered_df["inlab_date"].notna().any()
+        if _has_inlab:
+            filtered_df = filtered_df[filtered_df["inlab_date"].notna()].copy()
+            filtered_df["complete_date"] = filtered_df["inlab_date"]
+            filtered_df["hour"] = filtered_df["inlab_hour"].astype(int)
+        else:
+            st.warning("No 'Date/Time - In Lab' data available.")
+            st.stop()
+
     monthly_pivot, n_days, month_raw_df = build_monthly_pivot(
         filtered_df, selected_year, selected_month
     )
@@ -1142,17 +1142,11 @@ else:
             key="monthly_png_dl",
         )
     with _mdl2:
-        _m_raw_start = date(selected_year, selected_month, 1)
-        _m_raw_end   = date(selected_year, selected_month,
-                            _cal.monthrange(selected_year, selected_month)[1])
         _csv_cols = [c for c in ["Order Procedure", "Performing Service Resource",
                                   "Date/Time - Complete", "Complete Volume"]
                      if c in filtered_df.columns]
         _monthly_raw_csv = (
-            filtered_df[
-                (filtered_df["complete_date"] >= _m_raw_start) &
-                (filtered_df["complete_date"] <= _m_raw_end)
-            ][_csv_cols]
+            filtered_df[_csv_cols]
             .sort_values("Date/Time - Complete")
             .reset_index(drop=True)
             .to_csv(index=False)
@@ -1254,13 +1248,3 @@ else:
                     use_container_width=True,
                     key="weekday_csv_dl",
                 )
-
-# ── File merge log (only shown when using direct file upload) ────────────
-if merge_log:
-    with st.expander("Data file overlap details", expanded=False):
-        st.markdown(
-            "Shows how uploaded files were combined.  "
-            "Overlapping time windows are trimmed so rows in the overlap "
-            "are taken from the later (more complete) file only."
-        )
-        st.dataframe(pd.DataFrame(merge_log), use_container_width=True)
