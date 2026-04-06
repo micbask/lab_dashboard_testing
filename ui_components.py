@@ -347,6 +347,39 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     font-size: 0.88rem !important;
 }
 
+/* Sidebar expanders have a WHITE background — undo the sidebar's global
+   light-text rules for anything rendered inside them, otherwise labels
+   and captions become invisible (light gray on white). */
+[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] p,
+[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] li,
+[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] span,
+[data-testid="stSidebar"] [data-testid="stExpander"] label,
+[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stWidgetLabel"],
+[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stWidgetLabel"] p {
+    color: #0f172a !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stCaptionContainer"],
+[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stCaptionContainer"] p,
+[data-testid="stSidebar"] [data-testid="stExpander"] small {
+    color: #475569 !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] strong {
+    color: #0f172a !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary,
+[data-testid="stSidebar"] [data-testid="stExpander"] summary p,
+[data-testid="stSidebar"] [data-testid="stExpander"] summary span {
+    color: #0f172a !important;
+}
+/* File uploader "drag and drop" area and hint text inside sidebar expander */
+[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stFileUploaderDropzone"] {
+    background: #f8fafc !important;
+    border: 1px dashed #94a3b8 !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stFileUploaderDropzone"] * {
+    color: #0f172a !important;
+}
+
 /* ══════════════════════════════════════════════════════════
    DIVIDERS
    ══════════════════════════════════════════════════════════ */

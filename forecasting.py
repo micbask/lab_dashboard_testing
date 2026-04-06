@@ -226,21 +226,29 @@ def retrain_all_forecasts_streaming(resource_assignments: dict) -> None:
 
 
 def _train_forecasts_streaming(map_type: str, resource_assignments: dict) -> None:
-    """Stream partitions and train forecasts without loading all data."""
-    from prophet import Prophet
+    """Stream partitions and train forecasts without loading all data.
+
+    Produces TWO prediction sets per map type:
+      - predictions_complete: indexed by (complete_date, hour)
+      - predictions_inlab:    indexed by (inlab_date,   inlab_hour)
+
+    The basis is chosen at query time via build_forecast_pivot(..., time_basis=...).
+    """
     from storage import iter_partitions
 
     resources = set(resource_assignments[map_type])
     exclude = EXCLUDE_PROCS
 
-    # Phase 1: Stream partitions and aggregate daily volumes per (proc, hour)
-    # Also track total volume per procedure and find last data date.
-    daily_agg: dict[tuple[str, int], dict] = {}   # {(proc, hour): {date: float}}
+    # Phase 1: Stream partitions and aggregate daily volumes for BOTH bases.
+    # daily_agg_complete[(proc, hour)][date] = volume
+    # daily_agg_inlab   [(proc, hour)][date] = volume
+    daily_agg_complete: dict[tuple[str, int], dict] = {}
+    daily_agg_inlab: dict[tuple[str, int], dict] = {}
     proc_totals: dict[str, float] = {}
-    last_data_date = None
+    last_data_date_complete = None
+    last_data_date_inlab = None
 
     for _key, partition_df in iter_partitions():
-        # Filter to this map's resources
         filt = partition_df[
             partition_df["Performing Service Resource"].isin(resources) &
             ~partition_df["Order Procedure"].isin(exclude)
@@ -248,44 +256,99 @@ def _train_forecasts_streaming(map_type: str, resource_assignments: dict) -> Non
         if filt.empty:
             continue
 
-        # Track last data date
-        part_max = filt["complete_date"].max()
-        if last_data_date is None or part_max > last_data_date:
-            last_data_date = part_max
+        # ── Completed basis ─────────────────────────────────────────────
+        c = filt.dropna(subset=["complete_date", "hour"])
+        if not c.empty:
+            part_max_c = c["complete_date"].max()
+            if last_data_date_complete is None or part_max_c > last_data_date_complete:
+                last_data_date_complete = part_max_c
 
-        # Aggregate daily volumes per (proc, hour)
-        grouped = (
-            filt.groupby(["Order Procedure", "hour", "complete_date"])["Complete Volume"]
-            .sum()
-            .reset_index()
-        )
-        for _, row in grouped.iterrows():
-            proc = row["Order Procedure"]
-            hour = int(row["hour"])
-            d = row["complete_date"]
-            vol = float(row["Complete Volume"])
+            grouped_c = (
+                c.groupby(["Order Procedure", "hour", "complete_date"])["Complete Volume"]
+                .sum().reset_index()
+            )
+            for _, row in grouped_c.iterrows():
+                proc = row["Order Procedure"]
+                hour = int(row["hour"])
+                d = row["complete_date"]
+                vol = float(row["Complete Volume"])
+                key = (proc, hour)
+                daily_agg_complete.setdefault(key, {})
+                daily_agg_complete[key][d] = daily_agg_complete[key].get(d, 0.0) + vol
+                proc_totals[proc] = proc_totals.get(proc, 0.0) + vol
+            del grouped_c
 
-            key = (proc, hour)
-            if key not in daily_agg:
-                daily_agg[key] = {}
-            daily_agg[key][d] = daily_agg[key].get(d, 0.0) + vol
+        # ── In-Lab basis ────────────────────────────────────────────────
+        if "inlab_date" in filt.columns and "inlab_hour" in filt.columns:
+            il = filt.dropna(subset=["inlab_date", "inlab_hour"])
+            if not il.empty:
+                il = il.copy()
+                il["_ih"] = il["inlab_hour"].astype(int)
+                part_max_i = il["inlab_date"].max()
+                if last_data_date_inlab is None or part_max_i > last_data_date_inlab:
+                    last_data_date_inlab = part_max_i
 
-            proc_totals[proc] = proc_totals.get(proc, 0.0) + vol
+                grouped_i = (
+                    il.groupby(["Order Procedure", "_ih", "inlab_date"])["Complete Volume"]
+                    .sum().reset_index()
+                )
+                for _, row in grouped_i.iterrows():
+                    proc = row["Order Procedure"]
+                    hour = int(row["_ih"])
+                    d = row["inlab_date"]
+                    vol = float(row["Complete Volume"])
+                    key = (proc, hour)
+                    daily_agg_inlab.setdefault(key, {})
+                    daily_agg_inlab[key][d] = daily_agg_inlab[key].get(d, 0.0) + vol
+                del grouped_i
 
-        # Free partition memory
-        del filt, grouped
+        del filt
 
-    if last_data_date is None:
+    if last_data_date_complete is None and last_data_date_inlab is None:
         return
 
-    # Phase 2: Determine top-30 procedures
+    # Top-30 procedures ranked by Completed totals (same ranking for both bases)
     top30 = sorted(proc_totals.keys(), key=lambda p: proc_totals[p], reverse=True)[:30]
-    top30_set = set(top30)
 
+    predictions_complete = _train_models_for_basis(
+        top30, daily_agg_complete, last_data_date_complete
+    ) if last_data_date_complete is not None else {}
+
+    predictions_inlab = _train_models_for_basis(
+        top30, daily_agg_inlab, last_data_date_inlab
+    ) if last_data_date_inlab is not None else {}
+
+    # Use the later of the two as the "canonical" last/forecast-end date.
+    last_data_date = max(
+        d for d in (last_data_date_complete, last_data_date_inlab) if d is not None
+    )
     forecast_end = last_data_date + timedelta(days=FORECAST_HORIZON)
+
+    payload = {
+        "last_data_date": last_data_date,
+        "last_data_date_complete": last_data_date_complete,
+        "last_data_date_inlab": last_data_date_inlab,
+        "forecast_end": forecast_end,
+        "predictions_complete": predictions_complete,
+        "predictions_inlab": predictions_inlab,
+        # Back-compat: older code paths reading "predictions" get Completed.
+        "predictions": predictions_complete,
+    }
+
+    _write_forecast_to_github(map_type, payload)
+    st.session_state[f"forecasts_{map_type}"] = payload
+
+
+def _train_models_for_basis(
+    top30: list[str],
+    daily_agg: dict[tuple[str, int], dict],
+    last_data_date: date,
+) -> dict[tuple[str, int], dict]:
+    """Train Prophet (or weekday-avg fallback) models for one time basis."""
+    from prophet import Prophet
+
     predictions: dict[tuple[str, int], dict] = {}
 
-    # Phase 3: Train models
     for proc in top30:
         for hour in range(24):
             key = (proc, hour)
@@ -303,7 +366,6 @@ def _train_forecasts_streaming(map_type: str, resource_assignments: dict) -> Non
                 for d, v in daily_dict.items()
             ]).sort_values("ds")
 
-            # Fill gaps with zeros
             full_range = pd.date_range(daily["ds"].min(), last_data_date)
             daily = (
                 daily.set_index("ds")
@@ -315,7 +377,6 @@ def _train_forecasts_streaming(map_type: str, resource_assignments: dict) -> Non
             non_zero = int((daily["y"] > 0).sum())
 
             if non_zero < 7:
-                # Weekday-average fallback
                 daily["weekday"] = daily["ds"].dt.dayofweek
                 wd_avg = daily.groupby("weekday")["y"].mean().to_dict()
                 preds = {}
@@ -342,14 +403,7 @@ def _train_forecasts_streaming(map_type: str, resource_assignments: dict) -> Non
                 }
                 predictions[key] = preds
 
-    payload = {
-        "last_data_date": last_data_date,
-        "forecast_end": forecast_end,
-        "predictions": predictions,
-    }
-
-    _write_forecast_to_github(map_type, payload)
-    st.session_state[f"forecasts_{map_type}"] = payload
+    return predictions
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -360,11 +414,21 @@ def build_forecast_pivot(
     fc_data: dict,
     selected_date: date,
     hour_range: tuple[int, int],
+    time_basis: str = "Completed",
 ) -> tuple[pd.DataFrame | None, list[int]]:
-    """Build a procedure x hour pivot from forecast predictions for a future date."""
+    """Build a procedure x hour pivot from forecast predictions for a future date.
+
+    time_basis selects which prediction set to use:
+      - "Completed" → predictions_complete (based on Date/Time - Complete)
+      - "In-Lab"    → predictions_inlab    (based on Date/Time - In Lab)
+    Legacy payloads without split predictions fall back to "predictions".
+    """
     h_start, h_end = hour_range
     hours = list(range(h_start, h_end + 1))
-    preds = fc_data.get("predictions", {})
+    if time_basis == "In-Lab":
+        preds = fc_data.get("predictions_inlab") or fc_data.get("predictions", {})
+    else:
+        preds = fc_data.get("predictions_complete") or fc_data.get("predictions", {})
 
     rows: dict = {}
     for (proc, hour), date_map in preds.items():

@@ -131,7 +131,7 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                                      label_visibility="collapsed",
                                      placeholder="Password")
             submitted = st.form_submit_button("Sign In",
-                                              use_container_width=True)
+                                              width="stretch")
             if submitted:
                 if password == st.secrets.get("app_password", ""):
                     st.session_state["app_authenticated"] = True
@@ -391,7 +391,7 @@ with st.sidebar:
 
                 # ── Refresh data ─────────────────────────────────────────────
                 st.markdown('<div class="refresh-btn">', unsafe_allow_html=True)
-                if st.button("↺  Refresh data", use_container_width=True, key="refresh_data_btn"):
+                if st.button("↺  Refresh data", width="stretch", key="refresh_data_btn"):
                     st.cache_data.clear()
                     _ss.pop("_partition_index", None)
                     st.rerun()
@@ -399,7 +399,7 @@ with st.sidebar:
 
                 # ── Refresh Forecast (manual trigger only — issue #7) ────────
                 if st.button(
-                    "⟳  Refresh Forecast", use_container_width=True,
+                    "⟳  Refresh Forecast", width="stretch",
                     key="refresh_forecast_btn",
                     disabled=(not _data_exists),
                 ):
@@ -446,7 +446,7 @@ with st.sidebar:
 
                         if st.button(
                             "Delete this range", type="primary",
-                            use_container_width=True, key="btn_del_range",
+                            width="stretch", key="btn_del_range",
                             disabled=(del_start > del_end),
                         ):
                             _ss["pending_delete_range"] = {
@@ -475,7 +475,7 @@ with st.sidebar:
                     st.markdown("**Step 2 — Add to master dataset**")
                     if st.button(
                         "Process & add to master",
-                        type="primary", use_container_width=True,
+                        type="primary", width="stretch",
                     ):
                         _ss["pending_upload"] = _ss.pop("staged_files")
                         st.rerun()
@@ -484,7 +484,7 @@ with st.sidebar:
                 st.markdown("---")
                 st.markdown("**Danger zone**")
                 if st.button(
-                    "Reset — delete all data", use_container_width=True,
+                    "Reset — delete all data", width="stretch",
                 ):
                     _ss["pending_reset"] = True
                     st.rerun()
@@ -581,14 +581,14 @@ with st.sidebar:
             _nc1, _nc2 = st.columns(2)
             with _nc1:
                 if st.button(
-                    "◄ Prev", use_container_width=True,
+                    "◄ Prev", width="stretch",
                     disabled=(selected_date <= _min_d),
                 ):
                     _ss["_pending_date"] = selected_date - timedelta(days=1)
                     st.rerun()
             with _nc2:
                 if st.button(
-                    "Next ►", use_container_width=True,
+                    "Next ►", width="stretch",
                     disabled=(selected_date >= _fc_max_d),
                 ):
                     _ss["_pending_date"] = selected_date + timedelta(days=1)
@@ -673,12 +673,12 @@ with st.sidebar:
 
             _ra, _rb = st.columns(2)
             with _ra:
-                if st.button("Apply", use_container_width=True, type="primary"):
+                if st.button("Apply", width="stretch", type="primary"):
                     _ss.resource_assignments = new_assignments
                     st.cache_data.clear()
                     st.rerun()
             with _rb:
-                if st.button("Reset defaults", use_container_width=True):
+                if st.button("Reset defaults", width="stretch"):
                     _ss.resource_assignments = deepcopy(DEFAULT_RESOURCES)
                     st.cache_data.clear()
                     st.rerun()
@@ -792,7 +792,9 @@ if view_mode == "Daily":
                 "Open Data Management and click **Refresh Forecast** to generate predictions."
             )
             st.stop()
-        pivot, hours = build_forecast_pivot(_fc_panel_data, selected_date, hour_range)
+        pivot, hours = build_forecast_pivot(
+            _fc_panel_data, selected_date, hour_range, time_basis=time_basis
+        )
         df_date_hour = None
         df_date      = pd.DataFrame()
     else:
@@ -926,10 +928,10 @@ if view_mode == "Daily":
     _table_h = min(80 + 35 * len(pivot), 900)
     if _is_forecast_view:
         st.dataframe(style_forecast_pivot(pivot, VMAX[map_type]),
-                     use_container_width=True, height=_table_h)
+                     width="stretch", height=_table_h)
     else:
         st.dataframe(style_pivot(pivot, VMAX[map_type]),
-                     use_container_width=True, height=_table_h)
+                     width="stretch", height=_table_h)
 
     # ── Downloads ────────────────────────────────────────────────────────────
     _file_prefix = map_type.replace(" ", "_")
@@ -943,7 +945,7 @@ if view_mode == "Daily":
                 data=build_png(df_date_hour, map_type, selected_date, hours),
                 file_name=f"{_file_prefix}_{_date_tag}.png",
                 mime="image/png",
-                use_container_width=True,
+                width="stretch",
                 key="daily_png_dl",
             )
         with _dl2:
@@ -962,7 +964,7 @@ if view_mode == "Daily":
                 data=_daily_raw_csv,
                 file_name=f"{_file_prefix}_raw_{_date_tag}.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
                 key="daily_csv_dl",
             )
 
@@ -1024,7 +1026,7 @@ if view_mode == "Daily":
                     f"**{sel_hour_label}** &nbsp;·&nbsp; Total volume: **{_cell_vol}**"
                 )
                 st.dataframe(
-                    detail_display, use_container_width=True,
+                    detail_display, width="stretch",
                     height=min(80 + 35 * len(detail_display), 500),
                 )
 
@@ -1122,7 +1124,7 @@ else:
     _m_table_h = min(80 + 35 * len(monthly_pivot), 900)
     st.dataframe(
         style_monthly_pivot(monthly_pivot, VMAX[map_type]),
-        use_container_width=True, height=_m_table_h,
+        width="stretch", height=_m_table_h,
     )
 
     # ── Monthly downloads ────────────────────────────────────────────────────
@@ -1138,7 +1140,7 @@ else:
             ),
             file_name=f"{_m_file_prefix}_{_m_file_tag}.png",
             mime="image/png",
-            use_container_width=True,
+            width="stretch",
             key="monthly_png_dl",
         )
     with _mdl2:
@@ -1157,7 +1159,7 @@ else:
             data=_monthly_raw_csv,
             file_name=f"{_m_file_prefix}_raw_{_m_file_tag}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
             key="monthly_csv_dl",
         )
 
@@ -1223,7 +1225,7 @@ else:
 
             st.dataframe(
                 style_monthly_pivot(weekday_pivot, _wd_vmax),
-                use_container_width=True,
+                width="stretch",
                 height=min(80 + 35 * 7, 400),
             )
 
@@ -1236,7 +1238,7 @@ else:
                     ),
                     file_name=f"{_m_file_prefix}_Weekday_{_m_file_tag}.png",
                     mime="image/png",
-                    use_container_width=True,
+                    width="stretch",
                     key="weekday_png_dl",
                 )
             with _wdl2:
@@ -1245,6 +1247,6 @@ else:
                     data=weekday_pivot.to_csv(index=True).encode(),
                     file_name=f"{_m_file_prefix}_Weekday_{_m_file_tag}.csv",
                     mime="text/csv",
-                    use_container_width=True,
+                    width="stretch",
                     key="weekday_csv_dl",
                 )
