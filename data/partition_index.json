@@ -1,24 +1,24 @@
 {
   "2025-01": {
-    "sha": "22dda149c30aed6cd8546aeb1079a69427221cd7",
+    "sha": "57a8eaf345e6d475936f2d39b319e45a0704e2bc",
     "rows": 256488,
     "min_date": "2025-01-01",
     "max_date": "2025-01-31",
-    "size_bytes": 6669379
+    "size_bytes": 7235414
   },
   "2025-02": {
-    "sha": "a3eafa47d3e72f927dc24bfe57ec53f0786c194e",
+    "sha": "bb3e0ad57150700460b2ec1734dc3151a796a6c7",
     "rows": 238459,
     "min_date": "2025-02-01",
     "max_date": "2025-02-28",
-    "size_bytes": 6273081
+    "size_bytes": 6812346
   },
   "2025-03": {
-    "sha": "bd315048d9d30e850e9e90b354b7b1a9a408f27b",
+    "sha": "eab9c4548d45d1bd17c800c70591385837a237d3",
     "rows": 267765,
     "min_date": "2025-03-01",
     "max_date": "2025-03-31",
-    "size_bytes": 6934054
+    "size_bytes": 7546819
   },
   "2025-04": {
     "sha": "9c6dc5082c9e2922face422a498a397ecb72689c",
