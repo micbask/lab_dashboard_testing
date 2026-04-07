@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Launch Agent: daily Exchange → Parquet ingest at 06:15 local time.
+
+  Install path (per-user):
+    ~/Library/LaunchAgents/com.usc.lab-dashboard-ingest.plist
+
+  IMPORTANT: BEFORE LOADING, EDIT THE TWO PLACEHOLDER PATHS BELOW:
+    - __PYTHON_BIN__  absolute path to the Python interpreter that has
+                      the repo's requirements + exchangelib installed,
+                      e.g. /Users/you/lab_dashboard_testing/.venv/bin/python3
+    - __REPO_PATH__   absolute path to your clone of the repo,
+                      e.g. /Users/you/lab_dashboard_testing
+
+  launchd alone cannot wake a sleeping Mac. To guarantee the 06:15 run
+  fires when the Mac is asleep, schedule a system wake 60s earlier via
+  pmset (run once, as admin):
+
+      sudo pmset repeat wakeorpoweron MTWRFSU 06:14:00
+
+  Verify with:  pmset -g sched
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.usc.lab-dashboard-ingest</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON_BIN__</string>
+        <string>__REPO_PATH__/scripts/email_ingest.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO_PATH__</string>
+
+    <!-- Fire daily at 06:15 local time -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>15</integer>
+    </dict>
+
+    <!-- Do not run immediately when loaded; wait for the calendar trigger -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!--
+      If the Mac was asleep/off at 06:15, launchd will still run the job
+      once the machine is next awake. Combined with `pmset repeat
+      wakeorpoweron` above, this gives reliable 06:15 execution.
+    -->
+
+    <!-- Log destinations -->
+    <key>StandardOutPath</key>
+    <string>/tmp/lab-dashboard-ingest.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/lab-dashboard-ingest.err.log</string>
+
+    <!-- Make sure PATH is set for git / python in non-interactive shells -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <!-- Prevent runaway re-execution if the script crashes immediately -->
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+</dict>
+</plist>

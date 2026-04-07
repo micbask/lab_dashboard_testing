@@ -1,0 +1,4 @@
+# Extra deps for scripts/email_ingest.py only.
+# The rest of the repo's requirements.txt already covers pandas, pyarrow,
+# openpyxl, xlrd, duckdb, requests, streamlit (used via stub).
+exchangelib>=5.2.0
