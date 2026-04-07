@@ -2,12 +2,14 @@
 app.py — Lab Productivity Heatmap Dashboard (Orchestrator)
 Keck Medicine of USC
 
-Architecture:
-  - Master dataset stored as Snappy-compressed Parquet in GitHub (data/lab_data.parquet)
-  - On load: reads Parquet from GitHub → renders interactive heatmaps
-  - On upload: parses XLSX, merges into master, writes back to GitHub
-  - After a write, fresh_df in session_state bypasses the GitHub CDN stale-read
-    window; user can force a re-fetch with the "Refresh data" button
+CRITICAL DATA ACCESS PATTERN:
+  The dashboard NEVER loads the full dataset into memory.
+  - Sidebar metadata comes from the partition index (a tiny JSON file).
+  - Heatmap data comes from load_filtered_data() which reads ONLY the
+    partition(s) covering the selected date/month, filtered by resources
+    and procedure exclusions via DuckDB.
+  - No fresh_df in session state — after writes, we invalidate the cache
+    and let the next render re-read only what it needs.
 """
 
 import calendar as _cal
@@ -17,6 +19,28 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
+from config import (
+    DEFAULT_RESOURCES, VMAX, ALL_RESOURCES, MAP_TYPES,
+    EXCLUDE_PROCS, HOUR_LABELS, LABEL_TO_HOUR,
+)
+from parsing import parse_single_file, deduplicate_and_merge, clean_procedure_names
+from storage import (
+    storage_is_configured, get_data_summary,
+    load_filtered_data, ingest_new_data,
+    delete_date_range, reset_all_data,
+    ensure_partitioned_storage, get_index_hash,
+    count_rows_in_date_range,
+)
+from forecasting import (
+    load_forecasts, retrain_all_forecasts_streaming,
+    build_forecast_pivot,
+)
+from ui_components import (
+    inject_css, setup_mpl_font,
+    metric_card, render_header, status_chip,
+    style_pivot, style_monthly_pivot, style_forecast_pivot,
+    build_png, build_monthly_png, build_weekday_png,
+)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -29,164 +53,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-# THEME & GLOBAL CSS
-# ═════════════════════════════════════════════════════════════════════════════
-_NAVY   = "#800000"
-_GOLD   = "#FFCC00"
-_STEEL  = "#9D2235"
-_WHITE  = "#FFFFFF"
-_LIGHT  = "#F4F6FA"
-_MUTED  = "#555555"
-_BORDER = "#e0e0e0"
-
-st.markdown(f"""
-<style>
-  /* ── App background ── */
-  .stApp {{ background-color: {_LIGHT}; }}
-
-  /* ── Top header banner ── */
-  .keck-header {{
-    background: linear-gradient(135deg, {_NAVY} 0%, #1a1a1a 100%);
-    padding: 1.1rem 1.8rem;
-    border-radius: 10px;
-    margin-bottom: 1.2rem;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }}
-  .keck-header h1 {{
-    color: {_WHITE};
-    font-size: 1.45rem;
-    font-weight: 700;
-    margin: 0;
-    letter-spacing: 0.3px;
-  }}
-  .keck-header .subtitle {{
-    color: {_GOLD};
-    font-size: 0.85rem;
-    margin: 0.25rem 0 0;
-    opacity: 0.95;
-  }}
-  .keck-badge {{
-    background: #FFCC00;
-    color: #800000;
-    font-size: 0.7rem;
-    font-weight: 700;
-    padding: 3px 10px;
-    border-radius: 12px;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-  }}
-  .keck-date-label {{
-    color: #CBD5E1;
-    font-size: 0.78rem;
-    margin-top: 6px;
-    display: block;
-  }}
-
-  /* ── Metric cards ── */
-  .metric-card {{
-    background: {_WHITE};
-    border: 1px solid {_BORDER};
-    border-left: 4px solid {_STEEL};
-    border-radius: 8px;
-    padding: 0.85rem 1rem;
-    margin-bottom: 0.5rem;
-    height: 100%;
-  }}
-  .metric-card.accent {{ border-left-color: {_GOLD}; }}
-  .metric-card .label {{
-    color: {_MUTED};
-    font-size: 0.72rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.6px;
-    margin-bottom: 0.3rem;
-  }}
-  .metric-card .value {{
-    color: {_NAVY};
-    font-size: 1.5rem;
-    font-weight: 700;
-    line-height: 1.1;
-    word-break: break-word;
-  }}
-  .metric-card .sub {{
-    color: {_MUTED};
-    font-size: 0.72rem;
-    margin-top: 0.2rem;
-  }}
-
-  /* ── Section headings ── */
-  .section-heading {{
-    color: {_NAVY};
-    font-size: 1.05rem;
-    font-weight: 700;
-    border-bottom: 2px solid {_GOLD};
-    padding-bottom: 0.3rem;
-    margin: 1rem 0 0.8rem;
-  }}
-
-  /* ── Heatmap legend bar ── */
-  .heatmap-legend {{
-    background: {_WHITE};
-    border: 1px solid {_BORDER};
-    border-radius: 6px;
-    padding: 0.5rem 0.8rem;
-    font-size: 0.78rem;
-    color: {_MUTED};
-    margin-bottom: 0.6rem;
-  }}
-
-  /* ── Status chips ── */
-  .status-chip {{
-    display: inline-block;
-    background: #DCFCE7;
-    color: #166534;
-    font-size: 0.7rem;
-    font-weight: 600;
-    padding: 3px 9px;
-    border-radius: 10px;
-    margin-bottom: 0.4rem;
-  }}
-  .status-chip.warn  {{ background: #FEF9C3; color: #854D0E; }}
-  .status-chip.error {{ background: #FEE2E2; color: #991B1B; }}
-
-  /* ── Sidebar tweaks ── */
-  section[data-testid="stSidebar"] {{ background-color: #F9FAFC; }}
-  section[data-testid="stSidebar"] .stMarkdown h3 {{
-    color: {_NAVY};
-    font-size: 0.8rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 0.2rem;
-    margin-top: 0.5rem;
-  }}
-  section[data-testid="stSidebar"] .block-container {{
-    padding-top: 0.5rem;
-  }}
-  section[data-testid="stSidebar"] .stSelectbox,
-  section[data-testid="stSidebar"] .stSlider,
-  section[data-testid="stSidebar"] .stDateInput {{
-    margin-bottom: 0.25rem;
-  }}
-  section[data-testid="stSidebar"] hr {{
-    margin: 0.4rem 0;
-  }}
-
-  /* ── DataFrames ── */
-  div[data-testid="stDataFrame"] {{
-    border-radius: 8px;
-    overflow: hidden;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-  }}
-
-  /* ── General padding ── */
-  .block-container {{ padding-top: 1rem; padding-bottom: 2rem; padding-left: 1rem; padding-right: 1rem; }}
-</style>
-""", unsafe_allow_html=True)
+inject_css()
+setup_mpl_font()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -197,84 +65,87 @@ _app_password = st.secrets.get("app_password", None)
 if "app_authenticated" not in st.session_state:
     st.session_state["app_authenticated"] = False
 
-# ═════════════════════════════════════════════════════════════════════════════
-# CONFIGURATION
-# ═════════════════════════════════════════════════════════════════════════════
-# All per-site configuration lives here.  To add a new lab site, add one entry
-# to SITE_CONFIG with its resource list and heatmap colour-scale ceiling.
-
-SITE_CONFIG: dict[str, dict] = {
-    "Keck Core": {
-        "resources": [
-            "Keck Abbott DI", "Keck Coagulation", "Keck Cobas",
-            "Keck HEME Orders", "Keck IRIS", "Keck ISED", "Keck SmartLyte A",
-            "Keck TEG 5000", "Keck Urinalysis", "USC Manual Coagulation Bench",
-            "USC Manual Hematology Bench", "USC Manual Urinalysis Bench",
-            "USC Serology Routine Bench",
-        ],
-        "vmax": 50,
-    },
-    "Norris Core": {
-        "resources": [
-            "NCH Coagulation", "NCH COBAS", "NCH HEME Orders", "NCH IRIS",
-            "NCI Manual Chemistry Bench", "NCI Manual Hematology Bench",
-            "NCI Stem Cell Bench", "NCH Cobas PRO A", "NCH Cobas PRO B",
-            "NCH GEM 4000 H", "NCH GEM 4000 I",
-        ],
-        "vmax": 30,
-    },
-    "Norris Specialty": {
-        "resources": [
-            "NCH DS2 A", "NCH HydraSys", "NCH PFA 100", "NCH Tosoh G8",
-            "NCI Manual Flow Bench", "NCI Manual Verify Now Bench",
-        ],
-        "vmax": 20,
-    },
-}
-
-# Derived helpers — computed once at import from SITE_CONFIG
-DEFAULT_RESOURCES: dict[str, list] = {k: v["resources"] for k, v in SITE_CONFIG.items()}
-VMAX:              dict[str, int]  = {k: v["vmax"]      for k, v in SITE_CONFIG.items()}
-ALL_RESOURCES:     list[str]       = sorted({r for v in SITE_CONFIG.values() for r in v["resources"]})
-MAP_TYPES:         list[str]       = list(SITE_CONFIG.keys())
-
-# Procedures always excluded from heatmaps (regardless of site)
-EXCLUDE_PROCS: set[str] = {
-    "Glomerular Filtration Rate Estimated",
-    ".Diff Auto -",
-    "Manual Diff-",
-}
-
-# Resource remaps applied at parse time.
-# Format: { (order_procedure, old_resource): new_resource }
-# To add a remap, append one entry here — no other code needs to change.
-RESOURCE_REMAPS: dict[tuple[str, str], str] = {
-    ("Kappa/Lambda Free Light Chains Panel", "NCH COBAS"):    "NCI Manual Flow Bench",
-    ("Manual Diff",                          "Keck HEME Orders"): "NCH HEME Orders",
-}
-
-# Column names required from source files
-REQUIRED_COLS: set[str] = {
-    "Performing Service Resource",
-    "Order Procedure",
-    "Date/Time - Complete",
-    "Complete Volume",
-}
-
-# Parquet filename
-PARQUET_FILENAME = "lab_data.parquet"
-
-# Hour display helpers
-def _hour_label(h: int) -> str:
-    hr12   = 12 if h % 12 == 0 else h % 12
-    suffix = "AM" if h < 12 else "PM"
-    return f"{hr12}{suffix}"
-
-HOUR_LABELS   = {h: _hour_label(h) for h in range(24)}
-LABEL_TO_HOUR = {v: k for k, v in HOUR_LABELS.items()}
-
-# Storage backend flag (evaluated once)
-GITHUB_CONFIGURED = "github" in st.secrets
+if _app_password is not None and not st.session_state["app_authenticated"]:
+    st.markdown('<div id="login-overlay">', unsafe_allow_html=True)
+    st.markdown('<div style="height: 15vh; min-height: 48px;"></div>',
+                unsafe_allow_html=True)
+    _, col, _ = st.columns([1, 0.9, 1])
+    with col:
+        st.markdown("""
+            <div style="
+                background: linear-gradient(150deg, #6F1828 0%, #521322 60%, #3d0e19 100%);
+                padding: 2rem 2.4rem 1.8rem 2.4rem;
+                border-radius: 12px 12px 0 0;
+                text-align: center;
+                box-shadow: none;
+            ">
+                <div style="
+                    display: inline-block;
+                    background: rgba(237,193,83,0.18);
+                    border: 1px solid rgba(237,193,83,0.4);
+                    color: #EDC153;
+                    font-family: 'Inter', system-ui, sans-serif;
+                    font-size: 0.62rem;
+                    font-weight: 700;
+                    letter-spacing: 0.18em;
+                    text-transform: uppercase;
+                    padding: 3px 12px;
+                    border-radius: 20px;
+                    margin-bottom: 1rem;
+                ">Keck Medicine of USC</div>
+                <div style="
+                    color: #ffffff;
+                    font-family: 'Inter', system-ui, sans-serif;
+                    font-size: 1.45rem;
+                    font-weight: 700;
+                    letter-spacing: 0.01em;
+                    margin: 0 0 0.3rem 0;
+                    line-height: 1.2;
+                ">Laboratory Productivity</div>
+                <div style="
+                    color: rgba(237,193,83,0.85);
+                    font-family: 'Inter', system-ui, sans-serif;
+                    font-size: 0.82rem;
+                    font-weight: 400;
+                    letter-spacing: 0.01em;
+                    margin: 0;
+                ">Analytics Dashboard</div>
+            </div>
+            <div style="
+                background: #ffffff;
+                padding: 1.8rem 2.4rem 2.2rem 2.4rem;
+                border-radius: 0 0 12px 12px;
+                border: 1px solid #dde1e7;
+                border-top: none;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+            ">
+                <p style="
+                    color: #475569;
+                    font-size: 0.82rem;
+                    margin: 0 0 1.2rem 0;
+                    font-family: 'Inter', system-ui, sans-serif;
+                ">Enter your access password to continue.</p>
+        """, unsafe_allow_html=True)
+        with st.form("login_form", enter_to_submit=True):
+            password = st.text_input("Password", type="password",
+                                     label_visibility="collapsed",
+                                     placeholder="Password")
+            submitted = st.form_submit_button("Sign In",
+                                              width="stretch")
+            if submitted:
+                if password == st.secrets.get("app_password", ""):
+                    st.session_state["app_authenticated"] = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect password. Please try again.")
+        st.markdown("""
+            </div>
+            <div style="text-align:center; margin-top: 1.2rem; color: #94a3b8; font-size: 0.7rem; font-family: 'Inter', system-ui, sans-serif;">
+                Keck Medicine of USC &nbsp;·&nbsp; Laboratory Analytics
+            </div>
+        """, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.stop()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -286,349 +157,11 @@ if "resource_assignments" not in _ss:
     _ss.resource_assignments = deepcopy(DEFAULT_RESOURCES)
 if "last_map_type" not in _ss:
     _ss.last_map_type = None
-if "app_authenticated" not in _ss:
-    _ss.app_authenticated = False
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# APP-LEVEL PASSWORD GATE
+# LOCAL HELPER FUNCTIONS
 # ═════════════════════════════════════════════════════════════════════════════
-_app_password = st.secrets.get("app_password", None)
-if _app_password is not None and not _ss.app_authenticated:
-    st.markdown(f"""
-    <div style="max-width:380px; margin:6rem auto 0; padding:2rem 2rem 1.5rem;
-                background:#fff; border-radius:12px;
-                box-shadow:0 4px 20px rgba(0,0,0,0.10);">
-      <div style="background:linear-gradient(135deg,{_NAVY} 0%,#1a1a1a 100%);
-                  border-radius:8px; padding:1rem 1.2rem; margin-bottom:1.4rem;">
-        <div style="color:#fff; font-size:1.1rem; font-weight:700;">
-          Analytics Dashboard
-        </div>
-        <div style="color:{_GOLD}; font-size:0.8rem; margin-top:0.2rem;">
-          Keck Medicine of USC &nbsp;·&nbsp; Laboratory Productivity
-        </div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    with st.container():
-        _col = st.columns([1, 2, 1])[1]
-        with _col:
-            with st.form("login_form", enter_to_submit=True):
-                _pw_input = st.text_input("Password", type="password")
-                _submitted = st.form_submit_button("Log in", use_container_width=True, type="primary")
-                if _submitted:
-                    if _pw_input == _app_password:
-                        _ss.app_authenticated = True
-                        st.rerun()
-                    else:
-                        st.error("Incorrect password.")
-    st.stop()
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# GITHUB STORAGE HELPERS
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _gh_headers() -> dict:
-    """Return authenticated GitHub API request headers."""
-    return {
-        "Authorization": f"Bearer {st.secrets['github']['token']}",
-        "Accept": "application/vnd.github+json",
-    }
-
-
-def _gh_coords() -> tuple[str, str, str]:
-    """Return (owner, repo_name, file_path) from Streamlit secrets."""
-    repo  = st.secrets["github"]["repo"]
-    path  = st.secrets["github"].get("data_path", "data/lab_data.parquet")
-    owner, repo_name = repo.split("/", 1)
-    return owner, repo_name, path
-
-
-@st.cache_data(show_spinner=False, ttl=60)
-def _get_github_sha() -> str | None:
-    """Return the current blob SHA of the master parquet on GitHub, or None if absent.
-
-    Cached for 60 s.  Always cleared explicitly after any write operation so
-    the next read picks up the new SHA immediately.
-    """
-    owner, repo, path = _gh_coords()
-    resp = requests.get(
-        f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
-        headers=_gh_headers(), timeout=15,
-    )
-    if resp.status_code == 404:
-        return None
-    resp.raise_for_status()
-    return resp.json()["sha"]
-
-
-def _read_parquet_from_github(retries: int = 3) -> bytes:
-    """Download the master parquet from GitHub with automatic retry.
-
-    Handles both small files (base64-encoded inline in the Contents API
-    response) and large files (GitHub returns an empty 'content' field with a
-    separate 'download_url' for files > 1 MB).
-    """
-    owner, repo, path = _gh_coords()
-    last_err = None
-    for attempt in range(retries):
-        try:
-            resp = requests.get(
-                f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
-                headers=_gh_headers(), timeout=30,
-            )
-            resp.raise_for_status()
-            data        = resp.json()
-            content_str = data.get("content", "").strip()
-
-            if content_str:
-                raw = base64.b64decode(content_str)
-            elif data.get("download_url"):
-                dl  = requests.get(data["download_url"], headers=_gh_headers(), timeout=60)
-                dl.raise_for_status()
-                raw = dl.content
-            else:
-                raw = b""
-
-            if len(raw) == 0:
-                raise ValueError(
-                    "Parquet file on GitHub is 0 bytes. "
-                    "Use Data Management → Upload to re-populate the master dataset."
-                )
-            return raw
-
-        except Exception as exc:
-            last_err = exc
-            if attempt < retries - 1:
-                time.sleep(2 ** attempt)
-
-    raise RuntimeError(f"GitHub read failed after {retries} attempts: {last_err}")
-
-
-def _write_parquet_to_github(parquet_bytes: bytes) -> None:
-    """Create or update the master parquet file on GitHub.
-
-    Validates the payload size before touching the remote file to protect
-    against accidentally overwriting good data with an empty or corrupt file.
-    Clears the SHA cache on success so future reads use the new SHA.
-    """
-    if len(parquet_bytes) < 100:
-        raise ValueError(
-            f"Refusing to write {len(parquet_bytes)}-byte payload — data appears empty."
-        )
-
-    owner, repo, path = _gh_coords()
-
-    # Confirm the repo is reachable before attempting the write
-    check = requests.get(
-        f"https://api.github.com/repos/{owner}/{repo}",
-        headers=_gh_headers(), timeout=15,
-    )
-    if check.status_code == 404:
-        raise RuntimeError(
-            f"GitHub repo '{owner}/{repo}' not found.  "
-            "Check that the 'repo' value in your Streamlit secrets exactly matches "
-            "your GitHub repo name (it is case-sensitive)."
-        )
-    check.raise_for_status()
-
-    sha     = _get_github_sha()
-    payload = {
-        "message": "Update lab_data.parquet via dashboard",
-        "content": base64.b64encode(parquet_bytes).decode(),
-    }
-    if sha:
-        payload["sha"] = sha
-
-    resp = requests.put(
-        f"https://api.github.com/repos/{owner}/{repo}/contents/{path.lstrip('/')}",
-        headers=_gh_headers(), json=payload, timeout=60,
-    )
-    if not resp.ok:
-        raise RuntimeError(
-            f"GitHub write failed {resp.status_code}:\n"
-            f"Repo: {owner}/{repo}  Path: {path}\n"
-            f"{resp.text[:300]}"
-        )
-    _get_github_sha.clear()
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# DATA PARSING & MERGING
-# ═════════════════════════════════════════════════════════════════════════════
-
-def parse_single_file(file_bytes: bytes, filename: str = "") -> pd.DataFrame:
-    """Parse a CSV or Excel export into a clean, analysis-ready DataFrame.
-
-    Only the four columns in ``REQUIRED_COLS`` are loaded for speed.
-    Resource remaps from ``RESOURCE_REMAPS`` are applied before returning.
-    Adds derived ``hour`` (int) and ``complete_date`` (datetime.date) columns.
-    """
-    fname = filename.lower()
-    if fname.endswith(".csv") or fname.endswith(".txt"):
-        hdr      = pd.read_csv(io.BytesIO(file_bytes), nrows=0)
-        hdr.columns = [c.strip() for c in hdr.columns]
-        use_cols = [c for c in hdr.columns if c in REQUIRED_COLS]
-        df = pd.read_csv(io.BytesIO(file_bytes), usecols=use_cols, low_memory=False)
-    else:
-        hdr      = pd.read_excel(io.BytesIO(file_bytes), sheet_name=0, nrows=0)
-        hdr.columns = [c.strip() if isinstance(c, str) else c for c in hdr.columns]
-        use_cols = [c for c in hdr.columns if c in REQUIRED_COLS]
-        df = pd.read_excel(
-            io.BytesIO(file_bytes), sheet_name=0, usecols=use_cols, engine="openpyxl"
-        )
-
-    df.columns = [c.strip() if isinstance(c, str) else c for c in df.columns]
-    df["Performing Service Resource"] = df["Performing Service Resource"].astype(str).str.strip()
-    df["Order Procedure"]             = df["Order Procedure"].astype(str).str.strip()
-
-    # Apply resource remaps defined in RESOURCE_REMAPS
-    for (proc, old_res), new_res in RESOURCE_REMAPS.items():
-        mask = (df["Order Procedure"] == proc) & (df["Performing Service Resource"] == old_res)
-        df.loc[mask, "Performing Service Resource"] = new_res
-
-    df["Date/Time - Complete"] = pd.to_datetime(df["Date/Time - Complete"], errors="coerce")
-    df = df.dropna(subset=["Date/Time - Complete"])
-    df["hour"]          = df["Date/Time - Complete"].dt.hour.astype(int)
-    df["complete_date"] = df["Date/Time - Complete"].dt.date
-    df["Complete Volume"] = (
-        pd.to_numeric(df["Complete Volume"], errors="coerce").fillna(0).astype(float)
-    )
-    return df
-
-
-def deduplicate_and_merge(
-    frames: list[tuple[str, pd.DataFrame]],
-) -> tuple[pd.DataFrame, list[dict]]:
-    """Merge DataFrames from multiple files, trimming overlapping time windows.
-
-    Strategy:
-      1. Sort files by their earliest timestamp.
-      2. For each consecutive pair where file[i] overlaps file[i+1], trim
-         file[i] at file[i+1]'s start time.  Rows in the overlap window are
-         taken exclusively from the later (presumably more complete) file.
-      3. The last file is always kept in full.
-
-    Returns (merged_df, summary_records).
-    """
-    if not frames:
-        return pd.DataFrame(), []
-
-    records = sorted(
-        [
-            {
-                "fname":  name,
-                "min_dt": df["Date/Time - Complete"].min(),
-                "max_dt": df["Date/Time - Complete"].max(),
-                "df":     df,
-            }
-            for name, df in frames
-        ],
-        key=lambda r: r["min_dt"],
-    )
-
-    summary    = []
-    result_dfs = []
-    for i, rec in enumerate(records):
-        df     = rec["df"].copy()
-        cutoff = rec["max_dt"]
-        if i + 1 < len(records):
-            next_min = records[i + 1]["min_dt"]
-            if next_min <= cutoff:
-                cutoff = next_min
-                df = df[df["Date/Time - Complete"] < cutoff]
-        result_dfs.append(df)
-        summary.append({
-            "File":      rec["fname"],
-            "Data from": rec["min_dt"].strftime("%Y-%m-%d %H:%M"),
-            "Data to":   cutoff.strftime("%Y-%m-%d %H:%M"),
-            "Rows kept": len(df),
-        })
-
-    return pd.concat(result_dfs, ignore_index=True), summary
-
-
-def merge_new_into_master(
-    existing_df: pd.DataFrame, new_df: pd.DataFrame
-) -> tuple[pd.DataFrame, dict]:
-    """Merge a newly uploaded file into the existing master dataset.
-
-    Returns (merged_df, stats_dict).  Stats include row counts before/after.
-    """
-    merged, _ = deduplicate_and_merge([("existing", existing_df), ("new file", new_df)])
-    stats = {
-        "rows_before":    len(existing_df),
-        "rows_after":     len(merged),
-        "rows_added":     len(merged) - len(existing_df),
-        "new_date_range": f"{new_df['complete_date'].min()} → {new_df['complete_date'].max()}",
-    }
-    return merged, stats
-
-
-def df_to_parquet_bytes(df: pd.DataFrame) -> bytes:
-    """Serialise a DataFrame to Snappy-compressed Parquet and return raw bytes."""
-    buf = io.BytesIO()
-    df.to_parquet(buf, index=False, compression="snappy")
-    return buf.getvalue()
-
-
-def _parquet_bytes_to_df(raw: bytes) -> pd.DataFrame:
-    """Deserialise Parquet bytes, ensuring derived helper columns exist."""
-    df = pd.read_parquet(io.BytesIO(raw))
-    if "complete_date" not in df.columns:
-        df["complete_date"] = pd.to_datetime(df["Date/Time - Complete"]).dt.date
-    if "hour" not in df.columns:
-        df["hour"] = pd.to_datetime(df["Date/Time - Complete"]).dt.hour.astype(int)
-    return df
-
-
-def _remove_date_range(df: pd.DataFrame, start: date, end: date) -> pd.DataFrame:
-    """Return a copy of df with all rows in [start, end] (inclusive) removed."""
-    mask = (df["complete_date"] >= start) & (df["complete_date"] <= end)
-    return df[~mask].reset_index(drop=True)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# DATA LOADING  (cached; cache-key encodes the file version)
-# ═════════════════════════════════════════════════════════════════════════════
-
-@st.cache_data(show_spinner="Loading master dataset…", ttl=300)
-def _load_master_data(cache_key: str) -> pd.DataFrame:
-    """Load the master parquet from GitHub.
-
-    ``cache_key`` encodes the current blob SHA so the Streamlit cache is
-    automatically busted when the remote file changes.
-    """
-    return _parquet_bytes_to_df(_read_parquet_from_github())
-
-
-@st.cache_data(show_spinner="Processing uploaded files…")
-def _load_from_uploads(files_bytes: tuple[tuple[str, bytes], ...]) -> tuple[pd.DataFrame, list]:
-    """Parse and merge one or more locally uploaded files (no remote storage).
-
-    ``files_bytes`` must be a tuple (not a list) so Streamlit can hash it.
-    """
-    frames = [(name, parse_single_file(b, filename=name)) for name, b in files_bytes]
-    return deduplicate_and_merge(frames)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# MAP FILTERING & PIVOT
-# ═════════════════════════════════════════════════════════════════════════════
-
-def filter_for_map(df: pd.DataFrame, map_type: str) -> pd.DataFrame:
-    """Filter the master dataset to the resources and procedures for one map.
-
-    Applies the current resource assignments from session state, excludes
-    globally excluded procedures, and limits to the top-30 procedures by
-    total cumulative volume.
-    """
-    resources = _ss.resource_assignments[map_type]
-    out = df[df["Performing Service Resource"].isin(resources)].copy()
-    return out[~out["Order Procedure"].isin(EXCLUDE_PROCS)].copy()
-
 
 def build_pivot(
     df: pd.DataFrame,
@@ -647,13 +180,13 @@ def build_pivot(
     if df_dh.empty:
         return None, None, df_date, hours
 
-    # Top-30 by that day's total volume only (matches original per-day script behaviour)
     top30 = (
         df_date.groupby("Order Procedure")["Complete Volume"]
         .sum().sort_values(ascending=False).head(30).index.tolist()
     )
-    df_date = df_date[df_date["Order Procedure"].isin(top30)]
-    df_dh   = df_dh[df_dh["Order Procedure"].isin(top30)]
+    df_dh = df_dh[df_dh["Order Procedure"].isin(top30)].copy()
+    if df_dh.empty:
+        return None, None, df_date, hours
 
     pivot = (
         df_dh.pivot_table(
@@ -728,20 +261,8 @@ def build_weekday_pivot(
     for d in pd.date_range(month_start, month_end):
         wd_counts[d.dayofweek] += 1
 
-def _render_header(map_type: str, date_str: str) -> None:
-    """Render the branded Keck Medicine header banner."""
-    st.markdown(f"""
-    <div class="keck-header">
-      <div>
-        <h1>Analytics Dashboard</h1>
-        <p class="subtitle">Keck Medicine of USC &nbsp;·&nbsp; {map_type}</p>
-      </div>
-      <div style="text-align:right;">
-        <span class="keck-badge">Laboratory Productivity</span>
-        <span class="keck-date-label">{date_str}</span>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+    for wd in range(7):
+        pivot.loc[wd] = pivot.loc[wd] / max(wd_counts[wd], 1)
 
     pivot["Total"] = pivot[list(range(24))].sum(axis=1)
 
@@ -761,9 +282,8 @@ with st.sidebar:
     st.markdown("### Map Type")
     map_type = st.selectbox("Map type", MAP_TYPES, label_visibility="collapsed")
 
-    # Track map type changes — keep the current date value so the snapping
-    # logic below can find the closest available date in the new map's dataset.
     if _ss.last_map_type != map_type:
+        _ss.pop("date_picker", None)
         _ss.last_map_type = map_type
 
     # ── View mode toggle ─────────────────────────────────────────────────────
@@ -792,19 +312,12 @@ with st.sidebar:
     # ── Pending action: reset entire dataset ─────────────────────────────────
     if _ss.pop("pending_reset", False):
         try:
-            owner, repo, path = _gh_coords()
-            sha = _get_github_sha()
-            if sha:
-                requests.delete(
-                    f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
-                    headers=_gh_headers(),
-                    json={"message": "Reset master dataset", "sha": sha},
-                    timeout=15,
-                )
-                _get_github_sha.clear()
-            st.cache_data.clear()
-            _ss.pop("fresh_df", None)
-            st.success("Master dataset cleared.")
+            if storage_is_configured():
+                reset_all_data()
+                st.cache_data.clear()
+                st.success("Master dataset cleared.")
+            for _mt in MAP_TYPES:
+                _ss.pop(f"forecasts_{_mt}", None)
         except Exception as _rst_err:
             st.error(f"Reset failed: {_rst_err}")
 
@@ -812,19 +325,8 @@ with st.sidebar:
     if "pending_delete_range" in _ss:
         del_info = _ss.pop("pending_delete_range")
         try:
-            if "fresh_df" in _ss:
-                src_df = _ss["fresh_df"]
-            else:
-                sha_dr = _get_github_sha()
-                if not sha_dr:
-                    raise ValueError("No data on GitHub to delete from.")
-                src_df = _parquet_bytes_to_df(_read_parquet_from_github())
-
-            rows_before = len(src_df)
-            new_df      = _remove_date_range(src_df, del_info["start"], del_info["end"])
-            pq_bytes    = df_to_parquet_bytes(new_df)
-            _write_parquet_to_github(pq_bytes)
-            _ss["fresh_df"] = new_df
+            result = delete_date_range(del_info["start"], del_info["end"])
+            st.cache_data.clear()
             st.success(
                 f"Deleted {result['rows_removed']:,} rows "
                 f"({del_info['start']} → {del_info['end']})."
@@ -833,37 +335,30 @@ with st.sidebar:
             st.error(f"Delete failed: {_dr_err}")
 
     # ── Data source & loading ────────────────────────────────────────────────
+    # CRITICAL: We do NOT load any data here.  We only read the partition
+    # index (a tiny JSON) to show summary stats.  Actual data is loaded
+    # lazily when the main panel renders, filtered to exactly what's needed.
+    st.markdown("---")
     st.markdown("### Data Source")
 
-    raw_df    = None
-    merge_log = []
+    _data_exists = False
+    _data_summary = {"total_rows": 0, "partitions": 0}
 
-    if "admin_authorized" not in _ss:
-        _ss.admin_authorized = False
-
-    if GITHUB_CONFIGURED:
-        st.caption("Storage: GitHub")
+    if storage_is_configured():
+        st.caption("Storage: GitHub (partitioned)")
 
         try:
-            if "fresh_df" in _ss:
-                # Use the in-memory post-upload snapshot — avoids GitHub CDN
-                # stale-read delay (can persist for 30–60 s after a commit).
-                # The snapshot remains until the user clicks "Refresh data".
-                raw_df       = _ss["fresh_df"]
-                _data_exists = True
-            else:
-                _sha         = _get_github_sha()
-                _data_exists = _sha is not None
-                if _data_exists:
-                    raw_df = _load_master_data(_sha)
-                else:
-                    _status_chip("No data yet — upload below", level="warn")
+            _data_exists = ensure_partitioned_storage()
+            if _data_exists:
+                _data_summary = get_data_summary()
+                if _data_summary["total_rows"] == 0:
+                    _data_exists = False
 
-            # ── Row count chip — always visible outside the expander ─────────
-            if raw_df is not None and not raw_df.empty:
-                _chip_text = (
-                    f"{len(raw_df):,} rows · "
-                    f"{raw_df['complete_date'].min()} → {raw_df['complete_date'].max()}"
+            if _data_exists:
+                status_chip(
+                    f"{_data_summary['total_rows']:,} rows · "
+                    f"{_data_summary['min_date']} → {_data_summary['max_date']}",
+                    level="ok",
                 )
             else:
                 status_chip("No data yet — upload below", level="warn")
@@ -872,36 +367,48 @@ with st.sidebar:
             status_chip("Load error", level="error")
             st.error(f"Could not read data index: {_load_err}")
 
-        # ── Data Management expander (password-protected) ────────────────────
+        # ── Data Management expander ─────────────────────────────────────────
+        st.markdown("---")
         with st.expander("Data Management", expanded=not _data_exists):
 
-            if not _ss.admin_authorized:
-                _admin_secret = st.secrets.get("admin_password", None)
-                if _admin_secret is None:
-                    st.error(
-                        "Admin access is not configured. "
-                        "Set `admin_password` in Streamlit secrets to enable."
-                    )
+            admin_pw   = st.secrets.get("admin_password", None)
+            authorized = True
+            if admin_pw:
+                if _ss.get("admin_authorized", False):
+                    authorized = True
                 else:
-                    st.caption("Enter the admin password to manage data.")
-                    _entered_pw = st.text_input(
-                        "Password", type="password", key="admin_pw_input"
+                    entered_pw = st.text_input(
+                        "Admin password", type="password", key="admin_pw"
                     )
-                    if _entered_pw:
-                        if _entered_pw == _admin_secret:
-                            _ss.admin_authorized = True
-                            st.rerun()
-                        else:
-                            st.error("Incorrect password.")
-            else:
+                    if entered_pw == admin_pw:
+                        _ss["admin_authorized"] = True
+                        st.rerun()
+                    elif entered_pw:
+                        st.error("Incorrect password.")
+                    authorized = _ss.get("admin_authorized", False)
+
+            if authorized:
+
                 # ── Refresh data ─────────────────────────────────────────────
-                if st.button("↺  Refresh data", use_container_width=True):
-                    _ss.pop("fresh_df", None)
+                st.markdown('<div class="refresh-btn">', unsafe_allow_html=True)
+                if st.button("↺  Refresh data", width="stretch", key="refresh_data_btn"):
                     st.cache_data.clear()
+                    _ss.pop("_partition_index", None)
+                    st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
+
+                # ── Refresh Forecast (manual trigger only — issue #7) ────────
+                if st.button(
+                    "⟳  Refresh Forecast", width="stretch",
+                    key="refresh_forecast_btn",
+                    disabled=(not _data_exists),
+                ):
+                    _ss["pending_forecast_retrain"] = True
                     st.rerun()
 
-                # ── Current dataset summary ───────────────────────────────────
-                if raw_df is not None and not raw_df.empty:
+                # ── Current dataset summary ──────────────────────────────────
+                if _data_exists:
+                    st.markdown("**Current dataset**")
                     st.caption(
                         f"Rows: **{_data_summary['total_rows']:,}**  \n"
                         f"Date range: **{_data_summary['min_date']}** → "
@@ -909,7 +416,7 @@ with st.sidebar:
                         f"Partitions: **{_data_summary['partitions']}**"
                     )
 
-                    # ── Remove a date range ───────────────────────────────────
+                    # ── Remove a date range ──────────────────────────────────
                     with st.expander("Remove a date range", expanded=False):
                         st.caption(
                             "Permanently deletes all rows in the chosen window "
@@ -947,10 +454,13 @@ with st.sidebar:
                             }
                             st.rerun()
 
-                # ── Upload new file ───────────────────────────────────────────
-                st.markdown("**Step 1 — Select XLSX export**")
-                new_file = st.file_uploader(
-                    "Upload XLSX", type=["xlsx", "xls"], key="admin_upload",
+                    st.markdown("---")
+
+                # ── Upload new file(s) ───────────────────────────────────────
+                st.markdown("**Step 1 — Select file(s)**")
+                new_files = st.file_uploader(
+                    "Upload files", type=["xlsx", "xls", "csv"],
+                    key="admin_upload",
                     label_visibility="collapsed",
                     accept_multiple_files=True,
                 )
@@ -970,10 +480,12 @@ with st.sidebar:
                         _ss["pending_upload"] = _ss.pop("staged_files")
                         st.rerun()
 
-                # ── Danger zone ───────────────────────────────────────────────
+                # ── Danger zone ──────────────────────────────────────────────
                 st.markdown("---")
                 st.markdown("**Danger zone**")
-                if st.button("Reset — delete all data", use_container_width=True):
+                if st.button(
+                    "Reset — delete all data", width="stretch",
+                ):
                     _ss["pending_reset"] = True
                     st.rerun()
 
@@ -990,102 +502,97 @@ with st.sidebar:
         _local_df = pd.DataFrame()
         merge_log = []
         if uploaded_files:
-            files_bytes = tuple((f.name, f.read()) for f in uploaded_files)
-            raw_df, merge_log = _load_from_uploads(files_bytes)
+            _parsed = []
+            for f in uploaded_files:
+                _df = parse_single_file(f.read(), filename=f.name)
+                if not _df.empty:
+                    _parsed.append((f.name, _df))
+            if _parsed:
+                _local_df, merge_log = deduplicate_and_merge(_parsed)
+                _data_exists = not _local_df.empty
 
-    # ── Calendar date picker ─────────────────────────────────────────────────
-    if raw_df is not None and not raw_df.empty:
-        filtered_df     = filter_for_map(raw_df, map_type)
-        available_dates = sorted(filtered_df["complete_date"].unique())
+    # ── Date / Month selector ────────────────────────────────────────────────
+    st.markdown("---")
 
-        if not available_dates:
-            st.warning("No data found for this map type.")
-            st.stop()
+    # We need available dates for the date picker.  For remote storage,
+    # we derive them from the partition index metadata (min/max dates per
+    # partition) — NOT by loading all data.
+    # For local uploads, we derive them from the small in-memory df.
 
-        _min_d = available_dates[0]
-        _max_d = available_dates[-1]
+    if _data_exists:
+        # Get current resources for the selected map type
+        _current_resources = tuple(sorted(_ss.resource_assignments[map_type]))
+        _current_excludes = tuple(sorted(EXCLUDE_PROCS))
+        _idx_hash = get_index_hash() if storage_is_configured() else ""
 
-        # If prev/next buttons set a navigation target, apply it BEFORE
-        # the date_input widget renders (Streamlit forbids writing to a
-        # widget key after the widget has been drawn).
-        if "_nav_date" in _ss:
-            _ss["date_picker"] = _ss.pop("_nav_date")
+        if storage_is_configured():
+            # Derive date range from partition index (no data loading)
+            _min_d = date.fromisoformat(_data_summary["min_date"])
+            _max_d = date.fromisoformat(_data_summary["max_date"])
+        else:
+            _min_d = _local_df["complete_date"].min()
+            _max_d = _local_df["complete_date"].max()
 
-        # Initialise / validate the date_picker key before the widget renders.
-        # This lets us programmatically change the widget value (e.g. prev/next
-        # buttons, map-type switch) by writing to session_state directly.
-        if (
-            "date_picker" not in _ss
-            or _ss["date_picker"] < _min_d
-            or _ss["date_picker"] > _max_d
-        ):
-            _ss["date_picker"] = _max_d   # default to most-recent date
+        if view_mode == "Daily":
+            _fc_data = load_forecasts(map_type)
+            forecast_dates: list = []
+            _fc_max_d = _max_d
+            if _fc_data:
+                _fc_start_d = _max_d + timedelta(days=1)
+                _fc_end_d   = _fc_data["forecast_end"]
+                forecast_dates = [
+                    _fc_start_d + timedelta(days=_i)
+                    for _i in range((_fc_end_d - _fc_start_d).days + 1)
+                ]
+                _fc_max_d = _fc_end_d
 
-        # Snap to nearest available date if the current selection has no data
-        # (can happen when switching between map types with different date sets)
-        if _ss["date_picker"] not in available_dates:
-            _dates_arr = pd.to_datetime(available_dates)
-            _idx_near  = (
-                (_dates_arr - pd.Timestamp(_ss["date_picker"])).abs().argmin()
-            )
-            _ss["date_picker"] = available_dates[_idx_near]
+            if "_pending_date" in _ss:
+                _pending = _ss.pop("_pending_date")
+                if _min_d <= _pending <= _fc_max_d:
+                    _ss["date_picker"] = _pending
 
-        st.markdown("### Date")
-        st.caption(
-            f"{len(available_dates)} date(s) with data  ·  "
-            f"{_min_d} → {_max_d}"
-        )
-
-        # Calendar widget — min/max bounds grey out out-of-range dates natively.
-        # If the user picks a date within range but with no data, we snap below.
-        picked_date = st.date_input(
-            "Select date",
-            min_value=_min_d,
-            max_value=_max_d,
-            label_visibility="collapsed",
-            key="date_picker",
-        )
+            if (
+                "date_picker" not in _ss
+                or _ss["date_picker"] < _min_d
+                or _ss["date_picker"] > _fc_max_d
+            ):
+                _ss["date_picker"] = _max_d
 
             st.markdown("### Date")
             _fc_note = (
                 f"  +  forecast to **{_fc_max_d}**" if forecast_dates else ""
             )
-            _snapped = available_dates[_idx_near]
-            st.caption(
-                f"No data on {picked_date} for **{map_type}** — "
-                f"showing nearest: **{_snapped}**"
+            st.caption(f"{_min_d} → {_max_d}{_fc_note}")
+
+            picked_date = st.date_input(
+                "Select date",
+                min_value=_min_d,
+                max_value=_fc_max_d,
+                label_visibility="collapsed",
+                key="date_picker",
             )
-            # Schedule the snap for next rerun (can't write widget key after render)
-            _ss["_nav_date"] = _snapped
-            picked_date = _snapped
+            selected_date = picked_date
 
             # Determine if this is a forecast date
             _is_forecast_date = selected_date > _max_d
 
-        # Prev / Next quick-navigation
-        _cur_idx = (
-            available_dates.index(selected_date)
-            if selected_date in available_dates
-            else len(available_dates) - 1
-        )
-        _cur_idx = max(0, min(_cur_idx, len(available_dates) - 1))
-        _nc1, _nc2 = st.columns(2)
-        with _nc1:
-            if st.button(
-                "◀ Prev", use_container_width=True,
-                disabled=(_cur_idx == 0),
-            ):
-                new_idx = max(0, _cur_idx - 1)
-                _ss["_nav_date"] = available_dates[new_idx]
-                st.rerun()
-        with _nc2:
-            if st.button(
-                "Next ▶", use_container_width=True,
-                disabled=(_cur_idx == len(available_dates) - 1),
-            ):
-                new_idx = min(len(available_dates) - 1, _cur_idx + 1)
-                _ss["_nav_date"] = available_dates[new_idx]
-                st.rerun()
+            # Prev/Next buttons — navigate by day across full range
+            # Use simple prev/next day since we don't load all dates
+            _nc1, _nc2 = st.columns(2)
+            with _nc1:
+                if st.button(
+                    "◄ Prev", width="stretch",
+                    disabled=(selected_date <= _min_d),
+                ):
+                    _ss["_pending_date"] = selected_date - timedelta(days=1)
+                    st.rerun()
+            with _nc2:
+                if st.button(
+                    "Next ►", width="stretch",
+                    disabled=(selected_date >= _fc_max_d),
+                ):
+                    _ss["_pending_date"] = selected_date + timedelta(days=1)
+                    st.rerun()
 
             if _fc_data:
                 _fc_trained_on = _fc_data.get("last_data_date")
@@ -1101,8 +608,8 @@ with st.sidebar:
             else:
                 st.caption("No forecast available — use Refresh Forecast to generate one.")
 
-        # ── Hour range slider ────────────────────────────────────────────────
-        st.markdown("### Hour Range")
+            st.markdown("---")
+            st.markdown("### Hour Range")
 
             def _fmt_h(h: int) -> str:
                 hr12 = 12 if h % 12 == 0 else h % 12
@@ -1146,6 +653,7 @@ with st.sidebar:
             selected_year, selected_month = _avail_months[_sel_idx]
 
         # ── Resource allocation ──────────────────────────────────────────────
+        st.markdown("---")
         with st.expander("Resource Allocation", expanded=False):
             st.markdown(
                 "Reassign instruments between maps. "
@@ -1217,48 +725,16 @@ if _ss.get("pending_upload"):
                 new_df = clean_procedure_names(new_df)
                 st.write(f"Procedure names corrected ({_up_bad:,} row(s) fixed).")
 
-            # Step 2 — load existing master (read-only until merge is validated)
-            st.write("**Step 2 / 4** — Loading existing master dataset…")
-            existing_df = pd.DataFrame()
-            try:
-                sha_up = _get_github_sha()
-                if sha_up:
-                    existing_df = _parquet_bytes_to_df(_read_parquet_from_github())
-                    st.write(f"Existing master: **{len(existing_df):,}** rows")
-                else:
-                    st.write("No existing master — creating a new one.")
-            except Exception as _load_ex:
-                st.write(f"Could not load existing data ({_load_ex}) — creating new master.")
-
-            # Step 3 — merge + deduplicate entirely in memory
-            st.write("**Step 3 / 4** — Merging and deduplicating…")
-            if existing_df.empty:
-                merged_df  = new_df
-                rows_added = len(new_df)
-            else:
-                merged_df, _stats = merge_new_into_master(existing_df, new_df)
-                rows_added = _stats["rows_added"]
+            # Step 3 — Ingest into partitioned storage (only affected partitions)
+            st.write("**Step 3 / 3** — Ingesting into partitioned storage…")
+            stats = ingest_new_data(new_df)
             st.write(
                 f"Storage updated: **{stats['rows_before']:,}** → "
                 f"**{stats['rows_after']:,}** rows (+{stats['rows_added']:,} new)"
             )
 
-            # Step 4 — validate the payload then write to remote storage
-            st.write("**Step 4 / 4** — Validating and saving…")
-            pq_bytes = df_to_parquet_bytes(merged_df)
-            _check   = pd.read_parquet(io.BytesIO(pq_bytes))
-            if len(_check) == 0:
-                raise ValueError(
-                    "Parquet round-trip validation failed (0 rows) — aborting write."
-                )
-            st.write(f"Payload: **{len(pq_bytes) / 1024 / 1024:.2f} MB** (valid)")
-
-            _write_parquet_to_github(pq_bytes)
-            st.write("Saved to GitHub.")
-
-            # Store merged result in session so the dashboard renders immediately
-            # without waiting for the GitHub CDN to reflect the new commit.
-            _ss["fresh_df"] = merged_df
+            # Clear caches so the next render picks up new data
+            # NO fresh_df — the next render will read only what it needs
             _ss.pop("pending_upload", None)
             st.cache_data.clear()
             _ss.pop("_partition_index", None)
@@ -1430,134 +906,67 @@ if view_mode == "Daily":
         unsafe_allow_html=True,
     )
 
-@st.dialog("Cell Detail", width="large")
-def _show_cell_dialog(proc: str, hour_label: str, hour_int: int) -> None:
-    """Modal popup showing drill-down statistics for a single heatmap cell."""
-    st.markdown(
-        f'<div style="font-size:1rem; font-weight:700; color:{_NAVY}; margin-bottom:0.8rem;">'
-        f'{proc} &nbsp;&mdash;&nbsp; {hour_label}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Today's value
-    _today_val = int(pivot.loc[proc, hour_label]) if hour_label in pivot.columns else 0
-
-    # Full history for this cell across all dates
-    _drill_df = filtered_df[
-        (filtered_df["Order Procedure"] == proc) &
-        (filtered_df["hour"] == hour_int)
-    ]
-
-    # All-time average (days with volume > 0)
-    _alltime_by_day = _drill_df.groupby("complete_date")["Complete Volume"].sum()
-    _alltime_by_day = _alltime_by_day[_alltime_by_day > 0]
-    _alltime_avg    = round(float(_alltime_by_day.mean()), 1) if len(_alltime_by_day) else 0.0
-    _alltime_n      = len(_alltime_by_day)
-
-    # Current-month average
-    _sel_year, _sel_month = selected_date.year, selected_date.month
-    _month_start = date(_sel_year, _sel_month, 1)
-    _month_end   = date(_sel_year + 1, 1, 1) if _sel_month == 12 else date(_sel_year, _sel_month + 1, 1)
-    _month_mask  = (
-        (_drill_df["complete_date"] >= _month_start) &
-        (_drill_df["complete_date"] < _month_end)
-    )
-    _month_by_day = _drill_df[_month_mask].groupby("complete_date")["Complete Volume"].sum()
-    _month_by_day = _month_by_day[_month_by_day > 0]
-    _month_avg    = round(float(_month_by_day.mean()), 1) if len(_month_by_day) else 0.0
-    _month_n      = len(_month_by_day)
-    _month_label  = pd.Timestamp(selected_date).strftime("%B %Y")
-
-    _dm1, _dm2, _dm3 = st.columns(3)
-    with _dm1:
+    if _is_forecast_view:
         st.markdown(
-            _metric_card("Today", f"{_today_val:,}", sub=date_str, accent=True),
+            f'<div class="heatmap-legend">'
+            f'Colour scale: &nbsp;<strong style="color:#FFE0B2;">■</strong> low &nbsp;→&nbsp; '
+            f'<strong style="color:#E65100;">■</strong> high (≥ {VMAX[map_type]} / hour). &nbsp;'
+            f'<strong>Total</strong> column = predicted daily sum per procedure.'
+            f'</div>',
             unsafe_allow_html=True,
         )
-    with _dm2:
-        st.markdown(
-            _metric_card(
-                "All-time avg",
-                f"{_alltime_avg}",
-                sub=f"per day &nbsp;·&nbsp; n = {_alltime_n} days",
-            ),
-            unsafe_allow_html=True,
-        )
-    with _dm3:
-        st.markdown(
-            _metric_card(
-                f"{_month_label} avg",
-                f"{_month_avg}",
-                sub=f"per day &nbsp;·&nbsp; n = {_month_n} days",
-            ),
-            unsafe_allow_html=True,
-        )
-
-    # Individual completion events
-    st.markdown("---")
-    detail = df_date[
-        (df_date["Order Procedure"] == proc) &
-        (df_date["hour"] == hour_int)
-    ].copy().sort_values("Date/Time - Complete")
-
-    _show_cols = {k: v for k, v in {
-        "Date/Time - Complete":        "Completed At",
-        "Performing Service Resource": "Resource",
-        "Complete Volume":             "Volume",
-    }.items() if k in detail.columns}
-
-    detail_display = (
-        detail[list(_show_cols.keys())]
-        .rename(columns=_show_cols)
-        .reset_index(drop=True)
-    )
-    if "Completed At" in detail_display.columns:
-        detail_display["Completed At"] = (
-            pd.to_datetime(detail_display["Completed At"])
-            .dt.strftime("%Y-%m-%d  %H:%M:%S")
-        )
-
-    if detail_display.empty:
-        st.info(f"No completions for **{proc}** during **{hour_label}** on {date_str}.")
     else:
-        _cell_vol = (
-            int(detail_display["Volume"].sum())
-            if "Volume" in detail_display.columns else len(detail_display)
-        )
         st.markdown(
-            f"**{len(detail_display)} event(s)** &nbsp;·&nbsp; "
-            f"Total volume: **{_cell_vol}**"
+            f'<div class="heatmap-legend">'
+            f'Colour scale: &nbsp;<strong style="color:#f5e642;">■</strong> low &nbsp;→&nbsp; '
+            f'<strong style="color:#3b0f70;">■</strong> high (≥ {VMAX[map_type]} / hour). &nbsp;'
+            f'<strong>Total</strong> column = full-day sum per procedure.'
+            f'</div>',
+            unsafe_allow_html=True,
         )
-        st.dataframe(
-            detail_display, use_container_width=True,
-            height=min(80 + 35 * len(detail_display), 400),
-        )
 
+    _table_h = min(80 + 35 * len(pivot), 900)
+    if _is_forecast_view:
+        st.dataframe(style_forecast_pivot(pivot, VMAX[map_type]),
+                     width="stretch", height=_table_h)
+    else:
+        st.dataframe(style_pivot(pivot, VMAX[map_type]),
+                     width="stretch", height=_table_h)
 
-_table_h = min(80 + 35 * len(pivot), 900)
-st.dataframe(style_pivot(pivot, VMAX[map_type]), use_container_width=True, height=_table_h)
+    # ── Downloads ────────────────────────────────────────────────────────────
+    _file_prefix = map_type.replace(" ", "_")
+    _date_tag    = pd.Timestamp(selected_date).strftime("%Y-%m-%d")
 
-# ── Cell drill-down ────────────────────────────────────────────────────────────
-st.markdown('<div class="section-heading">Cell Drill-down</div>', unsafe_allow_html=True)
-
-_peak_hour_label = pivot[_hour_cols].sum().idxmax()
-if "drill_hour" not in _ss or _ss.get("drill_hour") not in _hour_cols:
-    _ss["drill_hour"] = _peak_hour_label
-
-_dd1, _dd2, _dd3 = st.columns([3, 2, 1])
-with _dd1:
-    sel_proc = st.selectbox("Procedure", pivot.index.tolist(), key="drill_proc")
-with _dd2:
-    sel_hour_label = st.selectbox("Hour", _hour_cols, key="drill_hour")
-with _dd3:
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("View Details", use_container_width=True):
-        _show_cell_dialog(sel_proc, sel_hour_label, LABEL_TO_HOUR[sel_hour_label])
-
-# ── PNG download (lazy — rendered only on explicit request) ───────────────────
-_file_prefix = map_type.replace(" ", "_")
-_date_tag    = pd.Timestamp(selected_date).strftime("%Y-%m-%d")
+    if not _is_forecast_view and df_date_hour is not None and not df_date_hour.empty:
+        _dl1, _dl2 = st.columns(2)
+        with _dl1:
+            st.download_button(
+                "Download PNG",
+                data=build_png(df_date_hour, map_type, selected_date, hours),
+                file_name=f"{_file_prefix}_{_date_tag}.png",
+                mime="image/png",
+                width="stretch",
+                key="daily_png_dl",
+            )
+        with _dl2:
+            _cols_for_csv = [c for c in ["Order Procedure", "Performing Service Resource",
+                                          "Date/Time - Complete", "Complete Volume"]
+                            if c in df_date.columns]
+            _daily_raw_csv = (
+                df_date[_cols_for_csv]
+                .sort_values("Date/Time - Complete")
+                .reset_index(drop=True)
+                .to_csv(index=False)
+                .encode()
+            )
+            st.download_button(
+                "Download CSV",
+                data=_daily_raw_csv,
+                file_name=f"{_file_prefix}_raw_{_date_tag}.csv",
+                mime="text/csv",
+                width="stretch",
+                key="daily_csv_dl",
+            )
 
     st.markdown("---")
 
@@ -1661,3 +1070,183 @@ else:
         filtered_df, selected_year, selected_month
     )
 
+    if monthly_pivot is None:
+        st.warning(f"No data found for **{map_type}** in **{month_name_str}**.")
+        st.stop()
+
+    # ── Monthly metrics row ──────────────────────────────────────────────────
+    _m_hour_cols  = [c for c in monthly_pivot.columns if c != "Total"]
+    _m_total_vol  = int(round(monthly_pivot["Total"].sum() * n_days))
+    _m_top_proc   = monthly_pivot["Total"].idxmax()
+    _m_peak_col   = monthly_pivot[_m_hour_cols].sum().idxmax()
+    _m_peak_disp  = _m_peak_col.replace("AM", " AM").replace("PM", " PM")
+    _m_n_procs    = len(monthly_pivot)
+    _m_avg_per_day = round(_m_total_vol / max(n_days, 1))
+
+    _mm1, _mm2, _mm3, _mm4, _mm5 = st.columns(5)
+    with _mm1:
+        st.markdown(metric_card("Total Volume", f"{_m_total_vol:,}", accent=True),
+                    unsafe_allow_html=True)
+    with _mm2:
+        _mtp_disp = _m_top_proc[:28] + "…" if len(_m_top_proc) > 28 else _m_top_proc
+        st.markdown(metric_card("Top Procedure", _mtp_disp,
+                    sub=f"highest volume in {month_name_str}"),
+                    unsafe_allow_html=True)
+    with _mm3:
+        st.markdown(metric_card("Peak Hour", _m_peak_disp,
+                    sub="highest avg volume"), unsafe_allow_html=True)
+    with _mm4:
+        st.markdown(metric_card("Procedures Shown", str(_m_n_procs),
+                    sub="top 30 by month volume"), unsafe_allow_html=True)
+    with _mm5:
+        st.markdown(metric_card("Avg / Day", f"{_m_avg_per_day:,}",
+                    sub=f"over {n_days} days"), unsafe_allow_html=True)
+
+    st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
+
+    # ── Monthly heatmap ──────────────────────────────────────────────────────
+    st.markdown(
+        f'<div class="section-heading">'
+        f'{map_type} — Monthly Average | {month_name_str} | N = {n_days} days'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div class="heatmap-legend">'
+        f'Values = avg completed volume per day in hour. '
+        f'Colour scale: &nbsp;<strong style="color:#f5e642;">■</strong> low &nbsp;→&nbsp; '
+        f'<strong style="color:#3b0f70;">■</strong> high (≥ {VMAX[map_type]}). &nbsp;'
+        f'<strong>Total</strong> column = avg daily total per procedure.'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    _m_table_h = min(80 + 35 * len(monthly_pivot), 900)
+    st.dataframe(
+        style_monthly_pivot(monthly_pivot, VMAX[map_type]),
+        width="stretch", height=_m_table_h,
+    )
+
+    # ── Monthly downloads ────────────────────────────────────────────────────
+    _m_file_prefix = map_type.replace(" ", "_")
+    _m_month_label = _cal.month_name[selected_month]
+    _m_file_tag    = f"{_m_month_label}_{selected_year}"
+    _mdl1, _mdl2   = st.columns(2)
+    with _mdl1:
+        st.download_button(
+            "Download PNG",
+            data=build_monthly_png(
+                monthly_pivot, map_type, selected_year, selected_month, n_days
+            ),
+            file_name=f"{_m_file_prefix}_{_m_file_tag}.png",
+            mime="image/png",
+            width="stretch",
+            key="monthly_png_dl",
+        )
+    with _mdl2:
+        _csv_cols = [c for c in ["Order Procedure", "Performing Service Resource",
+                                  "Date/Time - Complete", "Complete Volume"]
+                     if c in filtered_df.columns]
+        _monthly_raw_csv = (
+            filtered_df[_csv_cols]
+            .sort_values("Date/Time - Complete")
+            .reset_index(drop=True)
+            .to_csv(index=False)
+            .encode()
+        )
+        st.download_button(
+            "Download CSV",
+            data=_monthly_raw_csv,
+            file_name=f"{_m_file_prefix}_raw_{_m_file_tag}.csv",
+            mime="text/csv",
+            width="stretch",
+            key="monthly_csv_dl",
+        )
+
+    st.markdown("---")
+
+    # ── Weekday pattern expander ─────────────────────────────────────────────
+    with st.expander("Hourly Volume by Day of Week", expanded=False):
+        weekday_pivot, _wd_counts = build_weekday_pivot(
+            month_raw_df, selected_year, selected_month
+        )
+
+        if weekday_pivot is None:
+            st.info("No data available for weekday breakdown.")
+        else:
+            _wd_hour_cols    = [c for c in weekday_pivot.columns if c != "Total"]
+            _wd_busiest_day  = weekday_pivot["Total"].idxmax()
+            _wd_lightest_day = weekday_pivot["Total"].idxmin()
+            _wd_peak_hour    = weekday_pivot[_wd_hour_cols].sum().idxmax()
+            _wd_peak_disp    = _wd_peak_hour.replace("AM", " AM").replace("PM", " PM")
+
+            _wc1, _wc2, _wc3 = st.columns(3)
+            with _wc1:
+                st.markdown(
+                    metric_card(
+                        "Busiest Day",
+                        _wd_busiest_day.split("  ")[0],
+                        sub=f"avg {int(round(weekday_pivot.loc[_wd_busiest_day, 'Total']))} vol / day",
+                    ),
+                    unsafe_allow_html=True,
+                )
+            with _wc2:
+                st.markdown(
+                    metric_card("Peak Hour", _wd_peak_disp,
+                                sub="highest avg volume across weekdays"),
+                    unsafe_allow_html=True,
+                )
+            with _wc3:
+                st.markdown(
+                    metric_card(
+                        "Lightest Day",
+                        _wd_lightest_day.split("  ")[0],
+                        sub=f"avg {int(round(weekday_pivot.loc[_wd_lightest_day, 'Total']))} vol / day",
+                    ),
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown(
+                f'<div class="section-heading">'
+                f'{map_type} — Weekday Pattern | {month_name_str}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            _wd_vmax = max(1, int(weekday_pivot[_wd_hour_cols].values.max()))
+            st.markdown(
+                f'<div class="heatmap-legend">'
+                f'Values = avg completed volume per occurrence of that weekday. '
+                f'Colour scale: &nbsp;<strong style="color:#f5e642;">■</strong> low &nbsp;→&nbsp; '
+                f'<strong style="color:#3b0f70;">■</strong> high (≥ {_wd_vmax}). &nbsp;'
+                f'<strong>Total</strong> column = avg daily total for that weekday.'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            st.dataframe(
+                style_monthly_pivot(weekday_pivot, _wd_vmax),
+                width="stretch",
+                height=min(80 + 35 * 7, 400),
+            )
+
+            _wdl1, _wdl2 = st.columns(2)
+            with _wdl1:
+                st.download_button(
+                    "Download PNG",
+                    data=build_weekday_png(
+                        weekday_pivot, map_type, selected_year, selected_month
+                    ),
+                    file_name=f"{_m_file_prefix}_Weekday_{_m_file_tag}.png",
+                    mime="image/png",
+                    width="stretch",
+                    key="weekday_png_dl",
+                )
+            with _wdl2:
+                st.download_button(
+                    "Download CSV",
+                    data=weekday_pivot.to_csv(index=True).encode(),
+                    file_name=f"{_m_file_prefix}_Weekday_{_m_file_tag}.csv",
+                    mime="text/csv",
+                    width="stretch",
+                    key="weekday_csv_dl",
+                )
