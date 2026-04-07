@@ -1,0 +1,4 @@
+# Scoped ignore for the scripts/ folder.
+# Never commit real credentials — only .env.example goes in the repo.
+.env
+*.log
