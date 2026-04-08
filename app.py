@@ -92,7 +92,7 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                     padding: 3px 12px;
                     border-radius: 20px;
                     margin-bottom: 1rem;
-                ">Keck Medicine of USC</div>
+                ">CLINICAL LAB</div>
                 <div style="
                     color: #ffffff;
                     font-family: 'Inter', system-ui, sans-serif;
@@ -101,7 +101,7 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                     letter-spacing: 0.01em;
                     margin: 0 0 0.3rem 0;
                     line-height: 1.2;
-                ">Laboratory Productivity</div>
+                ">Productivity Dashboard</div>
                 <div style="
                     color: rgba(237,193,83,0.85);
                     font-family: 'Inter', system-ui, sans-serif;
@@ -109,7 +109,7 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                     font-weight: 400;
                     letter-spacing: 0.01em;
                     margin: 0;
-                ">Analytics Dashboard</div>
+                ">Analytics</div>
             </div>
             <div style="
                 background: #ffffff;
