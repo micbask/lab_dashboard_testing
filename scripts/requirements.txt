@@ -1,4 +1,4 @@
-# Extra deps for scripts/email_ingest.py only.
-# The rest of the repo's requirements.txt already covers pandas, pyarrow,
-# openpyxl, xlrd, duckdb, requests, streamlit (used via stub).
-exchangelib>=5.2.0
+# scripts/email_ingest.py uses only stdlib beyond what the repo's main
+# requirements.txt already provides (pandas, pyarrow, openpyxl, xlrd,
+# duckdb, requests, streamlit). Mail fetching is handled by AppleScript
+# via /usr/bin/osascript, so no extra Python deps are needed.

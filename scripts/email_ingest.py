@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 """
-email_ingest.py — Scheduled Exchange mailbox → Parquet ingest.
+email_ingest.py — Scheduled Apple Mail → Parquet ingest.
 
 Runs locally on a Mac via launchd (see com.usc.lab-dashboard-ingest.plist).
 
 Pipeline per run:
-  1. Load credentials from scripts/.env (never hardcoded)
-  2. Connect to an Exchange mailbox with exchangelib
-  3. Find UNREAD messages from SENDER_EMAIL whose subject contains
-     SUBJECT_KEYWORD and that arrived in the last 24 hours
-  4. Download each .xls/.xlsx attachment
-  5. Call parsing.parse_single_file() to build the cleaned DataFrame
-  6. Call storage.ingest_new_data() to write the partitioned Parquet
-     files to GitHub via the Contents API (this IS the commit+push —
-     each partition write lands on the configured branch as its own
-     commit, same path the Streamlit upload uses)
-  7. Mark the email as Read so the next run skips it
+  1. Run scripts/fetch_attachment.applescript, which tells Apple Mail
+     to find messages from the last 24 hours in the inbox of
+     michael.bask@med.usc.edu whose subject contains
+     "Lab Order Department Volume Analysis- All Labs Daily Report",
+     save every .xls/.xlsx attachment into the OneDrive drop folder,
+     and mark each source message as read.
+  2. Scan the drop folder for new .xls / .xlsx files.
+  3. For each file: call parsing.parse_single_file() to build the
+     cleaned DataFrame, then call storage.ingest_new_data() to write
+     the partitioned Parquet files to GitHub via the Contents API
+     (this IS the commit + push — each partition write lands on the
+     configured branch as its own commit, same path the Streamlit
+     upload uses).
+  4. Move the processed file into a dated `processed/` subfolder so
+     the next run does not re-ingest it.
 
 All existing code in parsing.py and storage.py is reused unchanged.
 storage.py depends on `streamlit`; we install a minimal streamlit stub
@@ -29,14 +33,9 @@ USAGE:
     python3 scripts/email_ingest.py
 
 ENVIRONMENT (scripts/.env — see .env.example):
-    EXCHANGE_EMAIL       — primary SMTP, e.g. you@usc.edu
-    EXCHANGE_USERNAME    — full UPN / domain login, usually same as EMAIL
-    EXCHANGE_PASSWORD    — account password (or app password)
-    EXCHANGE_SERVER      — optional; e.g. outlook.office365.com (else autodiscover)
-    SENDER_EMAIL         — sender to filter on
-    SUBJECT_KEYWORD      — substring to require in the subject line
     GITHUB_TOKEN         — PAT with contents:write on the target repo
     GITHUB_REPOSITORY    — "owner/name", e.g. micbask/lab_dashboard_testing
+    DROP_FOLDER          — optional override of the OneDrive drop folder
     LOG_FILE             — optional log path override
 """
 
@@ -44,9 +43,11 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
+import subprocess
 import sys
 import types
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 
 
@@ -56,6 +57,14 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 ENV_PATH = SCRIPT_DIR / ".env"
+APPLESCRIPT_PATH = SCRIPT_DIR / "fetch_attachment.applescript"
+
+# Same path hardcoded inside fetch_attachment.applescript. If you change
+# one, change the other (or set DROP_FOLDER in .env to override here).
+DEFAULT_DROP_FOLDER = Path(
+    "/Users/michaelbask/Library/CloudStorage/"
+    "OneDrive-KeckMedicineofUSC/Work/Productivity Heat Maps/xls_ingest"
+)
 
 
 def _load_env_file(path: Path) -> None:
@@ -157,136 +166,114 @@ from storage import ingest_new_data  # noqa: E402
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# EXCHANGE CLIENT
+# APPLE MAIL FETCH
 # ──────────────────────────────────────────────────────────────────────────
-def _get_required(name: str) -> str:
-    val = os.environ.get(name)
-    if not val:
-        raise SystemExit(f"Missing required env var {name}. See .env.example.")
-    return val
+def _run_applescript() -> None:
+    """Invoke osascript on fetch_attachment.applescript.
 
-
-def _connect_exchange():
-    """Open an exchangelib Account using Basic Auth credentials from .env.
-
-    Note: Microsoft is deprecating Basic Auth for Exchange Online. If your
-    tenant has it disabled, use an app password or migrate to OAuth / MS
-    Graph. The user explicitly specified username/password, so this path
-    uses exchangelib.Credentials.
+    The AppleScript handles the Mail query, attachment save, and
+    mark-as-read. stdout/stderr from osascript are forwarded to our log.
     """
-    from exchangelib import (
-        Account,
-        Configuration,
-        Credentials,
-        DELEGATE,
-    )
+    if not APPLESCRIPT_PATH.exists():
+        raise SystemExit(f"AppleScript not found: {APPLESCRIPT_PATH}")
 
-    email = _get_required("EXCHANGE_EMAIL")
-    username = os.environ.get("EXCHANGE_USERNAME") or email
-    password = _get_required("EXCHANGE_PASSWORD")
-    server = os.environ.get("EXCHANGE_SERVER", "").strip()
-
-    creds = Credentials(username=username, password=password)
-
-    if server:
-        config = Configuration(server=server, credentials=creds)
-        account = Account(
-            primary_smtp_address=email,
-            config=config,
-            autodiscover=False,
-            access_type=DELEGATE,
+    log.info("Running AppleScript: %s", APPLESCRIPT_PATH)
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/osascript", str(APPLESCRIPT_PATH)],
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
-    else:
-        account = Account(
-            primary_smtp_address=email,
-            credentials=creds,
-            autodiscover=True,
-            access_type=DELEGATE,
-        )
-    return account
+    except subprocess.TimeoutExpired:
+        log.error("AppleScript timed out after 300s")
+        return
+    except FileNotFoundError:
+        log.error("/usr/bin/osascript not found — is this running on macOS?")
+        return
+
+    # osascript `log` statements are emitted on stderr; `return` goes to stdout.
+    for stream_name, stream in (("stdout", proc.stdout), ("stderr", proc.stderr)):
+        for line in (stream or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Strip the AppleScript "LINE: " prefix when present.
+            if line.startswith("LINE: "):
+                log.info("applescript: %s", line[6:])
+            else:
+                log.info("applescript[%s]: %s", stream_name, line)
+
+    if proc.returncode != 0:
+        log.error("AppleScript exited with status %s", proc.returncode)
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# MAIN INGEST LOOP
+# DROP-FOLDER INGEST
 # ──────────────────────────────────────────────────────────────────────────
 _XLS_SUFFIXES = (".xls", ".xlsx", ".csv", ".txt")
 
 
-def _iter_matching_messages(account):
-    """Yield inbox messages from SENDER_EMAIL with SUBJECT_KEYWORD in the
-    subject, received in the last 24 hours, and still marked unread.
+def _drop_folder() -> Path:
+    override = os.environ.get("DROP_FOLDER", "").strip()
+    return Path(override) if override else DEFAULT_DROP_FOLDER
+
+
+def _iter_incoming_files(folder: Path):
+    """Yield XLS/XLSX/CSV files currently sitting in the drop folder.
+
+    Sub-folders (e.g. `processed/`) are ignored.
     """
-    from exchangelib import EWSDateTime, EWSTimeZone
-
-    sender = _get_required("SENDER_EMAIL").lower()
-    subject_kw = _get_required("SUBJECT_KEYWORD")
-
-    tz = EWSTimeZone("UTC")
-    since = EWSDateTime.from_datetime(
-        datetime.now(timezone.utc) - timedelta(hours=24)
-    ).astimezone(tz)
-
-    qs = (
-        account.inbox.filter(
-            is_read=False,
-            datetime_received__gte=since,
-            subject__contains=subject_kw,
-        )
-        .order_by("-datetime_received")
-    )
-
-    for msg in qs:
-        try:
-            from_addr = (msg.sender.email_address or "").lower() if msg.sender else ""
-        except Exception:
-            from_addr = ""
-        if from_addr == sender:
-            yield msg
+    if not folder.exists():
+        log.warning("Drop folder does not exist: %s", folder)
+        return
+    for entry in sorted(folder.iterdir()):
+        if entry.is_file() and entry.suffix.lower() in _XLS_SUFFIXES:
+            yield entry
 
 
-def _process_message(msg) -> int:
-    """Parse every XLS/XLSX/CSV attachment on one message and ingest.
+def _process_file(path: Path, processed_dir: Path) -> int:
+    """Parse and ingest one file, then move it into processed/.
 
-    Returns the number of rows added across all attachments.
+    Returns the number of rows added.
     """
-    from exchangelib import FileAttachment
+    try:
+        content = path.read_bytes()
+    except Exception as exc:
+        log.exception("  • failed to read %s: %s", path.name, exc)
+        return 0
 
-    total_rows = 0
-    processed_any = False
+    if not content:
+        log.warning("  • %s is empty, skipping", path.name)
+        return 0
 
-    for att in getattr(msg, "attachments", []) or []:
-        if not isinstance(att, FileAttachment):
-            continue
-        fname = (att.name or "").strip()
-        if not fname.lower().endswith(_XLS_SUFFIXES):
-            log.info("  • skipping non-spreadsheet attachment: %s", fname)
-            continue
+    log.info("  • parsing %s (%d bytes)", path.name, len(content))
+    df = parse_single_file(content, filename=path.name)
+    if df is None or df.empty:
+        log.warning("  • parse_single_file produced 0 rows for %s", path.name)
+        return 0
 
-        content = att.content  # bytes
-        if not content:
-            log.warning("  • attachment %s has empty content", fname)
-            continue
+    log.info("  • ingesting %d rows into partitioned store...", len(df))
+    summary = ingest_new_data(df)
+    added = int(summary.get("rows_added", 0))
+    log.info("  • ingest summary: %s", summary)
 
-        log.info("  • parsing attachment: %s (%d bytes)", fname, len(content))
-        df = parse_single_file(content, filename=fname)
-        if df is None or df.empty:
-            log.warning("  • parse_single_file produced 0 rows for %s", fname)
-            continue
+    # Move the file into processed/<YYYY-MM-DD>/ to avoid re-processing.
+    day_dir = processed_dir / datetime.now().strftime("%Y-%m-%d")
+    day_dir.mkdir(parents=True, exist_ok=True)
+    dest = day_dir / path.name
+    # Avoid clobber if the same filename repeats within a day.
+    if dest.exists():
+        stem = dest.stem
+        suffix = dest.suffix
+        i = 1
+        while (day_dir / f"{stem}.{i}{suffix}").exists():
+            i += 1
+        dest = day_dir / f"{stem}.{i}{suffix}"
+    shutil.move(str(path), str(dest))
+    log.info("  • moved to %s", dest)
 
-        log.info("  • ingesting %d rows into partitioned store...", len(df))
-        summary = ingest_new_data(df)
-        added = summary.get("rows_added", 0)
-        log.info("  • ingest summary: %s", summary)
-        total_rows += added
-        processed_any = True
-
-    if processed_any:
-        # Mark as read so the next run skips this message
-        msg.is_read = True
-        msg.save(update_fields=["is_read"])
-        log.info("  • marked email as read")
-
-    return total_rows
+    return added
 
 
 def main() -> int:
@@ -294,39 +281,30 @@ def main() -> int:
     log.info("Starting email ingest run")
     log.info("Repo root: %s", REPO_ROOT)
 
-    try:
-        account = _connect_exchange()
-    except Exception as exc:
-        log.exception("Failed to connect to Exchange: %s", exc)
-        return 2
+    # Step 1: ask Apple Mail to drop today's attachments into the folder.
+    _run_applescript()
 
-    log.info(
-        "Connected to Exchange as %s; searching last 24h for unread "
-        "from %s with subject containing %r",
-        os.environ.get("EXCHANGE_EMAIL"),
-        os.environ.get("SENDER_EMAIL"),
-        os.environ.get("SUBJECT_KEYWORD"),
-    )
+    # Step 2: ingest whatever is sitting in the drop folder.
+    drop = _drop_folder()
+    drop.mkdir(parents=True, exist_ok=True)
+    processed = drop / "processed"
+    log.info("Scanning drop folder: %s", drop)
 
     matched = 0
     total_added = 0
-    for msg in _iter_matching_messages(account):
+    for f in _iter_incoming_files(drop):
         matched += 1
-        log.info(
-            "Match #%d: %s — %s (received %s)",
-            matched, msg.sender.email_address if msg.sender else "?",
-            msg.subject, msg.datetime_received,
-        )
+        log.info("File #%d: %s", matched, f.name)
         try:
-            total_added += _process_message(msg)
+            total_added += _process_file(f, processed)
         except Exception as exc:
-            log.exception("Failed to process message %r: %s", msg.subject, exc)
+            log.exception("Failed to process %s: %s", f.name, exc)
 
     if matched == 0:
-        log.info("No matching messages found.")
+        log.info("No incoming files to process.")
     else:
         log.info(
-            "Ingest run complete: %d message(s), %d row(s) added.",
+            "Ingest run complete: %d file(s), %d row(s) added.",
             matched, total_added,
         )
     return 0
