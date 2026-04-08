@@ -262,6 +262,50 @@ def forward_fill_accession_clusters(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+_HEADER_MATCH_MIN = 3
+_HEADER_SEARCH_DEPTH = 30
+
+
+def _count_header_matches(values) -> int:
+    matches = 0
+    for v in values:
+        if isinstance(v, str) and v.strip() in ALL_SOURCE_COLUMNS:
+            matches += 1
+    return matches
+
+
+def promote_header_row(df: pd.DataFrame) -> pd.DataFrame:
+    """Promote the first row that looks like a real Epic Reporting Workbench
+    header if the current column index is stray metadata. See parsing.py in
+    the dashboard repo for the full rationale."""
+    if df is None or df.empty:
+        return df
+
+    current_matches = _count_header_matches(df.columns)
+    if current_matches >= _HEADER_MATCH_MIN:
+        return df
+
+    search_limit = min(len(df), _HEADER_SEARCH_DEPTH)
+    best_idx = -1
+    best_matches = current_matches
+    for i in range(search_limit):
+        row_matches = _count_header_matches(df.iloc[i].tolist())
+        if row_matches > best_matches:
+            best_matches = row_matches
+            best_idx = i
+
+    if best_idx < 0 or best_matches < _HEADER_MATCH_MIN:
+        return df
+
+    new_headers = [
+        v.strip() if isinstance(v, str) else v
+        for v in df.iloc[best_idx].tolist()
+    ]
+    promoted = df.iloc[best_idx + 1 :].copy()
+    promoted.columns = new_headers
+    return promoted.reset_index(drop=True)
+
+
 def select_available_columns(df: pd.DataFrame) -> pd.DataFrame:
     available = [c for c in ALL_SOURCE_COLUMNS if c in df.columns]
     return df[available].copy()
@@ -366,6 +410,7 @@ def parse_single_file(file_bytes: bytes, filename: str = "") -> pd.DataFrame:
 
     processed_sheets = []
     for sheet_df in raw_sheets:
+        sheet_df = promote_header_row(sheet_df)
         sheet_df = forward_fill_accession_clusters(sheet_df)
         sheet_df = select_available_columns(sheet_df)
         if not sheet_df.empty:
