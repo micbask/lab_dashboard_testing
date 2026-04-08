@@ -2,25 +2,34 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Launch Agent: daily Exchange → Parquet ingest at 06:15 local time.
+  Launch Agent: daily Apple Mail -> Parquet ingest at 06:15 local time.
 
   Install path (per-user):
     ~/Library/LaunchAgents/com.usc.lab-dashboard-ingest.plist
 
   IMPORTANT: BEFORE LOADING, EDIT THE TWO PLACEHOLDER PATHS BELOW:
     - __PYTHON_BIN__  absolute path to the Python interpreter that has
-                      the repo's requirements + exchangelib installed,
-                      e.g. /Users/you/lab_dashboard_testing/.venv/bin/python3
+                      the repo's main requirements.txt installed,
+                      e.g. /Users/michaelbask/lab_dashboard_testing/.venv/bin/python3
     - __REPO_PATH__   absolute path to your clone of the repo,
-                      e.g. /Users/you/lab_dashboard_testing
+                      e.g. /Users/michaelbask/lab_dashboard_testing
 
-  launchd alone cannot wake a sleeping Mac. To guarantee the 06:15 run
-  fires when the Mac is asleep, schedule a system wake 60s earlier via
-  pmset (run once, as admin):
+  This agent runs scripts/email_ingest.py, which first calls
+  /usr/bin/osascript scripts/fetch_attachment.applescript to pull the
+  matching message attachments out of Apple Mail and drop them into
+  the OneDrive xls_ingest folder, then parses and ingests them.
+
+  WAKE-FROM-SLEEP: launchd itself cannot wake a sleeping Mac. To
+  guarantee the 06:15 job fires even when the machine is asleep,
+  schedule a system wake 60s earlier via pmset (run once, as admin):
 
       sudo pmset repeat wakeorpoweron MTWRFSU 06:14:00
 
   Verify with:  pmset -g sched
+
+  FIRST RUN: macOS will prompt for Automation consent so osascript can
+  control "Mail". Approve it once (System Settings -> Privacy &
+  Security -> Automation).
 -->
 <plist version="1.0">
 <dict>
