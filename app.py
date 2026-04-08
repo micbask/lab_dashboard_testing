@@ -899,8 +899,12 @@ if view_mode == "Daily":
     st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
 
     # ── Heatmap table ────────────────────────────────────────────────────────
-    _heading_label = ("Forecast Volume by Procedure &amp; Hour" if _is_forecast_view
-                      else "Completed Volume by Procedure &amp; Hour")
+    if _is_forecast_view:
+        _heading_label = "Forecast Volume by Procedure &amp; Hour"
+    elif time_basis == "In-Lab":
+        _heading_label = "In-Lab Volume by Procedure &amp; Hour"
+    else:
+        _heading_label = "Completed Volume by Procedure &amp; Hour"
     st.markdown(
         f'<div class="section-heading">{_heading_label}</div>',
         unsafe_allow_html=True,
