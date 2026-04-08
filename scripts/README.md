@@ -1,162 +1,145 @@
-# scripts/ — Scheduled Apple Mail → Parquet ingest
+# scripts/ — Standalone Apple Mail → Parquet ingest
 
-Runs a daily job on a Mac that pulls XLS attachments out of **Apple Mail**
-(account: `michael.bask@med.usc.edu`) via AppleScript, parses them with
-the repo's existing `parsing.parse_single_file()`, and writes them into
-the partitioned Parquet store on GitHub using `storage.ingest_new_data()`
-— the same path the Streamlit app uses.
+A self-contained Mac tool that, once a day, pulls XLS attachments from
+Apple Mail and writes them into the lab dashboard's partitioned Parquet
+store on GitHub. **Nothing outside this folder is required** — you can
+drop `scripts/` anywhere on a Mac and it will work.
 
-## Files
+## What's in the folder
 
 | File | Purpose |
 |---|---|
-| `fetch_attachment.applescript` | Tells Apple Mail to find messages in the inbox of `michael.bask@med.usc.edu` received in the last 24h whose subject contains `Lab Order Department Volume Analysis- All Labs Daily Report`, save each `.xls`/`.xlsx` attachment to the OneDrive drop folder, and mark the message as read. |
-| `email_ingest.py` | Runs the AppleScript via `osascript`, then parses every file sitting in the drop folder with `parse_single_file()`, writes partitions via `storage.ingest_new_data()`, and moves each processed file into `processed/<YYYY-MM-DD>/`. |
-| `.env.example` | Template for credentials — copy to `.env` and fill in. Only GitHub credentials are needed; mail credentials live in Apple Mail itself. |
-| `requirements.txt` | No extra Python deps — the script is stdlib-only beyond the repo's main `requirements.txt`. |
-| `com.usc.lab-dashboard-ingest.plist` | launchd LaunchAgent scheduling the script daily at 06:15 local time. |
+| `email_ingest.py` | The whole ingest job. Parsing (XLS / XLSX / SpreadsheetML / CSV), partition merging, and GitHub Contents-API writes are **all inlined** in this one file — no imports from a parent repo, no Streamlit. |
+| `fetch_attachment.applescript` | Drives Apple Mail: finds messages in `michael.bask@med.usc.edu`'s inbox received in the last 24h whose subject contains `Lab Order Department Volume Analysis- All Labs Daily Report`, saves each `.xls`/`.xlsx` attachment to the drop folder, and marks the message as read. |
+| `requirements.txt` | Python deps: `pandas`, `pyarrow`, `openpyxl`, `xlrd`, `requests`. |
+| `.env.example` | Template for the two GitHub credentials the script needs. Copy to `.env`. |
+| `.env` | **You create this** from `.env.example`. Not committed. |
+| `.gitignore` | Keeps `.env` and `*.log` out of source control. |
+| `com.usc.lab-dashboard-ingest.plist` | launchd LaunchAgent that runs the script daily at 06:15 local time. |
 
-## Drop folder
+## Setup (three steps)
 
-Both the AppleScript and the Python script share this path:
+### 1. Create `.env`
+
+```bash
+cd scripts
+cp .env.example .env
+chmod 600 .env
+$EDITOR .env
+```
+
+Fill in two values:
 
 ```
-/Users/michaelbask/Library/CloudStorage/OneDrive-KeckMedicineofUSC/Work/Productivity Heat Maps/xls_ingest
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+GITHUB_REPOSITORY=micbask/lab_dashboard_testing
 ```
 
-The AppleScript drops new attachments straight into that folder; the
-Python script reads them from there, ingests them, and moves them into
-`xls_ingest/processed/<YYYY-MM-DD>/` so the next run does not re-process
-them. If the path needs to change, update both `fetch_attachment.applescript`
-and the `DEFAULT_DROP_FOLDER` constant in `email_ingest.py`, or set
-`DROP_FOLDER` in `scripts/.env` to override the Python side.
+The PAT needs `contents: write` on that repo. Optional overrides:
+`DROP_FOLDER` (the OneDrive path the AppleScript saves into and the
+Python reads from) and `LOG_FILE` (default
+`~/Library/Logs/lab-dashboard-ingest.log`).
 
-> **Note on the path:** the original instructions had `~/Users/michaelbask/...`
-> which expands to `/Users/michaelbask/Users/michaelbask/...`. The absolute
-> path above is what was actually intended.
+### 2. Install Python deps
 
-## How the script writes to GitHub
+```bash
+cd scripts
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-`storage.ingest_new_data()` writes each affected monthly partition directly
-to the repo via the **GitHub Contents API** — each write is itself a commit
-on the configured branch. That means the "commit and push" happens inside
-`ingest_new_data()` via the PAT from your `.env`, and you do **not** need
-to run `git push` separately. No raw XLS files ever touch the repo; only
-the derived `data/partitions/YYYY-MM.parquet` files and the updated
-`data/partition_index.json`.
+A dedicated venv inside `scripts/` keeps the script self-contained,
+but any Python 3.10+ environment with `pandas`, `pyarrow`, `openpyxl`,
+`xlrd`, and `requests` installed will work.
 
-## One-time setup
+Run it manually once to confirm everything is wired up:
 
-1. **Clone the repo on the Mac** (if not already):
-   ```bash
-   git clone https://github.com/micbask/lab_dashboard_testing.git ~/lab_dashboard_testing
-   cd ~/lab_dashboard_testing
-   ```
+```bash
+./.venv/bin/python email_ingest.py
+```
 
-2. **Create a virtualenv and install deps.** The streamlit stub inside
-   `email_ingest.py` means you still need the repo's main requirements
-   installed so `storage.py` can resolve `@st.cache_data` at import:
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
-   ```
+The **first run** will trigger a macOS consent prompt:
+*"Python wants to control Mail"*. Click **OK** — without it, the
+AppleScript cannot read the mailbox.
 
-3. **Populate `scripts/.env`** from the template:
-   ```bash
-   cp scripts/.env.example scripts/.env
-   chmod 600 scripts/.env
-   $EDITOR scripts/.env
-   ```
-   Required values:
-   - `GITHUB_TOKEN` — PAT with `contents: write` on the target repo.
-   - `GITHUB_REPOSITORY` — `owner/name`, e.g. `micbask/lab_dashboard_testing`.
+Logs stream to stdout and to `~/Library/Logs/lab-dashboard-ingest.log`.
 
-   Optional:
-   - `DROP_FOLDER` — override the default OneDrive drop folder.
-   - `LOG_FILE` — override the log path.
+### 3. Register the launchd job
 
-   > `scripts/.env` is already ignored by `scripts/.gitignore` — double-check
-   > with `git check-ignore scripts/.env` before the first run.
+The plist contains two placeholders — `__PYTHON_BIN__` and
+`__REPO_PATH__` — that must point at your Python interpreter and your
+`scripts/` folder:
 
-4. **Make sure Apple Mail is signed in to `michael.bask@med.usc.edu`** and
-   can see the inbox. The AppleScript addresses the account by its
-   `user name` property, with a fallback to a display-name match.
+```bash
+SCRIPTS_DIR="$(pwd)"       # run this from inside scripts/
+PY="$SCRIPTS_DIR/.venv/bin/python3"
 
-5. **Run it once manually** to confirm it runs the AppleScript, finds
-   attachments, parses them, and writes a partition:
-   ```bash
-   .venv/bin/python scripts/email_ingest.py
-   ```
-   The **first** run will trigger a macOS consent prompt:
-   *"Python" wants access to control "Mail"*. Click **OK** — without it,
-   `osascript` will return an error and no attachments will be saved.
+sed -e "s|__PYTHON_BIN__|$PY|g" \
+    -e "s|__REPO_PATH__|$SCRIPTS_DIR|g" \
+    com.usc.lab-dashboard-ingest.plist \
+  > ~/Library/LaunchAgents/com.usc.lab-dashboard-ingest.plist
 
-   Logs go to `~/Library/Logs/lab-dashboard-ingest.log` and stdout.
+launchctl unload ~/Library/LaunchAgents/com.usc.lab-dashboard-ingest.plist 2>/dev/null
+launchctl load    ~/Library/LaunchAgents/com.usc.lab-dashboard-ingest.plist
+launchctl list | grep lab-dashboard-ingest      # confirm registration
+```
 
-## Register the launchd job
+> The plist placeholder is called `__REPO_PATH__` for historical reasons
+> — it should point at whatever directory holds `email_ingest.py`.
+> Since this version is standalone, that's the `scripts/` folder itself.
 
-1. **Edit the two placeholders in the plist** (it won't work unmodified):
-   ```bash
-   sed -e "s|__PYTHON_BIN__|$HOME/lab_dashboard_testing/.venv/bin/python3|g" \
-       -e "s|__REPO_PATH__|$HOME/lab_dashboard_testing|g" \
-       scripts/com.usc.lab-dashboard-ingest.plist \
-     > ~/Library/LaunchAgents/com.usc.lab-dashboard-ingest.plist
-   ```
+**Wake the Mac 60 seconds before the job** (launchd alone cannot wake a
+sleeping Mac):
 
-2. **Load the agent:**
-   ```bash
-   launchctl unload ~/Library/LaunchAgents/com.usc.lab-dashboard-ingest.plist 2>/dev/null
-   launchctl load    ~/Library/LaunchAgents/com.usc.lab-dashboard-ingest.plist
-   ```
+```bash
+sudo pmset repeat wakeorpoweron MTWRFSU 06:14:00
+pmset -g sched         # verify the wake schedule
+```
 
-3. **Verify it is scheduled:**
-   ```bash
-   launchctl list | grep lab-dashboard-ingest
-   ```
+Trigger a test run on demand:
 
-4. **Schedule a system wake 60 seconds before the job** so the Mac runs
-   the ingest even if it's asleep. launchd itself cannot wake the machine;
-   `pmset` can. Run once as admin:
-   ```bash
-   sudo pmset repeat wakeorpoweron MTWRFSU 06:14:00
-   pmset -g sched        # confirm the wake schedule
-   ```
-   > `wakeorpoweron` will power the Mac on from a full shutdown *only* on
-   > desktops; laptops on battery will not wake from a lid-closed
-   > shutdown. If the Mac is only ever asleep (lid open or plugged in),
-   > `wake` is sufficient — substitute `wake` for `wakeorpoweron`.
+```bash
+launchctl start com.usc.lab-dashboard-ingest
+tail -f ~/Library/Logs/lab-dashboard-ingest.log
+```
 
-5. **Force a test run on demand** (bypasses the schedule):
-   ```bash
-   launchctl start com.usc.lab-dashboard-ingest
-   tail -f ~/Library/Logs/lab-dashboard-ingest.log
-   ```
+## How it works
+
+1. launchd fires `email_ingest.py` at 06:15.
+2. Python shells out to `/usr/bin/osascript fetch_attachment.applescript`,
+   which logs into Apple Mail, finds matching messages, saves every
+   `.xls`/`.xlsx` attachment into
+   `/Users/michaelbask/Library/CloudStorage/OneDrive-KeckMedicineofUSC/Work/Productivity Heat Maps/xls_ingest`,
+   and marks those messages read.
+3. Python scans the drop folder, parses each new file with the inlined
+   parsing pipeline (identical to the dashboard's `parse_single_file`),
+   and calls the inlined `ingest_new_data` to merge the rows into the
+   partitioned Parquet store on GitHub via the Contents API. Each
+   affected month's partition is written as its own commit on the
+   configured branch — so there is no separate `git push` step.
+4. Each processed file is moved into
+   `xls_ingest/processed/<YYYY-MM-DD>/` so the next run does not
+   re-ingest it.
 
 ## Troubleshooting
 
-- **`Missing required env var ...`** — `scripts/.env` isn't populated
-  or launchd doesn't see it. The script loads `.env` relative to its own
-  location (`scripts/.env`), so make sure `WorkingDirectory` in the
-  plist points at the repo root and the `.env` file exists there.
-- **`osascript` errors like `Not authorized to send Apple events to Mail`**
-  — Automation consent was denied or never prompted. Open System Settings
-  → Privacy & Security → Automation, find the entry for Python (or
-  Terminal, if running manually), and tick **Mail**. If no entry exists,
-  run the script manually once to trigger the prompt.
-- **AppleScript log says `no Mail account found matching …`** — Apple
-  Mail is either not running, not signed in to that account, or the
-  account's `user name` property is not the UPN. Open Mail → Settings →
-  Accounts and confirm the user name; adjust the `targetUser` constant at
-  the top of `fetch_attachment.applescript` if needed.
-- **`403 Resource not accessible by integration` from GitHub** — the PAT
-  doesn't have `contents: write` on the target repo, or points at the
-  wrong repo in `GITHUB_REPOSITORY`.
-- **Job never fires at 06:15** — check `launchctl list | grep
-  lab-dashboard-ingest` for a non-zero exit status, and
-  `/tmp/lab-dashboard-ingest.err.log` for tracebacks. Also make sure
-  `pmset -g sched` shows a wake for 06:14.
-- **Same attachment ingested twice** — the Python script moves every
-  processed file into `xls_ingest/processed/<YYYY-MM-DD>/`. If files are
-  piling up in the root drop folder, the move step is failing — check
-  OneDrive for write permissions on the folder.
+- **`Missing GITHUB_TOKEN`** — `scripts/.env` is not populated or
+  launchd can't find it. The script loads `.env` from the same
+  directory as `email_ingest.py`, so make sure the plist's
+  `WorkingDirectory` (or the `__REPO_PATH__` substitution above)
+  points at the `scripts/` folder.
+- **`Not authorized to send Apple events to Mail`** — Automation
+  consent was denied or never prompted. Open System Settings → Privacy
+  & Security → Automation, find the Python entry, and tick **Mail**.
+- **`no Mail account found matching michael.bask@med.usc.edu`** —
+  Apple Mail isn't signed in, or the account's User Name field isn't
+  that email. Open Mail → Settings → Accounts and confirm. You can
+  also edit `targetUser` at the top of `fetch_attachment.applescript`.
+- **`403 Resource not accessible by integration`** — the GitHub PAT
+  lacks `contents: write` on the repo in `GITHUB_REPOSITORY`.
+- **Job never fires at 06:15** — `launchctl list | grep
+  lab-dashboard-ingest` shows exit status; `/tmp/lab-dashboard-ingest.err.log`
+  has tracebacks; `pmset -g sched` should show the 06:14 wake.
+- **Same file ingested twice** — the move to `processed/` failed.
+  Check that OneDrive is not syncing the file back or holding a lock.
