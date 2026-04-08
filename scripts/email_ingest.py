@@ -606,6 +606,41 @@ def ingest_new_data(new_df: pd.DataFrame) -> dict:
     }
 
 
+def trigger_retrain_forecast() -> None:
+    """Fire a repository_dispatch to retrain forecasts after a successful ingest.
+
+    Uses the same GITHUB_TOKEN / GITHUB_REPOSITORY loaded from scripts/.env.
+    Non-fatal — any error is logged and swallowed so a dispatch failure never
+    breaks the ingest run.
+    """
+    try:
+        owner, repo = _github_repo()
+        resp = requests.post(
+            f"https://api.github.com/repos/{owner}/{repo}/dispatches",
+            headers={
+                **_gh_headers(),
+                "Content-Type": "application/json",
+            },
+            json={
+                "event_type": "retrain-forecast",
+                "client_payload": {
+                    "source": "email_ingest",
+                    "triggered_at": datetime.utcnow().isoformat() + "Z",
+                },
+            },
+            timeout=30,
+        )
+        if resp.status_code in (200, 201, 204):
+            log.info("Dispatched retrain-forecast event to %s/%s", owner, repo)
+        else:
+            log.warning(
+                "retrain-forecast dispatch failed: %s %s",
+                resp.status_code, resp.text[:300],
+            )
+    except Exception as exc:
+        log.warning("retrain-forecast dispatch raised: %s", exc)
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # APPLE MAIL FETCH
 # ═════════════════════════════════════════════════════════════════════════════
@@ -733,6 +768,10 @@ def main() -> int:
             "Ingest run complete: %d file(s), %d row(s) added.",
             matched, total_added,
         )
+
+    if total_added > 0:
+        trigger_retrain_forecast()
+
     return 0
 
 
