@@ -190,6 +190,79 @@ def forward_fill_accession_clusters(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# HEADER-ROW PROMOTION
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Minimum number of known headers a row must contain to be considered the
+# true column header. Picked so stray metadata rows (title, "Generated on…",
+# run parameters) never get misidentified as headers, while any genuine
+# Reporting Workbench header row always clears the bar.
+_HEADER_MATCH_MIN = 3
+
+# Search at most this many leading rows for a header candidate, so we never
+# scan the whole file if the first row already looks right.
+_HEADER_SEARCH_DEPTH = 30
+
+
+def _count_header_matches(values) -> int:
+    """How many entries in ``values`` stripped-match a known source column."""
+    matches = 0
+    for v in values:
+        if isinstance(v, str) and v.strip() in ALL_SOURCE_COLUMNS:
+            matches += 1
+    return matches
+
+
+def promote_header_row(df: pd.DataFrame) -> pd.DataFrame:
+    """Find the real column-header row and promote it.
+
+    Epic Reporting Workbench exports (especially SpreadsheetML .xls)
+    frequently prepend title, timestamp, or run-parameter rows above the
+    actual column headers.  The default "row 0 is the header" assumption
+    then produces a DataFrame whose columns are stray metadata text and
+    drops every recognisable field downstream.
+
+    This helper:
+      1. Checks if the current column names already contain enough
+         recognised headers.  If so, returns ``df`` unchanged.
+      2. Otherwise scans up to ``_HEADER_SEARCH_DEPTH`` leading rows for
+         the row with the most known headers.  If a row clears
+         ``_HEADER_MATCH_MIN`` matches, it is promoted to the column
+         index and every row at/above it is discarded.
+      3. If no row clears the threshold, returns ``df`` unchanged.  The
+         caller's existing behaviour is preserved for legitimately odd
+         inputs — this helper can only improve parse outcomes, never
+         worsen them.
+    """
+    if df is None or df.empty:
+        return df
+
+    current_matches = _count_header_matches(df.columns)
+    if current_matches >= _HEADER_MATCH_MIN:
+        return df
+
+    search_limit = min(len(df), _HEADER_SEARCH_DEPTH)
+    best_idx = -1
+    best_matches = current_matches
+    for i in range(search_limit):
+        row_matches = _count_header_matches(df.iloc[i].tolist())
+        if row_matches > best_matches:
+            best_matches = row_matches
+            best_idx = i
+
+    if best_idx < 0 or best_matches < _HEADER_MATCH_MIN:
+        return df
+
+    new_headers = [
+        v.strip() if isinstance(v, str) else v
+        for v in df.iloc[best_idx].tolist()
+    ]
+    promoted = df.iloc[best_idx + 1 :].copy()
+    promoted.columns = new_headers
+    return promoted.reset_index(drop=True)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # COLUMN FILTERING
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -319,6 +392,8 @@ def parse_single_file(file_bytes: bytes, filename: str = "") -> pd.DataFrame:
 
     processed_sheets = []
     for sheet_df in raw_sheets:
+        # Promote the real header row if the sheet has stray metadata above it
+        sheet_df = promote_header_row(sheet_df)
         # Forward-fill accession clusters before column filtering
         sheet_df = forward_fill_accession_clusters(sheet_df)
         # Keep only recognized columns
