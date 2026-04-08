@@ -67,18 +67,31 @@ on run
 
         log "LINE: using account " & (name of targetAccount)
 
-        -- Collect messages across every inbox mailbox belonging to
-        -- that account (Exchange accounts can expose more than one).
+        -- Collect messages across every mailbox belonging to that
+        -- account, including nested subfolders.  A flat queue is grown
+        -- in place: each mailbox's child mailboxes are appended as they
+        -- are discovered, so the loop terminates when every descendant
+        -- has been visited.
         set candidateMessages to {}
+        set toScan to {}
         repeat with mb in (every mailbox of targetAccount)
+            set end of toScan to (contents of mb)
+        end repeat
+
+        set idx to 1
+        repeat while idx ≤ (count of toScan)
+            set currentMb to item idx of toScan
+            set idx to idx + 1
             try
-                set mbName to name of mb
-                if mbName is "INBOX" or mbName is "Inbox" or mbName is "inbox" then
-                    set theseMsgs to (messages of mb whose (date received is greater than cutoffDate) and (subject contains subjectKeyword))
-                    repeat with m in theseMsgs
-                        set end of candidateMessages to m
-                    end repeat
-                end if
+                set theseMsgs to (messages of currentMb whose (date received is greater than cutoffDate) and (subject contains subjectKeyword))
+                repeat with m in theseMsgs
+                    set end of candidateMessages to m
+                end repeat
+            end try
+            try
+                repeat with sub in (every mailbox of currentMb)
+                    set end of toScan to (contents of sub)
+                end repeat
             end try
         end repeat
 
