@@ -59,6 +59,7 @@ MAP_TYPES:         list[str]       = list(SITE_CONFIG.keys())
 # Procedures always excluded from heatmaps
 EXCLUDE_PROCS: set[str] = {
     "Glomerular Filtration Rate Estimated",
+    ".Diff Auto",
     ".Diff Auto -",
     "Manual Diff-",
 }
