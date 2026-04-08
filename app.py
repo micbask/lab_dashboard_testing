@@ -141,7 +141,7 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
         st.markdown("""
             </div>
             <div style="text-align:center; margin-top: 1.2rem; color: #94a3b8; font-size: 0.7rem; font-family: 'Inter', system-ui, sans-serif;">
-                Keck Medicine of USC &nbsp;·&nbsp; Laboratory Analytics
+                Laboratory &nbsp;·&nbsp; Dashboard
             </div>
         """, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
