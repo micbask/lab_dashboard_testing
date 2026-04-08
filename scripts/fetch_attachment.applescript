@@ -67,11 +67,10 @@ on run
 
         log "LINE: using account " & (name of targetAccount)
 
-        -- Collect messages across every mailbox belonging to that
-        -- account, including nested subfolders.  A flat queue is grown
-        -- in place: each mailbox's child mailboxes are appended as they
-        -- are discovered, so the loop terminates when every descendant
-        -- has been visited.
+        -- Collect messages from the mailbox named "Discern" within the
+        -- target account.  The folder may live at the top level or
+        -- nested anywhere beneath it, so we walk every mailbox in a
+        -- flat BFS queue and only scan the ones whose name matches.
         set candidateMessages to {}
         set toScan to {}
         repeat with mb in (every mailbox of targetAccount)
@@ -83,10 +82,12 @@ on run
             set currentMb to item idx of toScan
             set idx to idx + 1
             try
-                set theseMsgs to (messages of currentMb whose (date received is greater than cutoffDate) and (subject contains subjectKeyword))
-                repeat with m in theseMsgs
-                    set end of candidateMessages to m
-                end repeat
+                if (name of currentMb) is "Discern" then
+                    set theseMsgs to (messages of currentMb whose (date received is greater than cutoffDate) and (subject contains subjectKeyword))
+                    repeat with m in theseMsgs
+                        set end of candidateMessages to m
+                    end repeat
+                end if
             end try
             try
                 repeat with sub in (every mailbox of currentMb)
