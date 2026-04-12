@@ -837,14 +837,14 @@ if view_mode == "Daily":
             '<div style="background:#1a1a1a;color:#e0e0e0;border-left:4px solid #FF9800;'
             'border-radius:6px;padding:0.85rem 1rem;font-size:0.82rem;margin-bottom:0.5rem;">'
             "This forecast is generated using Prophet, a forecasting ML model trained on all "
-            "available historical order completion data. It learns weekly patterns in procedure "
+            "available historical data. It learns weekly patterns in procedure "
             "volume by hour of day. Predictions are based on limited training data and should "
             "be treated as estimates only."
             "</div>",
             unsafe_allow_html=True,
         )
         st.info(
-            "Viewing **forecast** data — these are predicted values, not actual completions. "
+            "Viewing **forecast** - these are predicted values, not actual completions. "
             "Use the date picker or ◄ Prev / Next ► to return to historical dates."
         )
 
@@ -1111,7 +1111,7 @@ else:
     # ── Monthly heatmap ──────────────────────────────────────────────────────
     st.markdown(
         f'<div class="section-heading">'
-        f'{map_type} — Monthly Average | {month_name_str} | N = {n_days} days'
+        f'{map_type} - Monthly Average | {month_name_str} | N = {n_days} days'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -1212,7 +1212,7 @@ else:
 
             st.markdown(
                 f'<div class="section-heading">'
-                f'{map_type} — Weekday Pattern | {month_name_str}'
+                f'{map_type} - Weekday Pattern | {month_name_str}'
                 f'</div>',
                 unsafe_allow_html=True,
             )
