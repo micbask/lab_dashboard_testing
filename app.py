@@ -16,6 +16,7 @@ import calendar as _cal
 from copy import deepcopy
 from datetime import date, timedelta
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -975,10 +976,22 @@ if view_mode == "Daily":
     st.markdown("---")
 
     # ── Hourly bar chart ─────────────────────────────────────────────────────
-    with st.expander("Hourly volume bar chart", expanded=False):
+    with st.expander("Hourly Volume", expanded=False):
         _hourly = pivot[_hour_cols].sum().reset_index()
         _hourly.columns = ["Hour", "Total Volume"]
-        st.bar_chart(_hourly.set_index("Hour"), height=220)
+        # st.bar_chart sorts nominal x-axis alphabetically ("10AM, 10PM,
+        # 11AM, ..."), so render via altair with an explicit sort that
+        # matches _hour_cols (12AM → 11PM within the current hour range).
+        _hourly_chart = (
+            alt.Chart(_hourly)
+            .mark_bar()
+            .encode(
+                x=alt.X("Hour:N", sort=list(_hour_cols), title="Hour"),
+                y=alt.Y("Total Volume:Q", title="Total Volume"),
+            )
+            .properties(height=220)
+        )
+        st.altair_chart(_hourly_chart, use_container_width=True)
 
     # ── Cell drill-down (historical only) ────────────────────────────────────
     if not _is_forecast_view:
