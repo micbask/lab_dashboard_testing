@@ -512,15 +512,26 @@ def _gh_put_file(path: str, content_bytes: bytes, message: str,
     }
     if sha:
         payload["sha"] = sha
-    resp = requests.put(
-        f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
-        headers=_gh_headers(), json=payload, timeout=60,
+    url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+    last_err: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            resp = requests.put(url, headers=_gh_headers(), json=payload, timeout=60)
+            if resp.ok:
+                return resp.json()["content"]["sha"]
+            last_err = RuntimeError(
+                f"GitHub write failed {resp.status_code} for {path}:\n{resp.text[:300]}"
+            )
+        except Exception as exc:
+            last_err = exc
+        if attempt < 2:
+            delay = 5 * (2 ** attempt)  # 5s, 10s
+            log.warning("_gh_put_file attempt %d failed, retrying in %ds: %s",
+                        attempt + 1, delay, last_err)
+            time.sleep(delay)
+    raise RuntimeError(
+        f"GitHub write failed for {path} after 3 attempts: {last_err}"
     )
-    if not resp.ok:
-        raise RuntimeError(
-            f"GitHub write failed {resp.status_code} for {path}:\n{resp.text[:300]}"
-        )
-    return resp.json()["content"]["sha"]
 
 
 def _partition_key(dt: date) -> str:
@@ -574,9 +585,23 @@ def _load_partition_index() -> dict:
 def _save_partition_index(index: dict) -> None:
     global _INDEX_CACHE
     content = json.dumps(index, indent=2, default=str).encode("utf-8")
-    _, sha = _gh_get_file(PARTITION_INDEX_PATH)
-    _gh_put_file(PARTITION_INDEX_PATH, content, "Update partition index", sha=sha)
-    _INDEX_CACHE = index
+    last_err: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            _, sha = _gh_get_file(PARTITION_INDEX_PATH)
+            _gh_put_file(PARTITION_INDEX_PATH, content, "Update partition index", sha=sha)
+            _INDEX_CACHE = index
+            return
+        except Exception as exc:
+            last_err = exc
+        if attempt < 2:
+            delay = 5 * (2 ** attempt)  # 5s, 10s
+            log.warning("_save_partition_index attempt %d failed, retrying in %ds: %s",
+                        attempt + 1, delay, last_err)
+            time.sleep(delay)
+    raise RuntimeError(
+        f"Failed to save partition index after 3 attempts: {last_err}"
+    )
 
 
 def _read_partition(key: str) -> Optional[pd.DataFrame]:
@@ -783,9 +808,27 @@ def _process_file(path: Path, processed_dir: Path) -> int:
     return added
 
 
+def _github_reachable() -> bool:
+    """Return True if the GitHub API responds within 10 seconds."""
+    try:
+        resp = requests.get("https://api.github.com", timeout=10)
+        return resp.status_code < 500
+    except Exception:
+        return False
+
+
 def main() -> int:
     log.info("=" * 64)
     log.info("Starting email ingest run (standalone)")
+
+    # Network check — bail out early if GitHub is unreachable so files
+    # remain in the drop folder and are picked up on the next run.
+    if not _github_reachable():
+        log.warning(
+            "GitHub API not reachable — skipping run, "
+            "files left in drop folder for next attempt."
+        )
+        return 0
 
     # Step 1: Apple Mail drops today's attachments into the folder.
     _run_applescript()
