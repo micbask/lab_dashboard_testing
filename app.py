@@ -158,6 +158,8 @@ if "resource_assignments" not in _ss:
     _ss.resource_assignments = deepcopy(DEFAULT_RESOURCES)
 if "last_map_type" not in _ss:
     _ss.last_map_type = None
+if "active_dashboard" not in _ss:
+    _ss["active_dashboard"] = "analytics"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -695,7 +697,8 @@ if _ss.get("pending_upload"):
 
     _n_files = len(upload_list)
     _file_names = ", ".join(f['name'] for f in upload_list)
-    render_header(map_type if "map_type" in dir() else "—", "Processing upload…")
+    render_header(map_type if "map_type" in dir() else "—",
+                  "Processing upload…", active_dashboard=_ss.get("active_dashboard","analytics"))
 
     with st.status(f"Processing {_n_files} file(s)…", expanded=True) as _upload_status:
         try:
@@ -759,16 +762,9 @@ if _ss.get("pending_upload"):
 # ═════════════════════════════════════════════════════════════════════════════
 # MAIN PANEL — no data guard
 # ═════════════════════════════════════════════════════════════════════════════
-if not _data_exists:
-    st.markdown("""
-    <div class="keck-header">
-      <div>
-        <h1>Lab Productivity Dashboard</h1>
-        <p class="subtitle">Laboratory Analytics</p>
-      </div>
-      <span class="keck-badge">Laboratory Analytics</span>
-    </div>
-    """, unsafe_allow_html=True)
+if _ss["active_dashboard"] == "analytics" and not _data_exists:
+    render_header(map_type if "map_type" in dir() else "Lab Productivity",
+                  "—", active_dashboard="analytics")
     st.info(
         "Welcome!  Upload a file or configure GitHub in your "
         "Streamlit secrets to start viewing lab productivity heatmaps."
@@ -777,43 +773,303 @@ if not _data_exists:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# MAIN PANEL — LOAD DATA (filtered, lazy, partition-aware)
 # ═════════════════════════════════════════════════════════════════════════════
-# THIS is where data loading happens — only the data needed for the current
-# view, filtered by date range, resources, and excluded procedures.
+# MAIN PANEL — conditional on active dashboard
+# ═════════════════════════════════════════════════════════════════════════════
+if _ss["active_dashboard"] == "analytics":
+    # MAIN PANEL — LOAD DATA (filtered, lazy, partition-aware)
+    # ═════════════════════════════════════════════════════════════════════════════
+    # THIS is where data loading happens — only the data needed for the current
+    # view, filtered by date range, resources, and excluded procedures.
 
-if view_mode == "Daily":
-    _is_forecast_view = selected_date > _max_d
+    if view_mode == "Daily":
+        _is_forecast_view = selected_date > _max_d
 
-    if _is_forecast_view:
-        _fc_panel_data = load_forecasts(map_type)
-        if _fc_panel_data is None:
-            st.warning(
-                f"No forecast data available for **{map_type}**.  "
-                "Open Data Management and click **Refresh Forecast** to generate predictions."
+        if _is_forecast_view:
+            _fc_panel_data = load_forecasts(map_type)
+            if _fc_panel_data is None:
+                st.warning(
+                    f"No forecast data available for **{map_type}**.  "
+                    "Open Data Management and click **Refresh Forecast** to generate predictions."
+                )
+                st.stop()
+            pivot, hours = build_forecast_pivot(
+                _fc_panel_data, selected_date, hour_range, time_basis=time_basis
             )
+            df_date_hour = None
+            df_date      = pd.DataFrame()
+        else:
+            # Load ONLY this date's data, filtered to the right resources
+            if storage_is_configured():
+                filtered_df = load_filtered_data(
+                    start_date=selected_date,
+                    end_date=selected_date,
+                    resources=_current_resources,
+                    exclude_procs=_current_excludes,
+                    _index_hash=_idx_hash,
+                )
+            else:
+                from config import EXCLUDE_PROCS as _EP
+                resources = _ss.resource_assignments[map_type]
+                filtered_df = _local_df[
+                    _local_df["Performing Service Resource"].isin(resources) &
+                    ~_local_df["Order Procedure"].isin(_EP)
+                ].copy()
+
+            # Apply time-basis swap
+            if time_basis == "In-Lab":
+                _has_inlab = "inlab_date" in filtered_df.columns and filtered_df["inlab_date"].notna().any()
+                if _has_inlab:
+                    filtered_df = filtered_df[filtered_df["inlab_date"].notna()].copy()
+                    filtered_df["complete_date"] = filtered_df["inlab_date"]
+                    filtered_df["hour"] = filtered_df["inlab_hour"].astype(int)
+                else:
+                    st.warning("No 'Date/Time - In Lab' data available.")
+                    st.stop()
+
+            pivot, df_date_hour, df_date, hours = build_pivot(filtered_df, selected_date, hour_range)
+
+        date_str = pd.Timestamp(selected_date).strftime("%B %d, %Y")
+        _header_suffix = "  ·  Forecast" if _is_forecast_view else ""
+        render_header(map_type, date_str + _header_suffix, active_dashboard=_ss["active_dashboard"])
+
+        if _is_forecast_view:
+            st.markdown(
+                '<div style="background:#1a1a1a;color:#e0e0e0;border-left:4px solid #FF9800;'
+                'border-radius:6px;padding:0.85rem 1rem;font-size:0.82rem;margin-bottom:0.5rem;">'
+                "This forecast is generated using Prophet, a forecasting ML model trained on all "
+                "available historical data. It learns weekly patterns in procedure "
+                "volume by hour of day. Predictions are based on limited training data and should "
+                "be treated as estimates only."
+                "</div>",
+                unsafe_allow_html=True,
+            )
+            st.info(
+                "Viewing **forecast** - these are predicted values, not actual completions. "
+                "Use the date picker or ◄ Prev / Next ► to return to historical dates."
+            )
+
+        if pivot is None:
+            if _is_forecast_view:
+                st.warning(
+                    f"No forecast predictions available for **{map_type}** on **{date_str}** "
+                    f"within the selected hour range."
+                )
+            else:
+                st.warning(
+                    f"No data found for **{map_type}** on **{date_str}** "
+                    f"within the selected hour range.  Try widening the hour slider."
+                )
             st.stop()
-        pivot, hours = build_forecast_pivot(
-            _fc_panel_data, selected_date, hour_range, time_basis=time_basis
+
+        # ── Metrics row ──────────────────────────────────────────────────────────
+        _hour_cols  = [c for c in pivot.columns if c != "Total"]
+        if not _hour_cols or pivot.empty:
+            st.info("No completed procedures found for this site on the selected date.")
+            st.stop()
+        total_vol   = int(round(pivot["Total"].sum()))
+        top_proc    = pivot["Total"].idxmax()
+        peak_hour   = pivot[_hour_cols].sum().idxmax()
+        num_procs   = len(pivot)
+        avg_per_hr  = round(total_vol / max(len(_hour_cols), 1), 1)
+
+        _vol_label  = "Forecast Volume" if _is_forecast_view else "Total Volume"
+
+        _m1, _m2, _m3, _m4, _m5 = st.columns(5)
+        with _m1:
+            st.markdown(metric_card(_vol_label, f"{total_vol:,}", accent=True),
+                        unsafe_allow_html=True)
+        with _m2:
+            _tp_disp = top_proc[:28] + "…" if len(top_proc) > 28 else top_proc
+            st.markdown(metric_card("Top Procedure", _tp_disp,
+                        sub=f"{int(round(pivot.loc[top_proc, 'Total'])):,} total"),
+                        unsafe_allow_html=True)
+        with _m3:
+            st.markdown(metric_card("Peak Hour", peak_hour,
+                        sub=f"{int(round(pivot[_hour_cols].sum()[peak_hour]))} "
+                            f"{'predicted' if _is_forecast_view else 'completions'}"),
+                        unsafe_allow_html=True)
+        with _m4:
+            st.markdown(metric_card("Procedures", str(num_procs), sub="shown (top 30)"),
+                        unsafe_allow_html=True)
+        with _m5:
+            st.markdown(metric_card("Avg / Hour", str(avg_per_hr),
+                        sub=f"across {len(_hour_cols)} hours"),
+                        unsafe_allow_html=True)
+
+        st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
+
+        # ── Heatmap table ────────────────────────────────────────────────────────
+        if _is_forecast_view:
+            _heading_label = "Forecast Volume by Procedure &amp; Hour"
+        elif time_basis == "In-Lab":
+            _heading_label = "In-Lab Volume by Procedure &amp; Hour"
+        else:
+            _heading_label = "Completed Volume by Procedure &amp; Hour"
+        st.markdown(
+            f'<div class="section-heading">{_heading_label}</div>',
+            unsafe_allow_html=True,
         )
-        df_date_hour = None
-        df_date      = pd.DataFrame()
+
+        if _is_forecast_view:
+            st.markdown(
+                f'<div class="heatmap-legend">'
+                f'Colour scale: &nbsp;<strong style="color:#FFE0B2;">■</strong> low &nbsp;→&nbsp; '
+                f'<strong style="color:#E65100;">■</strong> high (≥ {VMAX[map_type]} / hour). &nbsp;'
+                f'<strong>Total</strong> column = predicted daily sum per procedure.'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<div class="heatmap-legend">'
+                f'Colour scale: &nbsp;<strong style="color:#f5e642;">■</strong> low &nbsp;→&nbsp; '
+                f'<strong style="color:#3b0f70;">■</strong> high (≥ {VMAX[map_type]} / hour). &nbsp;'
+                f'<strong>Total</strong> column = full-day sum per procedure.'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        _table_h = min(80 + 35 * len(pivot), 900)
+        if _is_forecast_view:
+            st.dataframe(style_forecast_pivot(pivot, VMAX[map_type]),
+                         width="stretch", height=_table_h)
+        else:
+            st.dataframe(style_pivot(pivot, VMAX[map_type]),
+                         width="stretch", height=_table_h)
+
+        # ── Downloads ────────────────────────────────────────────────────────────
+        _file_prefix = map_type.replace(" ", "_")
+        _date_tag    = pd.Timestamp(selected_date).strftime("%Y-%m-%d")
+
+        if not _is_forecast_view and df_date_hour is not None and not df_date_hour.empty:
+            _dl1, _dl2 = st.columns(2)
+            with _dl1:
+                st.download_button(
+                    "Download PNG",
+                    data=build_png(df_date_hour, map_type, selected_date, hours),
+                    file_name=f"{_file_prefix}_{_date_tag}.png",
+                    mime="image/png",
+                    width="stretch",
+                    key="daily_png_dl",
+                )
+            with _dl2:
+                _cols_for_csv = [c for c in ["Order Procedure", "Performing Service Resource",
+                                              "Date/Time - Complete", "Complete Volume"]
+                                if c in df_date.columns]
+                _daily_raw_csv = (
+                    df_date[_cols_for_csv]
+                    .sort_values("Date/Time - Complete")
+                    .reset_index(drop=True)
+                    .to_csv(index=False)
+                    .encode()
+                )
+                st.download_button(
+                    "Download CSV",
+                    data=_daily_raw_csv,
+                    file_name=f"{_file_prefix}_raw_{_date_tag}.csv",
+                    mime="text/csv",
+                    width="stretch",
+                    key="daily_csv_dl",
+                )
+
+        st.markdown("---")
+
+        # ── Hourly bar chart ─────────────────────────────────────────────────────
+        with st.expander("Hourly Volume", expanded=False):
+            _hourly = pivot[_hour_cols].sum().reset_index()
+            _hourly.columns = ["Hour", "Total Volume"]
+            # st.bar_chart sorts nominal x-axis alphabetically ("10AM, 10PM,
+            # 11AM, ..."), so render via altair with an explicit sort that
+            # matches _hour_cols (12AM → 11PM within the current hour range).
+            _hourly_chart = (
+                alt.Chart(_hourly)
+                .mark_bar()
+                .encode(
+                    x=alt.X("Hour:N", sort=list(_hour_cols), title="Hour"),
+                    y=alt.Y("Total Volume:Q", title="Total Volume"),
+                )
+                .properties(height=220)
+            )
+            st.altair_chart(_hourly_chart, use_container_width=True)
+
+        # ── Cell drill-down (historical only) ────────────────────────────────────
+        if not _is_forecast_view:
+            with st.expander("Drill into a cell — individual completion events", expanded=False):
+                st.markdown(
+                    "Select a **procedure** and **hour** to inspect every individual "
+                    "completion event recorded in that cell."
+                )
+                _dd1, _dd2 = st.columns(2)
+                with _dd1:
+                    sel_proc       = st.selectbox("Procedure", pivot.index.tolist(), key="drill_proc")
+                with _dd2:
+                    sel_hour_label = st.selectbox("Hour", _hour_cols, key="drill_hour")
+
+                sel_hour_int = LABEL_TO_HOUR[sel_hour_label]
+                detail       = df_date[
+                    (df_date["Order Procedure"] == sel_proc) &
+                    (df_date["hour"] == sel_hour_int)
+                ].copy().sort_values("Date/Time - Complete")
+
+                _show_cols = {k: v for k, v in {
+                    "Date/Time - Complete":        "Completed At",
+                    "Performing Service Resource": "Resource",
+                    "Complete Volume":             "Volume",
+                }.items() if k in detail.columns}
+
+                detail_display = (
+                    detail[list(_show_cols.keys())]
+                    .rename(columns=_show_cols)
+                    .reset_index(drop=True)
+                )
+                if "Completed At" in detail_display.columns:
+                    detail_display["Completed At"] = (
+                        pd.to_datetime(detail_display["Completed At"])
+                        .dt.strftime("%Y-%m-%d  %H:%M:%S")
+                    )
+
+                if detail_display.empty:
+                    st.info(
+                        f"No completions for **{sel_proc}** during **{sel_hour_label}** on {date_str}."
+                    )
+                else:
+                    _cell_vol = (
+                        int(detail_display["Volume"].sum())
+                        if "Volume" in detail_display.columns else len(detail_display)
+                    )
+                    st.markdown(
+                        f"**{len(detail_display)} event(s)** &nbsp;·&nbsp; *{sel_proc}* &nbsp;·&nbsp; "
+                        f"**{sel_hour_label}** &nbsp;·&nbsp; Total volume: **{_cell_vol}**"
+                    )
+                    st.dataframe(
+                        detail_display, width="stretch",
+                        height=min(80 + 35 * len(detail_display), 500),
+                    )
+
     else:
-        # Load ONLY this date's data, filtered to the right resources
+        # ── Monthly view ─────────────────────────────────────────────────────────
+        month_name_str = f"{_cal.month_name[selected_month]} {selected_year}"
+        render_header(map_type, month_name_str, active_dashboard=_ss["active_dashboard"])
+
+        # Load ONLY this month's data, filtered to the right resources
+        _month_start = date(selected_year, selected_month, 1)
+        _month_end = date(selected_year, selected_month,
+                          _cal.monthrange(selected_year, selected_month)[1])
+
         if storage_is_configured():
             filtered_df = load_filtered_data(
-                start_date=selected_date,
-                end_date=selected_date,
+                start_date=_month_start,
+                end_date=_month_end,
                 resources=_current_resources,
                 exclude_procs=_current_excludes,
                 _index_hash=_idx_hash,
             )
         else:
-            from config import EXCLUDE_PROCS as _EP
             resources = _ss.resource_assignments[map_type]
             filtered_df = _local_df[
                 _local_df["Performing Service Resource"].isin(resources) &
-                ~_local_df["Order Procedure"].isin(_EP)
+                ~_local_df["Order Procedure"].isin(EXCLUDE_PROCS)
             ].copy()
 
         # Apply time-basis swap
@@ -827,138 +1083,89 @@ if view_mode == "Daily":
                 st.warning("No 'Date/Time - In Lab' data available.")
                 st.stop()
 
-        pivot, df_date_hour, df_date, hours = build_pivot(filtered_df, selected_date, hour_range)
-
-    date_str = pd.Timestamp(selected_date).strftime("%B %d, %Y")
-    _header_suffix = "  ·  Forecast" if _is_forecast_view else ""
-    render_header(map_type, date_str + _header_suffix)
-
-    if _is_forecast_view:
-        st.markdown(
-            '<div style="background:#1a1a1a;color:#e0e0e0;border-left:4px solid #FF9800;'
-            'border-radius:6px;padding:0.85rem 1rem;font-size:0.82rem;margin-bottom:0.5rem;">'
-            "This forecast is generated using Prophet, a forecasting ML model trained on all "
-            "available historical data. It learns weekly patterns in procedure "
-            "volume by hour of day. Predictions are based on limited training data and should "
-            "be treated as estimates only."
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        st.info(
-            "Viewing **forecast** - these are predicted values, not actual completions. "
-            "Use the date picker or ◄ Prev / Next ► to return to historical dates."
+        monthly_pivot, n_days, month_raw_df = build_monthly_pivot(
+            filtered_df, selected_year, selected_month
         )
 
-    if pivot is None:
-        if _is_forecast_view:
-            st.warning(
-                f"No forecast predictions available for **{map_type}** on **{date_str}** "
-                f"within the selected hour range."
-            )
-        else:
-            st.warning(
-                f"No data found for **{map_type}** on **{date_str}** "
-                f"within the selected hour range.  Try widening the hour slider."
-            )
-        st.stop()
+        if monthly_pivot is None:
+            st.warning(f"No data found for **{map_type}** in **{month_name_str}**.")
+            st.stop()
 
-    # ── Metrics row ──────────────────────────────────────────────────────────
-    _hour_cols  = [c for c in pivot.columns if c != "Total"]
-    if not _hour_cols or pivot.empty:
-        st.info("No completed procedures found for this site on the selected date.")
-        st.stop()
-    total_vol   = int(round(pivot["Total"].sum()))
-    top_proc    = pivot["Total"].idxmax()
-    peak_hour   = pivot[_hour_cols].sum().idxmax()
-    num_procs   = len(pivot)
-    avg_per_hr  = round(total_vol / max(len(_hour_cols), 1), 1)
+        # ── Monthly metrics row ──────────────────────────────────────────────────
+        _m_hour_cols  = [c for c in monthly_pivot.columns if c != "Total"]
+        _m_total_vol  = int(round(monthly_pivot["Total"].sum() * n_days))
+        _m_top_proc   = monthly_pivot["Total"].idxmax()
+        _m_peak_col   = monthly_pivot[_m_hour_cols].sum().idxmax()
+        _m_peak_disp  = _m_peak_col.replace("AM", " AM").replace("PM", " PM")
+        _m_n_procs    = len(monthly_pivot)
+        _m_avg_per_day = round(_m_total_vol / max(n_days, 1))
 
-    _vol_label  = "Forecast Volume" if _is_forecast_view else "Total Volume"
+        _mm1, _mm2, _mm3, _mm4, _mm5 = st.columns(5)
+        with _mm1:
+            st.markdown(metric_card("Total Volume", f"{_m_total_vol:,}", accent=True),
+                        unsafe_allow_html=True)
+        with _mm2:
+            _mtp_disp = _m_top_proc[:28] + "…" if len(_m_top_proc) > 28 else _m_top_proc
+            st.markdown(metric_card("Top Procedure", _mtp_disp,
+                        sub=f"highest volume in {month_name_str}"),
+                        unsafe_allow_html=True)
+        with _mm3:
+            st.markdown(metric_card("Peak Hour", _m_peak_disp,
+                        sub="highest avg volume"), unsafe_allow_html=True)
+        with _mm4:
+            st.markdown(metric_card("Procedures Shown", str(_m_n_procs),
+                        sub="top 30 by month volume"), unsafe_allow_html=True)
+        with _mm5:
+            st.markdown(metric_card("Avg / Day", f"{_m_avg_per_day:,}",
+                        sub=f"over {n_days} days"), unsafe_allow_html=True)
 
-    _m1, _m2, _m3, _m4, _m5 = st.columns(5)
-    with _m1:
-        st.markdown(metric_card(_vol_label, f"{total_vol:,}", accent=True),
-                    unsafe_allow_html=True)
-    with _m2:
-        _tp_disp = top_proc[:28] + "…" if len(top_proc) > 28 else top_proc
-        st.markdown(metric_card("Top Procedure", _tp_disp,
-                    sub=f"{int(round(pivot.loc[top_proc, 'Total'])):,} total"),
-                    unsafe_allow_html=True)
-    with _m3:
-        st.markdown(metric_card("Peak Hour", peak_hour,
-                    sub=f"{int(round(pivot[_hour_cols].sum()[peak_hour]))} "
-                        f"{'predicted' if _is_forecast_view else 'completions'}"),
-                    unsafe_allow_html=True)
-    with _m4:
-        st.markdown(metric_card("Procedures", str(num_procs), sub="shown (top 30)"),
-                    unsafe_allow_html=True)
-    with _m5:
-        st.markdown(metric_card("Avg / Hour", str(avg_per_hr),
-                    sub=f"across {len(_hour_cols)} hours"),
-                    unsafe_allow_html=True)
+        st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
 
-    st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
-
-    # ── Heatmap table ────────────────────────────────────────────────────────
-    if _is_forecast_view:
-        _heading_label = "Forecast Volume by Procedure &amp; Hour"
-    elif time_basis == "In-Lab":
-        _heading_label = "In-Lab Volume by Procedure &amp; Hour"
-    else:
-        _heading_label = "Completed Volume by Procedure &amp; Hour"
-    st.markdown(
-        f'<div class="section-heading">{_heading_label}</div>',
-        unsafe_allow_html=True,
-    )
-
-    if _is_forecast_view:
+        # ── Monthly heatmap ──────────────────────────────────────────────────────
         st.markdown(
-            f'<div class="heatmap-legend">'
-            f'Colour scale: &nbsp;<strong style="color:#FFE0B2;">■</strong> low &nbsp;→&nbsp; '
-            f'<strong style="color:#E65100;">■</strong> high (≥ {VMAX[map_type]} / hour). &nbsp;'
-            f'<strong>Total</strong> column = predicted daily sum per procedure.'
+            f'<div class="section-heading">'
+            f'{map_type} - Monthly Average | {month_name_str} | N = {n_days} days'
             f'</div>',
             unsafe_allow_html=True,
         )
-    else:
         st.markdown(
             f'<div class="heatmap-legend">'
+            f'Values = avg completed volume per day in hour. '
             f'Colour scale: &nbsp;<strong style="color:#f5e642;">■</strong> low &nbsp;→&nbsp; '
-            f'<strong style="color:#3b0f70;">■</strong> high (≥ {VMAX[map_type]} / hour). &nbsp;'
-            f'<strong>Total</strong> column = full-day sum per procedure.'
+            f'<strong style="color:#3b0f70;">■</strong> high (≥ {VMAX[map_type]}). &nbsp;'
+            f'<strong>Total</strong> column = avg daily total per procedure.'
             f'</div>',
             unsafe_allow_html=True,
         )
 
-    _table_h = min(80 + 35 * len(pivot), 900)
-    if _is_forecast_view:
-        st.dataframe(style_forecast_pivot(pivot, VMAX[map_type]),
-                     width="stretch", height=_table_h)
-    else:
-        st.dataframe(style_pivot(pivot, VMAX[map_type]),
-                     width="stretch", height=_table_h)
+        _m_table_h = min(80 + 35 * len(monthly_pivot), 900)
+        st.dataframe(
+            style_monthly_pivot(monthly_pivot, VMAX[map_type]),
+            width="stretch", height=_m_table_h,
+        )
 
-    # ── Downloads ────────────────────────────────────────────────────────────
-    _file_prefix = map_type.replace(" ", "_")
-    _date_tag    = pd.Timestamp(selected_date).strftime("%Y-%m-%d")
-
-    if not _is_forecast_view and df_date_hour is not None and not df_date_hour.empty:
-        _dl1, _dl2 = st.columns(2)
-        with _dl1:
+        # ── Monthly downloads ────────────────────────────────────────────────────
+        _m_file_prefix = map_type.replace(" ", "_")
+        _m_month_label = _cal.month_name[selected_month]
+        _m_file_tag    = f"{_m_month_label}_{selected_year}"
+        _mdl1, _mdl2   = st.columns(2)
+        with _mdl1:
             st.download_button(
                 "Download PNG",
-                data=build_png(df_date_hour, map_type, selected_date, hours),
-                file_name=f"{_file_prefix}_{_date_tag}.png",
+                data=build_monthly_png(
+                    monthly_pivot, map_type, selected_year, selected_month, n_days
+                ),
+                file_name=f"{_m_file_prefix}_{_m_file_tag}.png",
                 mime="image/png",
                 width="stretch",
-                key="daily_png_dl",
+                key="monthly_png_dl",
             )
-        with _dl2:
-            _cols_for_csv = [c for c in ["Order Procedure", "Performing Service Resource",
-                                          "Date/Time - Complete", "Complete Volume"]
-                            if c in df_date.columns]
-            _daily_raw_csv = (
-                df_date[_cols_for_csv]
+        with _mdl2:
+            _csv_cols = [c for c in ["Order Procedure", "Performing Service Resource",
+                                      "Date/Time - Complete", "Complete Volume"]
+                         if c in filtered_df.columns]
+            _monthly_raw_csv = (
+                filtered_df[_csv_cols]
                 .sort_values("Date/Time - Complete")
                 .reset_index(drop=True)
                 .to_csv(index=False)
@@ -966,304 +1173,100 @@ if view_mode == "Daily":
             )
             st.download_button(
                 "Download CSV",
-                data=_daily_raw_csv,
-                file_name=f"{_file_prefix}_raw_{_date_tag}.csv",
+                data=_monthly_raw_csv,
+                file_name=f"{_m_file_prefix}_raw_{_m_file_tag}.csv",
                 mime="text/csv",
                 width="stretch",
-                key="daily_csv_dl",
+                key="monthly_csv_dl",
             )
 
-    st.markdown("---")
+        st.markdown("---")
 
-    # ── Hourly bar chart ─────────────────────────────────────────────────────
-    with st.expander("Hourly Volume", expanded=False):
-        _hourly = pivot[_hour_cols].sum().reset_index()
-        _hourly.columns = ["Hour", "Total Volume"]
-        # st.bar_chart sorts nominal x-axis alphabetically ("10AM, 10PM,
-        # 11AM, ..."), so render via altair with an explicit sort that
-        # matches _hour_cols (12AM → 11PM within the current hour range).
-        _hourly_chart = (
-            alt.Chart(_hourly)
-            .mark_bar()
-            .encode(
-                x=alt.X("Hour:N", sort=list(_hour_cols), title="Hour"),
-                y=alt.Y("Total Volume:Q", title="Total Volume"),
+        # ── Weekday pattern expander ─────────────────────────────────────────────
+        with st.expander("Hourly Volume by Day of Week", expanded=False):
+            weekday_pivot, _wd_counts = build_weekday_pivot(
+                month_raw_df, selected_year, selected_month
             )
-            .properties(height=220)
-        )
-        st.altair_chart(_hourly_chart, use_container_width=True)
 
-    # ── Cell drill-down (historical only) ────────────────────────────────────
-    if not _is_forecast_view:
-        with st.expander("Drill into a cell — individual completion events", expanded=False):
-            st.markdown(
-                "Select a **procedure** and **hour** to inspect every individual "
-                "completion event recorded in that cell."
-            )
-            _dd1, _dd2 = st.columns(2)
-            with _dd1:
-                sel_proc       = st.selectbox("Procedure", pivot.index.tolist(), key="drill_proc")
-            with _dd2:
-                sel_hour_label = st.selectbox("Hour", _hour_cols, key="drill_hour")
-
-            sel_hour_int = LABEL_TO_HOUR[sel_hour_label]
-            detail       = df_date[
-                (df_date["Order Procedure"] == sel_proc) &
-                (df_date["hour"] == sel_hour_int)
-            ].copy().sort_values("Date/Time - Complete")
-
-            _show_cols = {k: v for k, v in {
-                "Date/Time - Complete":        "Completed At",
-                "Performing Service Resource": "Resource",
-                "Complete Volume":             "Volume",
-            }.items() if k in detail.columns}
-
-            detail_display = (
-                detail[list(_show_cols.keys())]
-                .rename(columns=_show_cols)
-                .reset_index(drop=True)
-            )
-            if "Completed At" in detail_display.columns:
-                detail_display["Completed At"] = (
-                    pd.to_datetime(detail_display["Completed At"])
-                    .dt.strftime("%Y-%m-%d  %H:%M:%S")
-                )
-
-            if detail_display.empty:
-                st.info(
-                    f"No completions for **{sel_proc}** during **{sel_hour_label}** on {date_str}."
-                )
+            if weekday_pivot is None:
+                st.info("No data available for weekday breakdown.")
             else:
-                _cell_vol = (
-                    int(detail_display["Volume"].sum())
-                    if "Volume" in detail_display.columns else len(detail_display)
-                )
+                _wd_hour_cols    = [c for c in weekday_pivot.columns if c != "Total"]
+                _wd_busiest_day  = weekday_pivot["Total"].idxmax()
+                _wd_lightest_day = weekday_pivot["Total"].idxmin()
+                _wd_peak_hour    = weekday_pivot[_wd_hour_cols].sum().idxmax()
+                _wd_peak_disp    = _wd_peak_hour.replace("AM", " AM").replace("PM", " PM")
+
+                _wc1, _wc2, _wc3 = st.columns(3)
+                with _wc1:
+                    st.markdown(
+                        metric_card(
+                            "Busiest Day",
+                            _wd_busiest_day.split("  ")[0],
+                            sub=f"avg {int(round(weekday_pivot.loc[_wd_busiest_day, 'Total']))} vol / day",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                with _wc2:
+                    st.markdown(
+                        metric_card("Peak Hour", _wd_peak_disp,
+                                    sub="highest avg volume across weekdays"),
+                        unsafe_allow_html=True,
+                    )
+                with _wc3:
+                    st.markdown(
+                        metric_card(
+                            "Lightest Day",
+                            _wd_lightest_day.split("  ")[0],
+                            sub=f"avg {int(round(weekday_pivot.loc[_wd_lightest_day, 'Total']))} vol / day",
+                        ),
+                        unsafe_allow_html=True,
+                    )
+
                 st.markdown(
-                    f"**{len(detail_display)} event(s)** &nbsp;·&nbsp; *{sel_proc}* &nbsp;·&nbsp; "
-                    f"**{sel_hour_label}** &nbsp;·&nbsp; Total volume: **{_cell_vol}**"
+                    f'<div class="section-heading">'
+                    f'{map_type} - Weekday Pattern | {month_name_str}'
+                    f'</div>',
+                    unsafe_allow_html=True,
                 )
+                _wd_vmax = max(1, int(weekday_pivot[_wd_hour_cols].values.max()))
+                st.markdown(
+                    f'<div class="heatmap-legend">'
+                    f'Values = avg completed volume per occurrence of that weekday. '
+                    f'Colour scale: &nbsp;<strong style="color:#f5e642;">■</strong> low &nbsp;→&nbsp; '
+                    f'<strong style="color:#3b0f70;">■</strong> high (≥ {_wd_vmax}). &nbsp;'
+                    f'<strong>Total</strong> column = avg daily total for that weekday.'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
                 st.dataframe(
-                    detail_display, width="stretch",
-                    height=min(80 + 35 * len(detail_display), 500),
+                    style_monthly_pivot(weekday_pivot, _wd_vmax),
+                    width="stretch",
+                    height=min(80 + 35 * 7, 400),
                 )
+
+                _wdl1, _wdl2 = st.columns(2)
+                with _wdl1:
+                    st.download_button(
+                        "Download PNG",
+                        data=build_weekday_png(
+                            weekday_pivot, map_type, selected_year, selected_month
+                        ),
+                        file_name=f"{_m_file_prefix}_Weekday_{_m_file_tag}.png",
+                        mime="image/png",
+                        width="stretch",
+                        key="weekday_png_dl",
+                    )
+                with _wdl2:
+                    st.download_button(
+                        "Download CSV",
+                        data=weekday_pivot.to_csv(index=True).encode(),
+                        file_name=f"{_m_file_prefix}_Weekday_{_m_file_tag}.csv",
+                        mime="text/csv",
+                        width="stretch",
+                        key="weekday_csv_dl",
+                    )
 
 else:
-    # ── Monthly view ─────────────────────────────────────────────────────────
-    month_name_str = f"{_cal.month_name[selected_month]} {selected_year}"
-    render_header(map_type, month_name_str)
-
-    # Load ONLY this month's data, filtered to the right resources
-    _month_start = date(selected_year, selected_month, 1)
-    _month_end = date(selected_year, selected_month,
-                      _cal.monthrange(selected_year, selected_month)[1])
-
-    if storage_is_configured():
-        filtered_df = load_filtered_data(
-            start_date=_month_start,
-            end_date=_month_end,
-            resources=_current_resources,
-            exclude_procs=_current_excludes,
-            _index_hash=_idx_hash,
-        )
-    else:
-        resources = _ss.resource_assignments[map_type]
-        filtered_df = _local_df[
-            _local_df["Performing Service Resource"].isin(resources) &
-            ~_local_df["Order Procedure"].isin(EXCLUDE_PROCS)
-        ].copy()
-
-    # Apply time-basis swap
-    if time_basis == "In-Lab":
-        _has_inlab = "inlab_date" in filtered_df.columns and filtered_df["inlab_date"].notna().any()
-        if _has_inlab:
-            filtered_df = filtered_df[filtered_df["inlab_date"].notna()].copy()
-            filtered_df["complete_date"] = filtered_df["inlab_date"]
-            filtered_df["hour"] = filtered_df["inlab_hour"].astype(int)
-        else:
-            st.warning("No 'Date/Time - In Lab' data available.")
-            st.stop()
-
-    monthly_pivot, n_days, month_raw_df = build_monthly_pivot(
-        filtered_df, selected_year, selected_month
-    )
-
-    if monthly_pivot is None:
-        st.warning(f"No data found for **{map_type}** in **{month_name_str}**.")
-        st.stop()
-
-    # ── Monthly metrics row ──────────────────────────────────────────────────
-    _m_hour_cols  = [c for c in monthly_pivot.columns if c != "Total"]
-    _m_total_vol  = int(round(monthly_pivot["Total"].sum() * n_days))
-    _m_top_proc   = monthly_pivot["Total"].idxmax()
-    _m_peak_col   = monthly_pivot[_m_hour_cols].sum().idxmax()
-    _m_peak_disp  = _m_peak_col.replace("AM", " AM").replace("PM", " PM")
-    _m_n_procs    = len(monthly_pivot)
-    _m_avg_per_day = round(_m_total_vol / max(n_days, 1))
-
-    _mm1, _mm2, _mm3, _mm4, _mm5 = st.columns(5)
-    with _mm1:
-        st.markdown(metric_card("Total Volume", f"{_m_total_vol:,}", accent=True),
-                    unsafe_allow_html=True)
-    with _mm2:
-        _mtp_disp = _m_top_proc[:28] + "…" if len(_m_top_proc) > 28 else _m_top_proc
-        st.markdown(metric_card("Top Procedure", _mtp_disp,
-                    sub=f"highest volume in {month_name_str}"),
-                    unsafe_allow_html=True)
-    with _mm3:
-        st.markdown(metric_card("Peak Hour", _m_peak_disp,
-                    sub="highest avg volume"), unsafe_allow_html=True)
-    with _mm4:
-        st.markdown(metric_card("Procedures Shown", str(_m_n_procs),
-                    sub="top 30 by month volume"), unsafe_allow_html=True)
-    with _mm5:
-        st.markdown(metric_card("Avg / Day", f"{_m_avg_per_day:,}",
-                    sub=f"over {n_days} days"), unsafe_allow_html=True)
-
-    st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
-
-    # ── Monthly heatmap ──────────────────────────────────────────────────────
-    st.markdown(
-        f'<div class="section-heading">'
-        f'{map_type} - Monthly Average | {month_name_str} | N = {n_days} days'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f'<div class="heatmap-legend">'
-        f'Values = avg completed volume per day in hour. '
-        f'Colour scale: &nbsp;<strong style="color:#f5e642;">■</strong> low &nbsp;→&nbsp; '
-        f'<strong style="color:#3b0f70;">■</strong> high (≥ {VMAX[map_type]}). &nbsp;'
-        f'<strong>Total</strong> column = avg daily total per procedure.'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    _m_table_h = min(80 + 35 * len(monthly_pivot), 900)
-    st.dataframe(
-        style_monthly_pivot(monthly_pivot, VMAX[map_type]),
-        width="stretch", height=_m_table_h,
-    )
-
-    # ── Monthly downloads ────────────────────────────────────────────────────
-    _m_file_prefix = map_type.replace(" ", "_")
-    _m_month_label = _cal.month_name[selected_month]
-    _m_file_tag    = f"{_m_month_label}_{selected_year}"
-    _mdl1, _mdl2   = st.columns(2)
-    with _mdl1:
-        st.download_button(
-            "Download PNG",
-            data=build_monthly_png(
-                monthly_pivot, map_type, selected_year, selected_month, n_days
-            ),
-            file_name=f"{_m_file_prefix}_{_m_file_tag}.png",
-            mime="image/png",
-            width="stretch",
-            key="monthly_png_dl",
-        )
-    with _mdl2:
-        _csv_cols = [c for c in ["Order Procedure", "Performing Service Resource",
-                                  "Date/Time - Complete", "Complete Volume"]
-                     if c in filtered_df.columns]
-        _monthly_raw_csv = (
-            filtered_df[_csv_cols]
-            .sort_values("Date/Time - Complete")
-            .reset_index(drop=True)
-            .to_csv(index=False)
-            .encode()
-        )
-        st.download_button(
-            "Download CSV",
-            data=_monthly_raw_csv,
-            file_name=f"{_m_file_prefix}_raw_{_m_file_tag}.csv",
-            mime="text/csv",
-            width="stretch",
-            key="monthly_csv_dl",
-        )
-
-    st.markdown("---")
-
-    # ── Weekday pattern expander ─────────────────────────────────────────────
-    with st.expander("Hourly Volume by Day of Week", expanded=False):
-        weekday_pivot, _wd_counts = build_weekday_pivot(
-            month_raw_df, selected_year, selected_month
-        )
-
-        if weekday_pivot is None:
-            st.info("No data available for weekday breakdown.")
-        else:
-            _wd_hour_cols    = [c for c in weekday_pivot.columns if c != "Total"]
-            _wd_busiest_day  = weekday_pivot["Total"].idxmax()
-            _wd_lightest_day = weekday_pivot["Total"].idxmin()
-            _wd_peak_hour    = weekday_pivot[_wd_hour_cols].sum().idxmax()
-            _wd_peak_disp    = _wd_peak_hour.replace("AM", " AM").replace("PM", " PM")
-
-            _wc1, _wc2, _wc3 = st.columns(3)
-            with _wc1:
-                st.markdown(
-                    metric_card(
-                        "Busiest Day",
-                        _wd_busiest_day.split("  ")[0],
-                        sub=f"avg {int(round(weekday_pivot.loc[_wd_busiest_day, 'Total']))} vol / day",
-                    ),
-                    unsafe_allow_html=True,
-                )
-            with _wc2:
-                st.markdown(
-                    metric_card("Peak Hour", _wd_peak_disp,
-                                sub="highest avg volume across weekdays"),
-                    unsafe_allow_html=True,
-                )
-            with _wc3:
-                st.markdown(
-                    metric_card(
-                        "Lightest Day",
-                        _wd_lightest_day.split("  ")[0],
-                        sub=f"avg {int(round(weekday_pivot.loc[_wd_lightest_day, 'Total']))} vol / day",
-                    ),
-                    unsafe_allow_html=True,
-                )
-
-            st.markdown(
-                f'<div class="section-heading">'
-                f'{map_type} - Weekday Pattern | {month_name_str}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-            _wd_vmax = max(1, int(weekday_pivot[_wd_hour_cols].values.max()))
-            st.markdown(
-                f'<div class="heatmap-legend">'
-                f'Values = avg completed volume per occurrence of that weekday. '
-                f'Colour scale: &nbsp;<strong style="color:#f5e642;">■</strong> low &nbsp;→&nbsp; '
-                f'<strong style="color:#3b0f70;">■</strong> high (≥ {_wd_vmax}). &nbsp;'
-                f'<strong>Total</strong> column = avg daily total for that weekday.'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-            st.dataframe(
-                style_monthly_pivot(weekday_pivot, _wd_vmax),
-                width="stretch",
-                height=min(80 + 35 * 7, 400),
-            )
-
-            _wdl1, _wdl2 = st.columns(2)
-            with _wdl1:
-                st.download_button(
-                    "Download PNG",
-                    data=build_weekday_png(
-                        weekday_pivot, map_type, selected_year, selected_month
-                    ),
-                    file_name=f"{_m_file_prefix}_Weekday_{_m_file_tag}.png",
-                    mime="image/png",
-                    width="stretch",
-                    key="weekday_png_dl",
-                )
-            with _wdl2:
-                st.download_button(
-                    "Download CSV",
-                    data=weekday_pivot.to_csv(index=True).encode(),
-                    file_name=f"{_m_file_prefix}_Weekday_{_m_file_tag}.csv",
-                    mime="text/csv",
-                    width="stretch",
-                    key="weekday_csv_dl",
-                )
+    pass  # Pre-Analytics UI rendered in Step 3
