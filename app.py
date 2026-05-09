@@ -142,12 +142,14 @@ if "last_map_type" not in _ss:
 # ═════════════════════════════════════════════════════════════════════════════
 # ROUTING
 # ═════════════════════════════════════════════════════════════════════════════
-# On first load, seed from the URL query param (supports bookmarks/direct links).
-# After that, navigation is driven entirely by session state set synchronously
-# inside render_header() button handlers — this avoids any race condition between
-# st.query_params writes and the subsequent st.rerun() read.
-if "_nav_dashboard" not in _ss:
-    _ss["_nav_dashboard"] = st.query_params.get("dashboard", "analytics")
+# Nav is driven by HTML anchor tags in render_header that set ?dashboard=…
+# on click, so the URL is the source of truth. Mirror the URL into session
+# state on every rerun (and fall back to "analytics" for direct visits).
+_url_dashboard = st.query_params.get("dashboard")
+if _url_dashboard in ("analytics", "pre_analytics"):
+    _ss["_nav_dashboard"] = _url_dashboard
+elif "_nav_dashboard" not in _ss:
+    _ss["_nav_dashboard"] = "analytics"
 
 _active_dashboard = _ss["_nav_dashboard"]
 
