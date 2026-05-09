@@ -175,61 +175,71 @@ def render(params: dict, ss) -> None:
             # tooltip on empty cells.
             _z = _np.where(_z_arr == 0, _np.nan, _z_arr).tolist()
 
-            # Build pre-formatted hover strings from the pre-pivot draw_df.
-            if shift is None:
-                _sub = (
-                    draw_df[draw_df["location"] == location]
-                    if not draw_df.empty else draw_df
-                )
-            else:
-                _sub = (
-                    draw_df[
-                        (draw_df["location"] == location)
-                        & (draw_df["shift"] == shift)
-                    ] if not draw_df.empty else draw_df
-                )
-
-            _details: dict = {}
-            if not _sub.empty:
-                for (_tech, _hour), _grp in _sub.groupby(
-                    ["display_name", "hour"]
-                ):
-                    _grp_sorted = _grp.sort_values("draw_datetime")
-                    _n_d = len(_grp_sorted)
-                    _n_s = int(_grp_sorted["samples"].sum())
-                    _lines = [
-                        f"{_n_d} draw{'s' if _n_d != 1 else ''} · "
-                        f"{_n_s} total sample{'s' if _n_s != 1 else ''}"
-                    ]
-                    for _, _r in _grp_sorted.iterrows():
-                        _t = pd.to_datetime(_r["draw_datetime"]).strftime("%H:%M")
-                        _s = int(_r["samples"])
-                        _lines.append(
-                            f"{_t} — {_s} sample{'s' if _s != 1 else ''}"
-                        )
-                    _details[(_tech, int(_hour))] = "<br>".join(_lines)
-
-            _customdata = [
-                [_details.get((_tech, _h), None) for _h in range(24)]
-                for _tech in _techs
-            ]
-
-            _fig = _pgo.Figure(data=_pgo.Heatmap(
+            _heatmap_kwargs = dict(
                 z=_z,
                 x=_x,
                 y=_techs,
                 text=_text_vals,
                 texttemplate="%{text}",
-                customdata=_customdata,
                 hoverinfo="text",
-                hovertemplate="<b>%{y} @ %{x}</b><br>%{customdata}<extra></extra>",
                 colorscale="Teal",
                 zmin=0,
                 zmax=_vmax_pa,
                 xgap=1,
                 ygap=1,
                 colorbar=dict(title="Draws/hour", thickness=12, len=0.9),
-            ))
+            )
+
+            if view == "Monthly":
+                # Monthly cells are per-day averages — show only the average,
+                # no per-draw breakdown.
+                _heatmap_kwargs["hovertemplate"] = (
+                    "<b>%{y} @ %{x}</b><br>Avg draws: %{z:.1f}<extra></extra>"
+                )
+            else:
+                # Daily — build per-cell draw breakdown for the customdata tooltip.
+                if shift is None:
+                    _sub = (
+                        draw_df[draw_df["location"] == location]
+                        if not draw_df.empty else draw_df
+                    )
+                else:
+                    _sub = (
+                        draw_df[
+                            (draw_df["location"] == location)
+                            & (draw_df["shift"] == shift)
+                        ] if not draw_df.empty else draw_df
+                    )
+
+                _details: dict = {}
+                if not _sub.empty:
+                    for (_tech, _hour), _grp in _sub.groupby(
+                        ["display_name", "hour"]
+                    ):
+                        _grp_sorted = _grp.sort_values("draw_datetime")
+                        _n_d = len(_grp_sorted)
+                        _n_s = int(_grp_sorted["samples"].sum())
+                        _lines = [
+                            f"{_n_d} draw{'s' if _n_d != 1 else ''} · "
+                            f"{_n_s} total sample{'s' if _n_s != 1 else ''}"
+                        ]
+                        for _, _r in _grp_sorted.iterrows():
+                            _t = pd.to_datetime(_r["draw_datetime"]).strftime("%H:%M")
+                            _s = int(_r["samples"])
+                            _lines.append(
+                                f"{_t} — {_s} sample{'s' if _s != 1 else ''}"
+                            )
+                        _details[(_tech, int(_hour))] = "<br>".join(_lines)
+
+                _heatmap_kwargs["customdata"] = [
+                    [_details.get((_tech, _h), None) for _h in range(24)]
+                    for _tech in _techs
+                ]
+                _heatmap_kwargs["hovertemplate"] = (
+                    "<b>%{y} @ %{x}</b><br>%{customdata}<extra></extra>"
+                )
+
+            _fig = _pgo.Figure(data=_pgo.Heatmap(**_heatmap_kwargs))
             _fig.update_traces(hoverongaps=False)
 
             _plot_h = max(250, len(_techs) * 35 + 80)
