@@ -6,6 +6,8 @@ Changes from original:
   - Forecast heatmaps use Oranges colormap (issue #8)
   - Button text-shadow for better visibility (issue #9)
   - Login overlay CSS transition for instant hide (issue #10)
+  - Nav uses st.button + st.query_params instead of <a href> to prevent
+    page reload / session loss (issue #11)
 """
 
 import io
@@ -23,8 +25,8 @@ from config import VMAX, HOUR_LABELS, NAVY, GOLD, STEEL
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# MATPLOTLIB FONT
-# ═════════════════════════════════════════════════════════════════════════════
+MATPLOTLIB FONT
+═════════════════════════════════════════════════════════════════════════════
 
 def setup_mpl_font() -> None:
     """Use Palatino if available, fall back to generic serif."""
@@ -37,8 +39,8 @@ def setup_mpl_font() -> None:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# CSS INJECTION
-# ═════════════════════════════════════════════════════════════════════════════
+CSS INJECTION
+═════════════════════════════════════════════════════════════════════════════
 
 def inject_css() -> None:
     """Inject all global CSS styles."""
@@ -47,9 +49,9 @@ def inject_css() -> None:
 
 _GLOBAL_CSS = """
 <style>
-/* ══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════
    BASE — background & font
-   ══════════════════════════════════════════════════════════ */
+   ═══════════════════════════════════════════════════════ */
 html, body,
 [data-testid="stAppViewContainer"],
 [data-testid="stApp"],
@@ -64,9 +66,9 @@ section.main {
     max-width: 1480px !important;
 }
 
-/* ══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════
    SIDEBAR — dark background, light text
-   ══════════════════════════════════════════════════════════ */
+   ═══════════════════════════════════════════════════════ */
 [data-testid="stSidebar"] {
     background-color: #1a1a1a !important;
     border-right: 1px solid #2e2e2e !important;
@@ -100,9 +102,9 @@ section.main {
     margin: 0.6rem 0 !important;
 }
 
-/* ══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════
    BUTTONS — USC Maroon with improved visibility (issue #9)
-   ══════════════════════════════════════════════════════════ */
+   ═══════════════════════════════════════════════════════ */
 html body .stButton > button,
 html body [data-testid="stBaseButton-secondary"],
 html body [data-testid="stBaseButton-primary"],
@@ -151,9 +153,19 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     background-color: #6F1828 !important;
 }
 
-/* ══════════════════════════════════════════════════════════
+/* Nav buttons — override maroon with gold (active) or ghost (inactive) */
+button[aria-label="ANALYTICS"],
+button[aria-label="PRE-ANALYTICS"] {
+    font-size: 0.75rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.06em !important;
+    padding: 0.35rem 0.9rem !important;
+    text-shadow: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════
    SELECTBOXES / DROPDOWNS
-   ══════════════════════════════════════════════════════════ */
+   ═══════════════════════════════════════════════════════ */
 [data-testid="stSelectbox"] > div > div,
 [data-testid="stSelectbox"] [role="combobox"],
 [data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child {
@@ -190,9 +202,9 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     color: #ffffff !important;
 }
 
-/* ══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════
    DATE INPUT
-   ══════════════════════════════════════════════════════════ */
+   ═══════════════════════════════════════════════════════ */
 [data-testid="stDateInput"] input,
 [data-testid="stSidebar"] [data-testid="stDateInput"] input {
     background-color: #6F1828 !important;
@@ -205,9 +217,9 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     color: #ffffff !important;
 }
 
-/* ══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════
    DATE PICKER POPUP
-   ══════════════════════════════════════════════════════════ */
+   ═══════════════════════════════════════════════════════ */
 [data-baseweb="calendar"],
 [data-baseweb="calendarContainer"] {
     background-color: #ffffff !important;
@@ -270,9 +282,9 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     color: #cccccc !important;
 }
 
-/* ══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════
    RADIO BUTTONS
-   ══════════════════════════════════════════════════════════ */
+   ═══════════════════════════════════════════════════════ */
 [data-testid="stRadio"] label {
     background-color: transparent !important;
     box-shadow: none !important;
@@ -290,9 +302,9 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     background-color: transparent !important;
 }
 
-/* ══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════
    TEXT INPUTS
-   ══════════════════════════════════════════════════════════ */
+   ═══════════════════════════════════════════════════════ */
 [data-testid="stTextInput"] input,
 [data-testid="stSidebar"] [data-testid="stTextInput"] input {
     background-color: #ffffff !important;
@@ -308,9 +320,9 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     box-shadow: 0 0 0 2px rgba(111,24,40,0.15) !important;
 }
 
-/* ══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════
    METRIC CARDS
-   ══════════════════════════════════════════════════════════ */
+   ═══════════════════════════════════════════════════════ */
 [data-testid="metric-container"] {
     background: #ffffff !important;
     border: 1px solid #e2e8f0 !important;
@@ -332,9 +344,9 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     color: #0f172a !important;
 }
 
-/* ══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════
    EXPANDERS
-   ══════════════════════════════════════════════════════════ */
+   ═══════════════════════════════════════════════════════ */
 [data-testid="stExpander"] {
     border: 1px solid #e2e8f0 !important;
     border-radius: 8px !important;
@@ -380,22 +392,22 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     color: #0f172a !important;
 }
 
-/* ══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════
    DIVIDERS
-   ══════════════════════════════════════════════════════════ */
+   ═══════════════════════════════════════════════════════ */
 hr {
     border-color: #e2e8f0 !important;
     margin: 1.1rem 0 !important;
 }
 
-/* ══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════
    CUSTOM COMPONENT CLASSES
-   ══════════════════════════════════════════════════════════ */
+   ═══════════════════════════════════════════════════════ */
 .keck-header {
     background: linear-gradient(135deg, #6F1828 0%, #521322 100%);
     padding: 1.2rem 2rem;
     border-radius: 10px;
-    margin-bottom: 1.4rem;
+    margin-bottom: 0.6rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -511,9 +523,9 @@ div[data-testid="stDataFrame"] {
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
 
-/* ══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════
    LOGIN OVERLAY — instant hide after auth (issue #10)
-   ══════════════════════════════════════════════════════════ */
+   ═══════════════════════════════════════════════════════ */
 #login-overlay {
     transition: opacity 0.2s ease, transform 0.2s ease;
 }
@@ -527,8 +539,8 @@ div[data-testid="stDataFrame"] {
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# UI HELPER FUNCTIONS
-# ═════════════════════════════════════════════════════════════════════════════
+UI HELPER FUNCTIONS
+═════════════════════════════════════════════════════════════════════════════
 
 def metric_card(label: str, value: str, sub: str = "", accent: bool = False) -> str:
     """Return an HTML string for a styled metric card."""
@@ -544,29 +556,26 @@ def metric_card(label: str, value: str, sub: str = "", accent: bool = False) -> 
 
 
 def render_header(map_type: str, date_str: str) -> None:
-    """Render the branded Keck Medicine header banner with HTML anchor navigation."""
+    """Render the branded Keck Medicine header with in-session nav buttons.
+
+    Uses st.button + st.query_params instead of <a href> so navigation never
+    triggers a full page reload (which would clear session state and re-show
+    the login screen).
+    """
     _active = st.query_params.get("dashboard", "analytics")
 
-    def _nav_style(is_active: bool) -> str:
-        if is_active:
-            return (
-                "display:inline-block; background:#F1AB1F; color:#1a1a1a; "
-                "font-weight:700; padding:7px 20px; border-radius:4px; "
-                "text-decoration:none; font-size:13px; margin-left:8px; "
-                "letter-spacing:0.05em;"
-            )
-        return (
-            "display:inline-block; background:rgba(241,171,31,0.20); "
-            "color:rgba(255,255,255,0.45); font-weight:400; padding:7px 20px; "
-            "border-radius:4px; text-decoration:none; font-size:13px; "
-            "margin-left:8px; letter-spacing:0.05em; "
-            "border:1px solid rgba(241,171,31,0.35);"
-        )
-
-    _nav_html = (
-        f'<a href="?dashboard=analytics" style="{_nav_style(_active == "analytics")}">ANALYTICS</a>'
-        f'<a href="?dashboard=pre_analytics" style="{_nav_style(_active == "pre_analytics")}">PRE-ANALYTICS</a>'
-    )
+    # Inject per-render CSS that styles nav buttons by aria-label.
+    # Active nav = gold fill; inactive = semi-transparent ghost.
+    _gold  = "#F1AB1F"
+    _ghost_bg   = "rgba(241,171,31,0.15)"
+    _ghost_fg   = "rgba(255,255,255,0.6)"
+    _ghost_bdr  = "rgba(241,171,31,0.40)"
+    _a_bg  = _gold       if _active == "analytics"     else _ghost_bg
+    _a_fg  = "#1a1a1a"   if _active == "analytics"     else _ghost_fg
+    _a_bdr = _gold       if _active == "analytics"     else _ghost_bdr
+    _pa_bg = _gold       if _active == "pre_analytics" else _ghost_bg
+    _pa_fg = "#1a1a1a"   if _active == "pre_analytics" else _ghost_fg
+    _pa_bdr = _gold      if _active == "pre_analytics" else _ghost_bdr
 
     st.markdown(f"""
     <div class="keck-header">
@@ -576,10 +585,33 @@ def render_header(map_type: str, date_str: str) -> None:
       </div>
       <div style="text-align:right;">
         <span class="keck-date-label">{date_str}</span>
-        <div style="margin-top:8px;">{_nav_html}</div>
       </div>
     </div>
+    <style>
+      button[aria-label="ANALYTICS"] {{
+        background-color: {_a_bg} !important;
+        color: {_a_fg} !important;
+        border: 1px solid {_a_bdr} !important;
+      }}
+      button[aria-label="PRE-ANALYTICS"] {{
+        background-color: {_pa_bg} !important;
+        color: {_pa_fg} !important;
+        border: 1px solid {_pa_bdr} !important;
+      }}
+      button[aria-label="ANALYTICS"]:hover,
+      button[aria-label="PRE-ANALYTICS"]:hover {{ opacity: 0.88 !important; }}
+    </style>
     """, unsafe_allow_html=True)
+
+    _spacer, _na, _nb = st.columns([0.60, 0.20, 0.20])
+    with _na:
+        if st.button("ANALYTICS", key="nav_analytics", use_container_width=True):
+            st.query_params["dashboard"] = "analytics"
+            st.rerun()
+    with _nb:
+        if st.button("PRE-ANALYTICS", key="nav_pre_analytics", use_container_width=True):
+            st.query_params["dashboard"] = "pre_analytics"
+            st.rerun()
 
 
 def status_chip(text: str, level: str = "ok") -> None:
@@ -592,8 +624,8 @@ def status_chip(text: str, level: str = "ok") -> None:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PIVOT STYLING
-# ═════════════════════════════════════════════════════════════════════════════
+PIVOT STYLING
+═════════════════════════════════════════════════════════════════════════════
 
 def style_pivot(pivot: pd.DataFrame, vmax: int, cmap: str = "viridis_r"):
     """Apply colormap background-gradient styling to the pivot DataFrame."""
@@ -641,14 +673,14 @@ def style_monthly_pivot(pivot: pd.DataFrame, vmax: int):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PNG EXPORT
-# ═════════════════════════════════════════════════════════════════════════════
+PNG EXPORT
+═════════════════════════════════════════════════════════════════════════════
 
 def build_png(
     df_dh: pd.DataFrame,
     map_type: str,
     selected_date: date,
-    hours: list[int],
+    hours: list,
     is_forecast: bool = False,
 ) -> bytes:
     """Render the heatmap as a high-DPI PNG and return raw PNG bytes."""
