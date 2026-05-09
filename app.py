@@ -7,6 +7,7 @@ All rendering logic lives in analytics/ and pre_analytics/ modules.
 """
 
 from copy import deepcopy
+from datetime import datetime
 
 import streamlit as st
 
@@ -142,9 +143,9 @@ if "last_map_type" not in _ss:
 # ═════════════════════════════════════════════════════════════════════════════
 # ROUTING
 # ═════════════════════════════════════════════════════════════════════════════
-# Nav is driven by HTML anchor tags in render_header that set ?dashboard=…
-# on click, so the URL is the source of truth. Mirror the URL into session
-# state on every rerun (and fall back to "analytics" for direct visits).
+# Nav is driven by st.button clicks in render_header that write to
+# st.query_params and rerun. Mirror the URL into session state on every
+# rerun (and fall back to "analytics" for direct visits).
 _url_dashboard = st.query_params.get("dashboard")
 if _url_dashboard in ("analytics", "pre_analytics"):
     _ss["_nav_dashboard"] = _url_dashboard
@@ -159,3 +160,16 @@ if _active_dashboard == "analytics":
 else:
     _params = _pre_analytics.render_sidebar(_ss)
     _pre_analytics.render(_params, _ss)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# FOOTER  (rendered on both dashboards)
+# ═════════════════════════════════════════════════════════════════════════════
+st.markdown(
+    f'<div style="text-align: center; font-size: 12px; '
+    f'color: rgba(255,255,255,0.35); padding: 24px 0 12px 0;">'
+    f'© {datetime.now().year} Laboratory Productivity Dashboard. '
+    f'All rights reserved.'
+    f'</div>',
+    unsafe_allow_html=True,
+)
