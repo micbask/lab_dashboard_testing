@@ -159,67 +159,58 @@ def render(params: dict, ss) -> None:
         def _render_pa_heatmap(draw_df, location, shift, view, heatmap_key):
             _pivot = build_draw_pivot(draw_df, location, shift, view)
             _techs = _pivot.index.tolist()
-            _z     = _pivot.values.tolist()
             _x     = _PA_HOUR_LABELS
 
-            _flat    = [v for row in _z for v in row if v > 0]
+            _z_arr   = _pivot.values.astype(float)
+            _flat    = [v for row in _z_arr for v in row if v > 0]
             _vmax_pa = float(_np.percentile(_flat, 95)) if _flat else 1.0
             _vmax_pa = max(_vmax_pa, 1.0)
 
             _text_vals = [
                 [str(int(round(v))) if v > 0 else "" for v in row]
-                for row in _z
+                for row in _z_arr
             ]
 
-            # Pre-compute per-cell hover content. Streamlit's plotly_chart has
-            # no on_hover event, so hover-driven detail must be delivered from
-            # inside Plotly via hovertemplate against a customdata grid.
+            # Mask zero cells to NaN so hoverongaps=False can suppress the
+            # tooltip on empty cells.
+            _z = _np.where(_z_arr == 0, _np.nan, _z_arr).tolist()
+
+            # Build pre-formatted hover strings from the pre-pivot draw_df.
             if shift is None:
-                _sub_for_hover = (
+                _sub = (
                     draw_df[draw_df["location"] == location]
                     if not draw_df.empty else draw_df
                 )
             else:
-                _sub_for_hover = (
+                _sub = (
                     draw_df[
-                        (draw_df["location"] == location) &
-                        (draw_df["shift"] == shift)
+                        (draw_df["location"] == location)
+                        & (draw_df["shift"] == shift)
                     ] if not draw_df.empty else draw_df
                 )
 
-            _sep = "─" * 30
-            _grouped_details: dict = {}
-            if not _sub_for_hover.empty:
-                for (_tech, _hour), _grp in _sub_for_hover.groupby(
+            _details: dict = {}
+            if not _sub.empty:
+                for (_tech, _hour), _grp in _sub.groupby(
                     ["display_name", "hour"]
                 ):
                     _grp_sorted = _grp.sort_values("draw_datetime")
-                    _hlabel = HOUR_LABELS.get(int(_hour), str(_hour))
-                    _lines = [f"<b>{_tech} @ {_hlabel}</b>", _sep]
+                    _n_d = len(_grp_sorted)
+                    _n_s = int(_grp_sorted["samples"].sum())
+                    _lines = [
+                        f"{_n_d} draw{'s' if _n_d != 1 else ''} · "
+                        f"{_n_s} total sample{'s' if _n_s != 1 else ''}"
+                    ]
                     for _, _r in _grp_sorted.iterrows():
                         _t = pd.to_datetime(_r["draw_datetime"]).strftime("%H:%M")
                         _s = int(_r["samples"])
                         _lines.append(
-                            f"{_t}  —  {_s} sample{'s' if _s != 1 else ''}"
+                            f"{_t} — {_s} sample{'s' if _s != 1 else ''}"
                         )
-                    _lines.append(_sep)
-                    _n_d = len(_grp_sorted)
-                    _n_s = int(_grp_sorted["samples"].sum())
-                    _lines.append(
-                        f"<b>{_n_d} draw{'s' if _n_d != 1 else ''} "
-                        f"·  {_n_s} total sample{'s' if _n_s != 1 else ''}</b>"
-                    )
-                    _grouped_details[(_tech, int(_hour))] = "<br>".join(_lines)
+                    _details[(_tech, int(_hour))] = "<br>".join(_lines)
 
             _customdata = [
-                [
-                    _grouped_details.get(
-                        (_tech, _h),
-                        f"<b>{_tech} @ {HOUR_LABELS.get(_h, str(_h))}</b>"
-                        f"<br>{_sep}<br><i>No draws</i>",
-                    )
-                    for _h in range(24)
-                ]
+                [_details.get((_tech, _h), None) for _h in range(24)]
                 for _tech in _techs
             ]
 
@@ -229,7 +220,9 @@ def render(params: dict, ss) -> None:
                 y=_techs,
                 text=_text_vals,
                 texttemplate="%{text}",
-                hoverinfo="none",
+                customdata=_customdata,
+                hoverinfo="text",
+                hovertemplate="<b>%{y} @ %{x}</b><br>%{customdata}<extra></extra>",
                 colorscale="Teal",
                 zmin=0,
                 zmax=_vmax_pa,
@@ -237,6 +230,8 @@ def render(params: dict, ss) -> None:
                 ygap=1,
                 colorbar=dict(title="Draws/hour", thickness=12, len=0.9),
             ))
+            _fig.update_traces(hoverongaps=False)
+
             _plot_h = max(250, len(_techs) * 35 + 80)
             _fig.update_layout(
                 height=_plot_h,
@@ -257,91 +252,12 @@ def render(params: dict, ss) -> None:
                 ),
             )
 
-            _cell_key = f"selected_cell_{heatmap_key}"
-            _seen_sel_key = f"seen_sel_{heatmap_key}"
-            _sel_event = st.plotly_chart(
+            st.plotly_chart(
                 _fig,
                 use_container_width=True,
-                on_select="rerun",
-                selection_mode="points",
                 key=heatmap_key,
                 config={"displayModeBar": False},
             )
-
-            _pts = []
-            if _sel_event and hasattr(_sel_event, "selection") and _sel_event.selection:
-                _pts = _sel_event.selection.get("points", [])
-
-            # Streamlit replays the last selection on every rerun. Guard the
-            # toggle against unrelated reruns (sidebar changes etc.) by acting
-            # only when the selection signature actually changes.
-            _sig = tuple((p.get("y"), p.get("x")) for p in _pts)
-            if _sig != ss.get(_seen_sel_key):
-                ss[_seen_sel_key] = _sig
-                if _pts:
-                    _pt = _pts[0]
-                    _sel_tech   = _pt.get("y")
-                    _sel_hlabel = _pt.get("x")
-                    _sel_hour   = next(
-                        (h for h, lbl in HOUR_LABELS.items() if lbl == _sel_hlabel), None
-                    )
-                    if _sel_tech is not None and _sel_hour is not None:
-                        _current = ss.get(_cell_key)
-                        if (
-                            _current
-                            and _current["tech"] == _sel_tech
-                            and _current["hour"] == _sel_hour
-                        ):
-                            ss.pop(_cell_key, None)
-                        else:
-                            ss[_cell_key] = {
-                                "tech": _sel_tech,
-                                "hour": _sel_hour,
-                                "hlabel": _sel_hlabel,
-                            }
-                else:
-                    ss.pop(_cell_key, None)
-
-            _stored = ss.get(_cell_key)
-            if _stored:
-                _d_tech   = _stored["tech"]
-                _d_hour   = _stored["hour"]
-                _d_hlabel = _stored["hlabel"]
-
-                _detail = (
-                    draw_df[
-                        (draw_df["display_name"] == _d_tech) &
-                        (draw_df["hour"] == _d_hour)
-                    ]
-                    .sort_values("draw_datetime")
-                    .copy()
-                    if not draw_df.empty else pd.DataFrame()
-                )
-
-                _sep = "─" * 35
-                with st.container(border=True):
-                    st.markdown(f"**{_d_tech} @ {_d_hlabel}**")
-                    st.markdown(f"`{_sep}`")
-                    if _detail.empty:
-                        st.caption("No draws found.")
-                    else:
-                        _lines = []
-                        for _, _r in _detail.iterrows():
-                            _t = pd.to_datetime(_r["draw_datetime"]).strftime("%H:%M")
-                            _s = int(_r["samples"])
-                            _lines.append(
-                                f"`{_t}`  &nbsp;—&nbsp;  {_s} sample{'s' if _s != 1 else ''}"
-                            )
-                        st.markdown("  \n".join(_lines), unsafe_allow_html=True)
-                        st.markdown(f"`{_sep}`")
-                        _n_draws = len(_detail)
-                        _n_samps = int(_detail["samples"].sum())
-                        st.markdown(
-                            f"**{_n_draws} draw{'s' if _n_draws != 1 else ''}** "
-                            f"&nbsp;·&nbsp; "
-                            f"**{_n_samps} total sample{'s' if _n_samps != 1 else ''}**",
-                            unsafe_allow_html=True,
-                        )
 
         for _pa_shift in _PA_SHIFT_ORDER.get(pa_location, [None]):
             if pa_location != "HC3" and _pa_shift is not None:
