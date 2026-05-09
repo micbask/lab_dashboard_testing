@@ -175,6 +175,16 @@ def render(params: dict, ss) -> None:
             # tooltip on empty cells.
             _z = _np.where(_z_arr == 0, _np.nan, _z_arr).tolist()
 
+            # Midnight → USC gold colorscale: zero/empty cells are near-black
+            # so they recede into the dark background; peak activity reaches
+            # gold at the 95th percentile of non-zero values (zmax=_vmax_pa).
+            _PA_COLORSCALE = [
+                [0.0,  "#0d0d0d"],
+                [0.25, "#1c1a2e"],
+                [0.5,  "#4a3800"],
+                [0.75, "#9a7000"],
+                [1.0,  "#F1AB1F"],
+            ]
             _heatmap_kwargs = dict(
                 z=_z,
                 x=_x,
@@ -182,7 +192,7 @@ def render(params: dict, ss) -> None:
                 text=_text_vals,
                 texttemplate="%{text}",
                 hoverinfo="text",
-                colorscale="Teal",
+                colorscale=_PA_COLORSCALE,
                 zmin=0,
                 zmax=_vmax_pa,
                 xgap=1,
@@ -248,8 +258,14 @@ def render(params: dict, ss) -> None:
                 margin=dict(l=10, r=10, t=10, b=10),
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
-                xaxis=dict(tickfont=dict(size=10), side="bottom"),
-                yaxis=dict(tickfont=dict(size=11), autorange="reversed"),
+                dragmode=False,
+                xaxis=dict(
+                    tickfont=dict(size=10), side="bottom", fixedrange=True,
+                ),
+                yaxis=dict(
+                    tickfont=dict(size=11), autorange="reversed",
+                    fixedrange=True,
+                ),
                 hoverlabel=dict(
                     bgcolor="white",
                     bordercolor="#6F1828",
@@ -266,7 +282,11 @@ def render(params: dict, ss) -> None:
                 _fig,
                 use_container_width=True,
                 key=heatmap_key,
-                config={"displayModeBar": False},
+                config={
+                    "staticPlot": False,
+                    "scrollZoom": False,
+                    "displayModeBar": False,
+                },
             )
 
         for _pa_shift in _PA_SHIFT_ORDER.get(pa_location, [None]):
