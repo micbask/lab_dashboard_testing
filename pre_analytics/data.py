@@ -22,40 +22,57 @@ def normalize_name(name) -> "str | None":
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def load_phlebotomy_staff() -> tuple:
-    import requests as _req
-    _repo  = st.secrets["github"]["repo"]
-    _token = st.secrets["github"]["token"]
-    _owner, _rname = _repo.split("/", 1)
-    _headers = {
-        "Authorization": f"Bearer {_token}",
-        "Accept": "application/vnd.github+json",
-    }
-    _resp = _req.get(
-        f"https://api.github.com/repos/{_owner}/{_rname}/contents/config/phlebotomy_staff.csv",
-        headers=_headers, timeout=30,
+    """Read the phlebotomy staff roster from the bundled CSV and return
+    ({normalized_name: {display_name, location, shift}}, debug_raw_list).
+
+    The CSV is read from the local filesystem (it is committed with the
+    application) — the previous GitHub-API approach hit the repository's
+    default branch, which does not contain config/phlebotomy_staff.csv.
+
+    Names contain an unquoted comma ("Last, First"), so a stock pandas
+    read_csv mis-parses the rows. We split each line manually: the last
+    two comma-separated fields are Location and Shift; everything before
+    that is the name.
+    """
+    import os as _os
+    _path = _os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+        "config", "phlebotomy_staff.csv",
     )
-    if _resp.status_code == 404:
-        return {}, []
-    _resp.raise_for_status()
-    _raw_bytes = _b64.b64decode(_resp.json()["content"].strip())
-    _df = pd.read_csv(_io.BytesIO(_raw_bytes))
+
     _lookup: dict = {}
     _debug_raw: list = []
-    for _, _row in _df.iterrows():
-        _raw_name = str(_row["Drawn Tech"])
+
+    if not _os.path.exists(_path):
+        return _lookup, _debug_raw
+
+    with open(_path, "r", encoding="utf-8") as _fh:
+        _lines = _fh.read().splitlines()
+
+    if not _lines:
+        return _lookup, _debug_raw
+
+    # Skip header row.
+    for _line in _lines[1:]:
+        if not _line.strip():
+            continue
+        _parts = [p.strip() for p in _line.split(",")]
+        if len(_parts) < 3:
+            continue
+        # Last two fields are (Location, Shift); everything before is the name.
+        _shift_raw = _parts[-1]
+        _loc       = _parts[-2]
+        _name_parts = _parts[:-2]
+        _raw_name = ", ".join(p for p in _name_parts if p != "")
+        if not _raw_name:
+            continue
         if len(_debug_raw) < 5:
             _debug_raw.append(repr(_raw_name))
-        _display = _raw_name.strip()
-        _loc  = str(_row["Location"]).strip()
-        _sh_raw = _row["Shift"]
-        _shift  = (
-            None if (pd.isna(_sh_raw) or str(_sh_raw).strip() in ("", "nan"))
-            else str(_sh_raw).strip()
-        )
+        _shift = _shift_raw if _shift_raw not in ("", "nan") else None
         _key = normalize_name(_raw_name)
         if _key:
             _lookup[_key] = {
-                "display_name": _display,
+                "display_name": _raw_name,
                 "location": _loc,
                 "shift": _shift,
             }
