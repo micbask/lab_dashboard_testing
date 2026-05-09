@@ -44,9 +44,9 @@ from ui_components import (
 )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG  (must be the first Streamlit call)
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 st.set_page_config(
     page_title="Lab Productivity · Keck Medicine",
     page_icon="🧪",
@@ -58,9 +58,9 @@ inject_css()
 setup_mpl_font()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # PASSWORD GATE
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 _app_password = st.secrets.get("app_password", None)
 
 if "app_authenticated" not in st.session_state:
@@ -149,9 +149,9 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
     st.stop()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # SESSION STATE INITIALISATION
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 _ss = st.session_state
 
 if "resource_assignments" not in _ss:
@@ -162,9 +162,9 @@ if "last_map_type" not in _ss:
 _active_dashboard = st.query_params.get("dashboard", "analytics")
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # LOCAL HELPER FUNCTIONS
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 
 def build_pivot(
     df: pd.DataFrame,
@@ -267,9 +267,9 @@ def build_weekday_pivot(
     return pivot, wd_counts
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # ── PRE-ANALYTICS DATA LAYER ──
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 
 import re as _re
 import base64 as _b64
@@ -384,12 +384,16 @@ def load_draw_data(date_str: str, view: str) -> tuple:
 
     _df["Date/Time - Drawn"] = pd.to_datetime(_df["Date/Time - Drawn"])
 
+    # FIX (Bug 1): group by the original 'Drawn Tech' column so each unique
+    # draw event is counted against the raw name, then derive _norm afterward
+    # for the staff-dict lookup.  display_name comes from the staff dict.
     _grp = (
-        _df.groupby(["_norm", "Date/Time - Drawn"], as_index=False)
+        _df.groupby(["Drawn Tech", "Date/Time - Drawn"], as_index=False)
            .size()
            .rename(columns={"size": "samples"})
     )
 
+    _grp["_norm"]        = _grp["Drawn Tech"].apply(normalize_name)
     _grp["display_name"] = _grp["_norm"].map(lambda k: _staff[k]["display_name"])
     _grp["location"]     = _grp["_norm"].map(lambda k: _staff[k]["location"])
     _grp["shift"]        = _grp["_norm"].map(lambda k: _staff[k]["shift"])
@@ -447,9 +451,9 @@ def build_draw_pivot(
     return _pivot
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     if _active_dashboard == "analytics":
 
@@ -830,6 +834,8 @@ with st.sidebar:
 
     else:
         st.markdown("### Location")
+        # FIX (Bug 2): use the radio return value directly; do not write to or
+        # read from session_state for this value.
         pa_location = st.radio(
             "Location", ["Keck", "Norris", "HC3"],
             horizontal=True, label_visibility="collapsed",
@@ -908,9 +914,9 @@ with st.sidebar:
             _pa_date_str = f"{_pa_sel_year:04d}-{_pa_sel_month:02d}"
             _ss["pa_date"] = _pa_date_str
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # PENDING UPLOAD PROCESSING
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 if _ss.get("pending_upload"):
     upload_list = _ss["pending_upload"]
     if isinstance(upload_list, dict):
@@ -975,9 +981,9 @@ if _ss.get("pending_upload"):
     st.stop()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # MAIN PANEL — no data guard
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 if _active_dashboard == "analytics" and not _data_exists:
     render_header(map_type if "map_type" in dir() else "Lab Productivity",
                   "—")
@@ -988,9 +994,9 @@ if _active_dashboard == "analytics" and not _data_exists:
     st.stop()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # MAIN PANEL — conditional on active dashboard
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 if _active_dashboard == "analytics":
     if view_mode == "Daily":
         _is_forecast_view = selected_date > _max_d
@@ -1465,16 +1471,16 @@ else:
     # ═══════════════════════════════════════════════════════════════════════
     # PRE-ANALYTICS MAIN PANEL
     # ═══════════════════════════════════════════════════════════════════════
-    st.write("Pre-analytics block reached")
+    # FIX (Bug 2): pa_location and pa_view come from the sidebar radio return
+    # values directly (set earlier in the with st.sidebar: else branch).
+    # Do NOT re-read from session_state here — that would return the stale
+    # value from the previous render and require a double-click to take effect.
     try:
         import plotly.graph_objects as _pgo
         import numpy as _np
 
-        pa_location = _ss.get("pa_location_radio", "Keck")
-        pa_view     = _ss.get("pa_view_radio", "Daily")
-        _pa_ds      = _ss.get("pa_date", date.today().isoformat())
-        if isinstance(_pa_ds, date):
-            _pa_ds = _pa_ds.isoformat()
+        # _pa_date_str is set in the sidebar else branch; use it directly.
+        _pa_ds = _pa_date_str
 
         if len(_pa_ds) == 7:
             import calendar as _calpa
