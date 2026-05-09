@@ -9,3 +9,4 @@ prophet>=1.1.5
 holidays>=0.40
 duckdb>=0.10.0
 xlrd>=2.0.0
+plotly>=5.18.0
