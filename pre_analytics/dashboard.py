@@ -187,6 +187,7 @@ def render(params: dict, ss) -> None:
                 y=_techs,
                 text=_text_vals,
                 texttemplate="%{text}",
+                hoverinfo="none",
                 colorscale="Teal",
                 zmin=0,
                 zmax=_vmax_pa,
@@ -204,6 +205,7 @@ def render(params: dict, ss) -> None:
                 yaxis=dict(tickfont=dict(size=11), autorange="reversed"),
             )
 
+            _cell_key = f"selected_cell_{heatmap_key}"
             _sel_event = st.plotly_chart(
                 _fig,
                 use_container_width=True,
@@ -211,7 +213,6 @@ def render(params: dict, ss) -> None:
                 key=heatmap_key,
             )
 
-            _cell_key = f"selected_cell_{heatmap_key}"
             if _sel_event and hasattr(_sel_event, "selection") and _sel_event.selection:
                 _pts = _sel_event.selection.get("points", [])
                 if _pts:
@@ -222,46 +223,61 @@ def render(params: dict, ss) -> None:
                         (h for h, lbl in HOUR_LABELS.items() if lbl == _sel_hlabel), None
                     )
                     if _sel_tech is not None and _sel_hour is not None:
-                        ss[_cell_key] = {
-                            "tech": _sel_tech, "hour": _sel_hour, "hlabel": _sel_hlabel
-                        }
+                        _current = ss.get(_cell_key)
+                        # Toggle: same cell clicked again → clear selection.
+                        if (
+                            _current
+                            and _current["tech"] == _sel_tech
+                            and _current["hour"] == _sel_hour
+                        ):
+                            del ss[_cell_key]
+                        else:
+                            ss[_cell_key] = {
+                                "tech": _sel_tech,
+                                "hour": _sel_hour,
+                                "hlabel": _sel_hlabel,
+                            }
 
             _stored = ss.get(_cell_key)
             if _stored:
                 _d_tech   = _stored["tech"]
                 _d_hour   = _stored["hour"]
                 _d_hlabel = _stored["hlabel"]
-                _detail   = (
+
+                _detail = (
                     draw_df[
                         (draw_df["display_name"] == _d_tech) &
                         (draw_df["hour"] == _d_hour)
-                    ].copy()
+                    ]
+                    .sort_values("draw_datetime")
+                    .copy()
                     if not draw_df.empty else pd.DataFrame()
                 )
-                st.markdown(
-                    f'<div class="section-heading">Draws for {_d_tech} at {_d_hlabel}</div>',
-                    unsafe_allow_html=True,
-                )
-                if _detail.empty:
-                    st.info(f"No draws for **{_d_tech}** at **{_d_hlabel}**.")
-                else:
-                    _detail_disp = _detail[["draw_datetime", "samples"]].copy()
-                    _detail_disp["draw_datetime"] = (
-                        pd.to_datetime(_detail_disp["draw_datetime"])
-                        .dt.strftime("%Y-%m-%d %H:%M")
-                    )
-                    _detail_disp.columns = ["Draw Timestamp", "Samples"]
-                    _detail_disp = (
-                        _detail_disp.sort_values("Draw Timestamp").reset_index(drop=True)
-                    )
-                    st.dataframe(
-                        _detail_disp, width="stretch",
-                        height=min(80 + 35 * len(_detail_disp), 450),
-                    )
-                    st.caption(
-                        f"{len(_detail_disp)} draw(s)  ·  "
-                        f"{int(_detail_disp['Samples'].sum())} total sample(s)"
-                    )
+
+                _sep = "─" * 35
+                with st.container(border=True):
+                    st.markdown(f"**{_d_tech} @ {_d_hlabel}**")
+                    st.markdown(f"`{_sep}`")
+                    if _detail.empty:
+                        st.caption("No draws found.")
+                    else:
+                        _lines = []
+                        for _, _r in _detail.iterrows():
+                            _t = pd.to_datetime(_r["draw_datetime"]).strftime("%H:%M")
+                            _s = int(_r["samples"])
+                            _lines.append(
+                                f"`{_t}`  &nbsp;—&nbsp;  {_s} sample{'s' if _s != 1 else ''}"
+                            )
+                        st.markdown("  \n".join(_lines), unsafe_allow_html=True)
+                        st.markdown(f"`{_sep}`")
+                        _n_draws = len(_detail)
+                        _n_samps = int(_detail["samples"].sum())
+                        st.markdown(
+                            f"**{_n_draws} draw{'s' if _n_draws != 1 else ''}** "
+                            f"&nbsp;·&nbsp; "
+                            f"**{_n_samps} total sample{'s' if _n_samps != 1 else ''}**",
+                            unsafe_allow_html=True,
+                        )
 
         for _pa_shift in _PA_SHIFT_ORDER.get(pa_location, [None]):
             if pa_location != "HC3" and _pa_shift is not None:
