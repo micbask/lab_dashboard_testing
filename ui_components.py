@@ -153,23 +153,6 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     background-color: #6F1828 !important;
 }
 
-/* Nav buttons — base typography (colors injected per-render by render_header).
-   Streamlit exposes the widget `key` as a class `st-key-{key}` on the wrapper
-   div, which is the reliable way to target a specific button (the button
-   element itself does NOT carry aria-label by default). */
-html body .st-key-nav_analytics .stButton > button,
-html body .st-key-nav_analytics button,
-html body .st-key-nav_pre_analytics .stButton > button,
-html body .st-key-nav_pre_analytics button {
-    font-size: 0.72rem !important;
-    font-weight: 700 !important;
-    letter-spacing: 0.08em !important;
-    padding: 0.45rem 0.9rem !important;
-    text-shadow: none !important;
-    border-radius: 6px !important;
-    min-height: 38px !important;
-}
-
 /* ═══════════════════════════════════════════════════════
    SELECTBOXES / DROPDOWNS
    ═══════════════════════════════════════════════════════ */
@@ -414,7 +397,7 @@ hr {
     background: linear-gradient(135deg, #6F1828 0%, #521322 100%);
     padding: 1.2rem 2rem;
     border-radius: 10px;
-    margin-bottom: 0.6rem;
+    margin-bottom: 1.4rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -422,16 +405,57 @@ hr {
 }
 .keck-header h1 {
     color: #ffffff;
-    font-size: 1.5rem;
+    font-size: 1.85rem;
     font-weight: 700;
     margin: 0;
+    line-height: 1.15;
     letter-spacing: 0.2px;
 }
 .keck-header .subtitle {
     color: #EDC153;
-    font-size: 0.87rem;
-    margin: 0.25rem 0 0;
+    font-size: 0.95rem;
+    margin: 0.35rem 0 0;
     opacity: 0.95;
+    font-weight: 500;
+}
+.keck-header-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.5rem;
+}
+.keck-nav-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.keck-nav {
+    display: inline-block;
+    background: rgba(241,171,31,0.20);
+    color: rgba(255,255,255,0.5);
+    border: 1px solid rgba(241,171,31,0.4);
+    border-radius: 20px;
+    padding: 5px 16px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-decoration: none;
+    text-transform: uppercase;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+.keck-nav.active {
+    background: #F1AB1F;
+    color: #1a1a1a;
+    border-color: #F1AB1F;
+}
+.keck-nav:hover {
+    background: #F1AB1F;
+    color: #1a1a1a;
+    border-color: #F1AB1F;
+}
+.keck-header-date {
+    color: rgba(255,255,255,0.85);
+    font-size: 0.95rem;
     font-weight: 500;
 }
 .keck-badge {
@@ -563,112 +587,35 @@ def metric_card(label: str, value: str, sub: str = "", accent: bool = False) -> 
 
 
 def render_header(map_type: str, date_str: str) -> None:
-    """Render the branded Keck Medicine header with in-session nav buttons.
+    """Render the branded Keck Medicine header banner with anchor-based nav.
 
-    Layout: a single horizontal row containing title block, two nav buttons,
-    and the date label. The whole row is dressed up as the maroon banner via
-    a CSS rule that uses `:has()` to find the row containing the nav-marker.
-
-    Routing is driven by st.session_state["_nav_dashboard"] which is set
-    synchronously on button click before st.rerun().
+    The banner is a single HTML block: title on the left, a row of two
+    pill-shaped <a> nav links above the date on the right. Routing flows
+    through the URL — each anchor sets ?dashboard=… and app.py reads
+    st.query_params on every rerun.
     """
     _active = st.session_state.get(
         "_nav_dashboard",
         st.query_params.get("dashboard", "analytics"),
     )
+    _a_cls  = "active" if _active == "analytics"     else ""
+    _pa_cls = "active" if _active == "pre_analytics" else ""
 
-    # Color tokens
-    _gold      = "#F1AB1F"
-    _ghost_bg  = "rgba(241,171,31,0.15)"
-    _ghost_fg  = "rgba(255,255,255,0.85)"
-    _ghost_bdr = "rgba(241,171,31,0.40)"
-    _a_bg   = _gold      if _active == "analytics"     else _ghost_bg
-    _a_fg   = "#1a1a1a"  if _active == "analytics"     else _ghost_fg
-    _a_bdr  = _gold      if _active == "analytics"     else _ghost_bdr
-    _pa_bg  = _gold      if _active == "pre_analytics" else _ghost_bg
-    _pa_fg  = "#1a1a1a"  if _active == "pre_analytics" else _ghost_fg
-    _pa_bdr = _gold      if _active == "pre_analytics" else _ghost_bdr
-
-    # Scoped CSS:
-    # - .st-key-nav_analytics / .st-key-nav_pre_analytics are wrapper classes
-    #   Streamlit attaches to keyed widgets — reliable button targeting.
-    # - The horizontal block that contains both nav-button wrappers gets the
-    #   maroon banner background via the :has() selector.
     st.markdown(f"""
-    <style>
-      /* Maroon banner: any horizontal row containing our nav buttons. */
-      div[data-testid="stHorizontalBlock"]:has(.st-key-nav_analytics) {{
-        background: linear-gradient(135deg, #6F1828 0%, #521322 60%, #3d0e19 100%);
-        padding: 1.4rem 1.8rem 1.4rem 1.8rem !important;
-        border-radius: 10px !important;
-        margin-bottom: 1.4rem !important;
-        align-items: center !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.25);
-      }}
-      /* Nav button colors — keyed wrapper class beats the global maroon rule. */
-      html body .st-key-nav_analytics button {{
-        background-color: {_a_bg} !important;
-        color: {_a_fg} !important;
-        border: 1px solid {_a_bdr} !important;
-      }}
-      html body .st-key-nav_pre_analytics button {{
-        background-color: {_pa_bg} !important;
-        color: {_pa_fg} !important;
-        border: 1px solid {_pa_bdr} !important;
-      }}
-      html body .st-key-nav_analytics button:hover,
-      html body .st-key-nav_pre_analytics button:hover {{
-        background-color: #d99518 !important;
-        color: #1a1a1a !important;
-        border-color: #d99518 !important;
-      }}
-      /* Title + date typography inside the banner row. */
-      .keck-header-title h1 {{
-        color: #ffffff !important;
-        font-family: 'Palatino Linotype','Palatino',serif !important;
-        font-size: 1.85rem !important;
-        font-weight: 700 !important;
-        margin: 0 !important;
-        line-height: 1.15 !important;
-      }}
-      .keck-header-title .subtitle {{
-        color: #EDC153 !important;
-        font-size: 0.95rem !important;
-        font-weight: 500 !important;
-        margin: 0.35rem 0 0 0 !important;
-      }}
-      .keck-header-date {{
-        color: rgba(255,255,255,0.85) !important;
-        font-size: 0.95rem !important;
-        font-weight: 500 !important;
-        text-align: right !important;
-      }}
-    </style>
+    <div class="keck-header">
+      <div class="keck-header-title">
+        <h1>Productivity Dashboard</h1>
+        <p class="subtitle">{map_type}</p>
+      </div>
+      <div class="keck-header-right">
+        <div class="keck-nav-row">
+          <a class="keck-nav {_a_cls}" href="?dashboard=analytics">ANALYTICS</a>
+          <a class="keck-nav {_pa_cls}" href="?dashboard=pre_analytics">PRE-ANALYTICS</a>
+        </div>
+        <div class="keck-header-date">{date_str}</div>
+      </div>
+    </div>
     """, unsafe_allow_html=True)
-
-    cols = st.columns([0.42, 0.18, 0.20, 0.20], vertical_alignment="center")
-    with cols[0]:
-        st.markdown(
-            f"""<div class="keck-header-title">
-                  <h1>Productivity Dashboard</h1>
-                  <p class="subtitle">{map_type}</p>
-                </div>""",
-            unsafe_allow_html=True,
-        )
-    with cols[1]:
-        if st.button("ANALYTICS", key="nav_analytics", use_container_width=True):
-            st.session_state["_nav_dashboard"] = "analytics"
-            st.rerun()
-    with cols[2]:
-        if st.button("PRE-ANALYTICS", key="nav_pre_analytics",
-                     use_container_width=True):
-            st.session_state["_nav_dashboard"] = "pre_analytics"
-            st.rerun()
-    with cols[3]:
-        st.markdown(
-            f'<div class="keck-header-date">{date_str}</div>',
-            unsafe_allow_html=True,
-        )
 
 
 def status_chip(text: str, level: str = "ok") -> None:
