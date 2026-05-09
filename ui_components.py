@@ -6,8 +6,8 @@ Changes from original:
   - Forecast heatmaps use Oranges colormap (issue #8)
   - Button text-shadow for better visibility (issue #9)
   - Login overlay CSS transition for instant hide (issue #10)
-  - Nav uses st.button + st.query_params instead of <a href> to prevent
-    page reload / session loss (issue #11)
+  - Nav uses st.button + st.session_state instead of <a href> / st.query_params
+    to prevent page reload / session loss and query_params race conditions (#11)
 """
 
 import io
@@ -153,9 +153,9 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     background-color: #6F1828 !important;
 }
 
-/* Nav buttons — override maroon with gold (active) or ghost (inactive) */
-button[aria-label="ANALYTICS"],
-button[aria-label="PRE-ANALYTICS"] {
+/* Nav buttons — base typography (colors injected per-render by render_header) */
+html body .stButton > button[aria-label="ANALYTICS"],
+html body .stButton > button[aria-label="PRE-ANALYTICS"] {
     font-size: 0.75rem !important;
     font-weight: 700 !important;
     letter-spacing: 0.06em !important;
@@ -558,25 +558,33 @@ def metric_card(label: str, value: str, sub: str = "", accent: bool = False) -> 
 def render_header(map_type: str, date_str: str) -> None:
     """Render the branded Keck Medicine header with in-session nav buttons.
 
-    Uses st.button + st.query_params instead of <a href> so navigation never
-    triggers a full page reload (which would clear session state and re-show
-    the login screen).
+    Routing is driven by st.session_state["_nav_dashboard"] which is set
+    synchronously on button click before st.rerun(), so there is no race
+    condition with st.query_params update timing.
     """
-    _active = st.query_params.get("dashboard", "analytics")
+    # Read active dashboard from session_state (set by nav buttons) or
+    # fall back to query_params for initial direct-URL access.
+    _active = st.session_state.get(
+        "_nav_dashboard",
+        st.query_params.get("dashboard", "analytics"),
+    )
 
-    # Inject per-render CSS that styles nav buttons by aria-label.
-    # Active nav = gold fill; inactive = semi-transparent ghost.
-    _gold  = "#F1AB1F"
-    _ghost_bg   = "rgba(241,171,31,0.15)"
-    _ghost_fg   = "rgba(255,255,255,0.6)"
-    _ghost_bdr  = "rgba(241,171,31,0.40)"
-    _a_bg  = _gold       if _active == "analytics"     else _ghost_bg
-    _a_fg  = "#1a1a1a"   if _active == "analytics"     else _ghost_fg
-    _a_bdr = _gold       if _active == "analytics"     else _ghost_bdr
-    _pa_bg = _gold       if _active == "pre_analytics" else _ghost_bg
-    _pa_fg = "#1a1a1a"   if _active == "pre_analytics" else _ghost_fg
+    # Color tokens
+    _gold      = "#F1AB1F"
+    _ghost_bg  = "rgba(241,171,31,0.15)"
+    _ghost_fg  = "rgba(255,255,255,0.6)"
+    _ghost_bdr = "rgba(241,171,31,0.40)"
+    _a_bg   = _gold      if _active == "analytics"     else _ghost_bg
+    _a_fg   = "#1a1a1a"  if _active == "analytics"     else _ghost_fg
+    _a_bdr  = _gold      if _active == "analytics"     else _ghost_bdr
+    _pa_bg  = _gold      if _active == "pre_analytics" else _ghost_bg
+    _pa_fg  = "#1a1a1a"  if _active == "pre_analytics" else _ghost_fg
     _pa_bdr = _gold      if _active == "pre_analytics" else _ghost_bdr
 
+    # Header banner HTML + scoped CSS.
+    # Nav button colors use `html body .stButton > button[aria-label]` which
+    # scores (0,0,2,2) specificity — higher than the global maroon rule
+    # `html body .stButton > button` at (0,0,1,3) — so gold wins the cascade.
     st.markdown(f"""
     <div class="keck-header">
       <div>
@@ -588,29 +596,30 @@ def render_header(map_type: str, date_str: str) -> None:
       </div>
     </div>
     <style>
-      button[aria-label="ANALYTICS"] {{
+      html body .stButton > button[aria-label="ANALYTICS"] {{
         background-color: {_a_bg} !important;
         color: {_a_fg} !important;
         border: 1px solid {_a_bdr} !important;
       }}
-      button[aria-label="PRE-ANALYTICS"] {{
+      html body .stButton > button[aria-label="PRE-ANALYTICS"] {{
         background-color: {_pa_bg} !important;
         color: {_pa_fg} !important;
         border: 1px solid {_pa_bdr} !important;
       }}
-      button[aria-label="ANALYTICS"]:hover,
-      button[aria-label="PRE-ANALYTICS"]:hover {{ opacity: 0.88 !important; }}
     </style>
     """, unsafe_allow_html=True)
 
+    # Nav buttons — session_state is set synchronously before rerun so routing
+    # is guaranteed to see the new value on the very next script execution.
     _spacer, _na, _nb = st.columns([0.60, 0.20, 0.20])
     with _na:
         if st.button("ANALYTICS", key="nav_analytics", use_container_width=True):
-            st.query_params["dashboard"] = "analytics"
+            st.session_state["_nav_dashboard"] = "analytics"
             st.rerun()
     with _nb:
-        if st.button("PRE-ANALYTICS", key="nav_pre_analytics", use_container_width=True):
-            st.query_params["dashboard"] = "pre_analytics"
+        if st.button("PRE-ANALYTICS", key="nav_pre_analytics",
+                     use_container_width=True):
+            st.session_state["_nav_dashboard"] = "pre_analytics"
             st.rerun()
 
 
