@@ -1,4 +1,4 @@
-""" 
+"""
 app.py — Lab Productivity Heatmap Dashboard (Orchestrator)
 Keck Medicine of USC
 
@@ -459,412 +459,502 @@ def build_draw_pivot(
 # SIDEBAR
 # ═════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
+    if _ss["active_dashboard"] == "analytics":
 
-    # ── Map type selector ────────────────────────────────────────────────────
-    st.markdown("### Map Type")
-    map_type = st.selectbox("Map type", MAP_TYPES, label_visibility="collapsed")
+        # ── Map type selector ────────────────────────────────────────────────────
+        st.markdown("### Map Type")
+        map_type = st.selectbox("Map type", MAP_TYPES, label_visibility="collapsed")
 
-    if _ss.last_map_type != map_type:
-        _ss.pop("date_picker", None)
-        _ss.last_map_type = map_type
+        if _ss.last_map_type != map_type:
+            _ss.pop("date_picker", None)
+            _ss.last_map_type = map_type
 
-    # ── View mode toggle ─────────────────────────────────────────────────────
-    st.markdown("### View")
-    view_mode = st.radio(
-        "View", ["Daily", "Monthly"],
-        horizontal=True, label_visibility="collapsed",
-    )
+        # ── View mode toggle ─────────────────────────────────────────────────────
+        st.markdown("### View")
+        view_mode = st.radio(
+            "View", ["Daily", "Monthly"],
+            horizontal=True, label_visibility="collapsed",
+        )
 
-    # ── Time-basis toggle ────────────────────────────────────────────────────
-    st.markdown("### Time Basis")
-    time_basis = st.radio(
-        "Time Basis", ["Completed", "In-Lab"],
-        horizontal=True, label_visibility="collapsed",
-    )
+        # ── Time-basis toggle ────────────────────────────────────────────────────
+        st.markdown("### Time Basis")
+        time_basis = st.radio(
+            "Time Basis", ["Completed", "In-Lab"],
+            horizontal=True, label_visibility="collapsed",
+        )
 
-    # ── Pending action: retrain forecast models ──────────────────────────────
-    if _ss.pop("pending_forecast_retrain", False):
-        if storage_is_configured():
-            with st.spinner("Retraining forecast models…"):
-                retrain_all_forecasts_streaming(_ss.resource_assignments)
-            st.success("Forecast models retrained.")
-        else:
-            st.warning("No storage configured — cannot retrain forecasts.")
-
-    # ── Pending action: reset entire dataset ─────────────────────────────────
-    if _ss.pop("pending_reset", False):
-        try:
+        # ── Pending action: retrain forecast models ──────────────────────────────
+        if _ss.pop("pending_forecast_retrain", False):
             if storage_is_configured():
-                reset_all_data()
-                st.cache_data.clear()
-                st.success("Master dataset cleared.")
-            for _mt in MAP_TYPES:
-                _ss.pop(f"forecasts_{_mt}", None)
-        except Exception as _rst_err:
-            st.error(f"Reset failed: {_rst_err}")
-
-    # ── Pending action: delete a date range ──────────────────────────────────
-    if "pending_delete_range" in _ss:
-        del_info = _ss.pop("pending_delete_range")
-        try:
-            result = delete_date_range(del_info["start"], del_info["end"])
-            st.cache_data.clear()
-            st.success(
-                f"Deleted {result['rows_removed']:,} rows "
-                f"({del_info['start']} → {del_info['end']})."
-            )
-        except Exception as _dr_err:
-            st.error(f"Delete failed: {_dr_err}")
-
-    # ── Data source & loading ────────────────────────────────────────────────
-    # CRITICAL: We do NOT load any data here.  We only read the partition
-    # index (a tiny JSON) to show summary stats.  Actual data is loaded
-    # lazily when the main panel renders, filtered to exactly what's needed.
-    st.markdown("---")
-    st.markdown("### Data Source")
-
-    _data_exists = False
-    _data_summary = {"total_rows": 0, "partitions": 0}
-
-    if storage_is_configured():
-        st.caption("Storage: GitHub (partitioned)")
-
-        try:
-            _data_exists = ensure_partitioned_storage()
-            if _data_exists:
-                _data_summary = get_data_summary()
-                if _data_summary["total_rows"] == 0:
-                    _data_exists = False
-
-            if _data_exists:
-                status_chip(
-                    f"{_data_summary['total_rows']:,} rows · "
-                    f"{_data_summary['min_date']} → {_data_summary['max_date']}",
-                    level="ok",
-                )
+                with st.spinner("Retraining forecast models…"):
+                    retrain_all_forecasts_streaming(_ss.resource_assignments)
+                st.success("Forecast models retrained.")
             else:
-                status_chip("No data yet — upload below", level="warn")
+                st.warning("No storage configured — cannot retrain forecasts.")
 
-        except Exception as _load_err:
-            status_chip("Load error", level="error")
-            st.error(f"Could not read data index: {_load_err}")
-
-        # ── Data Management expander ─────────────────────────────────────────
-        st.markdown("---")
-        with st.expander("Data Management", expanded=not _data_exists):
-
-            admin_pw   = st.secrets.get("admin_password", None)
-            authorized = True
-            if admin_pw:
-                if _ss.get("admin_authorized", False):
-                    authorized = True
-                else:
-                    entered_pw = st.text_input(
-                        "Admin password", type="password", key="admin_pw"
-                    )
-                    if entered_pw == admin_pw:
-                        _ss["admin_authorized"] = True
-                        st.rerun()
-                    elif entered_pw:
-                        st.error("Incorrect password.")
-                    authorized = _ss.get("admin_authorized", False)
-
-            if authorized:
-
-                # ── Refresh data ─────────────────────────────────────────────
-                st.markdown('<div class="refresh-btn">', unsafe_allow_html=True)
-                if st.button("↺  Refresh data", width="stretch", key="refresh_data_btn"):
+        # ── Pending action: reset entire dataset ─────────────────────────────────
+        if _ss.pop("pending_reset", False):
+            try:
+                if storage_is_configured():
+                    reset_all_data()
                     st.cache_data.clear()
-                    _ss.pop("_partition_index", None)
-                    st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
+                    st.success("Master dataset cleared.")
+                for _mt in MAP_TYPES:
+                    _ss.pop(f"forecasts_{_mt}", None)
+            except Exception as _rst_err:
+                st.error(f"Reset failed: {_rst_err}")
 
-                # ── Refresh Forecast (manual trigger only — issue #7) ────────
-                if st.button(
-                    "⟳  Refresh Forecast", width="stretch",
-                    key="refresh_forecast_btn",
-                    disabled=(not _data_exists),
-                ):
-                    _ss["pending_forecast_retrain"] = True
-                    st.rerun()
+        # ── Pending action: delete a date range ──────────────────────────────────
+        if "pending_delete_range" in _ss:
+            del_info = _ss.pop("pending_delete_range")
+            try:
+                result = delete_date_range(del_info["start"], del_info["end"])
+                st.cache_data.clear()
+                st.success(
+                    f"Deleted {result['rows_removed']:,} rows "
+                    f"({del_info['start']} → {del_info['end']})."
+                )
+            except Exception as _dr_err:
+                st.error(f"Delete failed: {_dr_err}")
 
-                # ── Current dataset summary ──────────────────────────────────
+        # ── Data source & loading ────────────────────────────────────────────────
+        # CRITICAL: We do NOT load any data here.  We only read the partition
+        # index (a tiny JSON) to show summary stats.  Actual data is loaded
+        # lazily when the main panel renders, filtered to exactly what's needed.
+        st.markdown("---")
+        st.markdown("### Data Source")
+
+        _data_exists = False
+        _data_summary = {"total_rows": 0, "partitions": 0}
+
+        if storage_is_configured():
+            st.caption("Storage: GitHub (partitioned)")
+
+            try:
+                _data_exists = ensure_partitioned_storage()
                 if _data_exists:
-                    st.markdown("**Current dataset**")
-                    st.caption(
-                        f"Rows: **{_data_summary['total_rows']:,}**  \n"
-                        f"Date range: **{_data_summary['min_date']}** → "
-                        f"**{_data_summary['max_date']}**  \n"
-                        f"Partitions: **{_data_summary['partitions']}**"
+                    _data_summary = get_data_summary()
+                    if _data_summary["total_rows"] == 0:
+                        _data_exists = False
+
+                if _data_exists:
+                    status_chip(
+                        f"{_data_summary['total_rows']:,} rows · "
+                        f"{_data_summary['min_date']} → {_data_summary['max_date']}",
+                        level="ok",
                     )
+                else:
+                    status_chip("No data yet — upload below", level="warn")
 
-                    # ── Remove a date range ──────────────────────────────────
-                    with st.expander("Remove a date range", expanded=False):
-                        st.caption(
-                            "Permanently deletes all rows in the chosen window "
-                            "from the master dataset.  This cannot be undone."
+            except Exception as _load_err:
+                status_chip("Load error", level="error")
+                st.error(f"Could not read data index: {_load_err}")
+
+            # ── Data Management expander ─────────────────────────────────────────
+            st.markdown("---")
+            with st.expander("Data Management", expanded=not _data_exists):
+
+                admin_pw   = st.secrets.get("admin_password", None)
+                authorized = True
+                if admin_pw:
+                    if _ss.get("admin_authorized", False):
+                        authorized = True
+                    else:
+                        entered_pw = st.text_input(
+                            "Admin password", type="password", key="admin_pw"
                         )
-                        _dr_min = date.fromisoformat(_data_summary["min_date"])
-                        _dr_max = date.fromisoformat(_data_summary["max_date"])
-                        _dc1, _dc2 = st.columns(2)
-                        with _dc1:
-                            del_start = st.date_input(
-                                "From", value=_dr_min,
-                                min_value=_dr_min, max_value=_dr_max,
-                                key="del_start",
-                            )
-                        with _dc2:
-                            del_end = st.date_input(
-                                "To", value=_dr_min,
-                                min_value=_dr_min, max_value=_dr_max,
-                                key="del_end",
-                            )
-                        if del_start > del_end:
-                            st.error("'From' date must be on or before 'To' date.")
-                        else:
-                            _affected = count_rows_in_date_range(del_start, del_end)
-                            if _affected:
-                                st.warning(f"Will delete **{_affected:,}** rows.")
+                        if entered_pw == admin_pw:
+                            _ss["admin_authorized"] = True
+                            st.rerun()
+                        elif entered_pw:
+                            st.error("Incorrect password.")
+                        authorized = _ss.get("admin_authorized", False)
 
+                if authorized:
+
+                    # ── Refresh data ─────────────────────────────────────────────
+                    st.markdown('<div class="refresh-btn">', unsafe_allow_html=True)
+                    if st.button("↺  Refresh data", width="stretch", key="refresh_data_btn"):
+                        st.cache_data.clear()
+                        _ss.pop("_partition_index", None)
+                        st.rerun()
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                    # ── Refresh Forecast (manual trigger only — issue #7) ────────
+                    if st.button(
+                        "⟳  Refresh Forecast", width="stretch",
+                        key="refresh_forecast_btn",
+                        disabled=(not _data_exists),
+                    ):
+                        _ss["pending_forecast_retrain"] = True
+                        st.rerun()
+
+                    # ── Current dataset summary ──────────────────────────────────
+                    if _data_exists:
+                        st.markdown("**Current dataset**")
+                        st.caption(
+                            f"Rows: **{_data_summary['total_rows']:,}**  \n"
+                            f"Date range: **{_data_summary['min_date']}** → "
+                            f"**{_data_summary['max_date']}**  \n"
+                            f"Partitions: **{_data_summary['partitions']}**"
+                        )
+
+                        # ── Remove a date range ──────────────────────────────────
+                        with st.expander("Remove a date range", expanded=False):
+                            st.caption(
+                                "Permanently deletes all rows in the chosen window "
+                                "from the master dataset.  This cannot be undone."
+                            )
+                            _dr_min = date.fromisoformat(_data_summary["min_date"])
+                            _dr_max = date.fromisoformat(_data_summary["max_date"])
+                            _dc1, _dc2 = st.columns(2)
+                            with _dc1:
+                                del_start = st.date_input(
+                                    "From", value=_dr_min,
+                                    min_value=_dr_min, max_value=_dr_max,
+                                    key="del_start",
+                                )
+                            with _dc2:
+                                del_end = st.date_input(
+                                    "To", value=_dr_min,
+                                    min_value=_dr_min, max_value=_dr_max,
+                                    key="del_end",
+                                )
+                            if del_start > del_end:
+                                st.error("'From' date must be on or before 'To' date.")
+                            else:
+                                _affected = count_rows_in_date_range(del_start, del_end)
+                                if _affected:
+                                    st.warning(f"Will delete **{_affected:,}** rows.")
+
+                            if st.button(
+                                "Delete this range", type="primary",
+                                width="stretch", key="btn_del_range",
+                                disabled=(del_start > del_end),
+                            ):
+                                _ss["pending_delete_range"] = {
+                                    "start": del_start, "end": del_end
+                                }
+                                st.rerun()
+
+                        st.markdown("---")
+
+                    # ── Upload new file(s) ───────────────────────────────────────
+                    st.markdown("**Step 1 — Select file(s)**")
+                    new_files = st.file_uploader(
+                        "Upload files", type=["xlsx", "xls", "csv"],
+                        key="admin_upload",
+                        label_visibility="collapsed",
+                        accept_multiple_files=True,
+                    )
+                    if new_files:
+                        _staged = []
+                        for _uf in new_files:
+                            _staged.append({"bytes": _uf.read(), "name": _uf.name})
+                        _ss["staged_files"] = _staged
+                        _names = ", ".join(f"**{s['name']}**" for s in _staged)
+                        st.caption(f"Ready: {_names}  ({len(_staged)} file(s))")
+
+                        st.markdown("**Step 2 — Add to master dataset**")
                         if st.button(
-                            "Delete this range", type="primary",
-                            width="stretch", key="btn_del_range",
-                            disabled=(del_start > del_end),
+                            "Process & add to master",
+                            type="primary", width="stretch",
                         ):
-                            _ss["pending_delete_range"] = {
-                                "start": del_start, "end": del_end
-                            }
+                            _ss["pending_upload"] = _ss.pop("staged_files")
                             st.rerun()
 
+                    # ── Danger zone ──────────────────────────────────────────────
                     st.markdown("---")
-
-                # ── Upload new file(s) ───────────────────────────────────────
-                st.markdown("**Step 1 — Select file(s)**")
-                new_files = st.file_uploader(
-                    "Upload files", type=["xlsx", "xls", "csv"],
-                    key="admin_upload",
-                    label_visibility="collapsed",
-                    accept_multiple_files=True,
-                )
-                if new_files:
-                    _staged = []
-                    for _uf in new_files:
-                        _staged.append({"bytes": _uf.read(), "name": _uf.name})
-                    _ss["staged_files"] = _staged
-                    _names = ", ".join(f"**{s['name']}**" for s in _staged)
-                    st.caption(f"Ready: {_names}  ({len(_staged)} file(s))")
-
-                    st.markdown("**Step 2 — Add to master dataset**")
+                    st.markdown("**Danger zone**")
                     if st.button(
-                        "Process & add to master",
-                        type="primary", width="stretch",
+                        "Reset — delete all data", width="stretch",
                     ):
-                        _ss["pending_upload"] = _ss.pop("staged_files")
+                        _ss["pending_reset"] = True
                         st.rerun()
 
-                # ── Danger zone ──────────────────────────────────────────────
-                st.markdown("---")
-                st.markdown("**Danger zone**")
-                if st.button(
-                    "Reset — delete all data", width="stretch",
+        else:
+            # No remote storage — local file upload only
+            st.markdown("**Data source:** Local file upload")
+            st.caption(
+                "Configure GitHub in Streamlit secrets to enable persistent storage."
+            )
+            uploaded_files = st.file_uploader(
+                "Upload Excel file(s)", type=["xlsx", "xls", "csv"],
+                accept_multiple_files=True,
+            )
+            _local_df = pd.DataFrame()
+            merge_log = []
+            if uploaded_files:
+                _parsed = []
+                for f in uploaded_files:
+                    _df = parse_single_file(f.read(), filename=f.name)
+                    if not _df.empty:
+                        _parsed.append((f.name, _df))
+                if _parsed:
+                    _local_df, merge_log = deduplicate_and_merge(_parsed)
+                    _data_exists = not _local_df.empty
+
+        # ── Date / Month selector ────────────────────────────────────────────────
+        st.markdown("---")
+
+        # We need available dates for the date picker.  For remote storage,
+        # we derive them from the partition index metadata (min/max dates per
+        # partition) — NOT by loading all data.
+        # For local uploads, we derive them from the small in-memory df.
+
+        if _data_exists:
+            # Get current resources for the selected map type
+            _current_resources = tuple(sorted(_ss.resource_assignments[map_type]))
+            _current_excludes = tuple(sorted(EXCLUDE_PROCS))
+            _idx_hash = get_index_hash() if storage_is_configured() else ""
+
+            if storage_is_configured():
+                # Derive date range from partition index (no data loading)
+                _min_d = date.fromisoformat(_data_summary["min_date"])
+                _max_d = date.fromisoformat(_data_summary["max_date"])
+            else:
+                _min_d = _local_df["complete_date"].min()
+                _max_d = _local_df["complete_date"].max()
+
+            if view_mode == "Daily":
+                _fc_data = load_forecasts(map_type)
+                forecast_dates: list = []
+                _fc_max_d = _max_d
+                if _fc_data:
+                    _fc_start_d = _max_d + timedelta(days=1)
+                    _fc_end_d   = _fc_data["forecast_end"]
+                    forecast_dates = [
+                        _fc_start_d + timedelta(days=_i)
+                        for _i in range((_fc_end_d - _fc_start_d).days + 1)
+                    ]
+                    _fc_max_d = _fc_end_d
+
+                if "_pending_date" in _ss:
+                    _pending = _ss.pop("_pending_date")
+                    if _min_d <= _pending <= _fc_max_d:
+                        _ss["date_picker"] = _pending
+
+                if (
+                    "date_picker" not in _ss
+                    or _ss["date_picker"] < _min_d
+                    or _ss["date_picker"] > _fc_max_d
                 ):
-                    _ss["pending_reset"] = True
-                    st.rerun()
+                    _ss["date_picker"] = _max_d
+
+                st.markdown("### Date")
+                _fc_note = (
+                    f"  +  forecast to **{_fc_max_d}**" if forecast_dates else ""
+                )
+                st.caption(f"{_min_d} → {_max_d}{_fc_note}")
+
+                picked_date = st.date_input(
+                    "Select date",
+                    min_value=_min_d,
+                    max_value=_fc_max_d,
+                    label_visibility="collapsed",
+                    key="date_picker",
+                )
+                selected_date = picked_date
+
+                # Determine if this is a forecast date
+                _is_forecast_date = selected_date > _max_d
+
+                # Prev/Next buttons — navigate by day across full range
+                # Use simple prev/next day since we don't load all dates
+                _nc1, _nc2 = st.columns(2)
+                with _nc1:
+                    if st.button(
+                        "◄ Prev", width="stretch",
+                        disabled=(selected_date <= _min_d),
+                    ):
+                        _ss["_pending_date"] = selected_date - timedelta(days=1)
+                        st.rerun()
+                with _nc2:
+                    if st.button(
+                        "Next ►", width="stretch",
+                        disabled=(selected_date >= _fc_max_d),
+                    ):
+                        _ss["_pending_date"] = selected_date + timedelta(days=1)
+                        st.rerun()
+
+                if _fc_data:
+                    _fc_trained_on = _fc_data.get("last_data_date")
+                    if _fc_trained_on is not None and _fc_trained_on != _max_d:
+                        st.markdown(
+                            '<div style="background:#7a3800;color:#FFE0B2;padding:0.5rem 0.7rem;'
+                            'border-radius:6px;font-size:0.78rem;margin-top:0.3rem;">'
+                            "⚠ Forecast is out of date. Use the <strong>Refresh Forecast</strong> "
+                            "button in Data Management to retrain."
+                            "</div>",
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.caption("No forecast available — use Refresh Forecast to generate one.")
+
+                st.markdown("---")
+                st.markdown("### Hour Range")
+
+                def _fmt_h(h: int) -> str:
+                    hr12 = 12 if h % 12 == 0 else h % 12
+                    suf  = "AM" if h < 12 else "PM"
+                    return f"{hr12}:00 {suf}"
+
+                hour_range = st.slider(
+                    "Hours", 0, 23, (0, 23), label_visibility="collapsed"
+                )
+                st.caption(f"{_fmt_h(hour_range[0])} → {_fmt_h(hour_range[1])}")
+
+            else:  # Monthly view
+                # Build month list from partition index dates
+                import itertools
+                _avail_months = []
+                d = date(_min_d.year, _min_d.month, 1)
+                end_m = date(_max_d.year, _max_d.month, 1)
+                while d <= end_m:
+                    _avail_months.append((d.year, d.month))
+                    if d.month == 12:
+                        d = date(d.year + 1, 1, 1)
+                    else:
+                        d = date(d.year, d.month + 1, 1)
+
+                if not _avail_months:
+                    st.warning("No data found for this map type.")
+                    st.stop()
+
+                _month_labels = [
+                    f"{_cal.month_name[m]} {y}" for y, m in _avail_months
+                ]
+
+                st.markdown("### Month")
+                _sel_month_label = st.selectbox(
+                    "Select month",
+                    _month_labels,
+                    index=len(_avail_months) - 1,
+                    label_visibility="collapsed",
+                )
+                _sel_idx = _month_labels.index(_sel_month_label)
+                selected_year, selected_month = _avail_months[_sel_idx]
+
+            # ── Resource allocation ──────────────────────────────────────────────
+            st.markdown("---")
+            with st.expander("Resource Allocation", expanded=False):
+                st.markdown(
+                    "Reassign instruments between maps. "
+                    "Each resource should appear in only one map."
+                )
+                new_assignments = {}
+                for mt in MAP_TYPES:
+                    new_assignments[mt] = st.multiselect(
+                        mt, options=ALL_RESOURCES,
+                        default=_ss.resource_assignments.get(mt, []),
+                        key=f"res_{mt}",
+                    )
+                _flat  = [r for rs in new_assignments.values() for r in rs]
+                _dupes = sorted({r for r in _flat if _flat.count(r) > 1})
+                if _dupes:
+                    st.warning(f"Duplicate assignments: {', '.join(_dupes)}")
+
+                _ra, _rb = st.columns(2)
+                with _ra:
+                    if st.button("Apply", width="stretch", type="primary"):
+                        _ss.resource_assignments = new_assignments
+                        st.cache_data.clear()
+                        st.rerun()
+                with _rb:
+                    if st.button("Reset defaults", width="stretch"):
+                        _ss.resource_assignments = deepcopy(DEFAULT_RESOURCES)
+                        st.cache_data.clear()
+                        st.rerun()
+
 
     else:
-        # No remote storage — local file upload only
-        st.markdown("**Data source:** Local file upload")
-        st.caption(
-            "Configure GitHub in Streamlit secrets to enable persistent storage."
+        # ── Pre-Analytics sidebar ────────────────────────────────────────────
+        st.markdown("### Location")
+        _pa_location_default = _ss.get("pa_location", "Keck")
+        _pa_loc_idx = ["Keck", "Norris", "HC3"].index(_pa_location_default) if _pa_location_default in ["Keck", "Norris", "HC3"] else 0
+        pa_location = st.radio(
+            "Location", ["Keck", "Norris", "HC3"],
+            index=_pa_loc_idx,
+            horizontal=True, label_visibility="collapsed",
         )
-        uploaded_files = st.file_uploader(
-            "Upload Excel file(s)", type=["xlsx", "xls", "csv"],
-            accept_multiple_files=True,
+        _ss["pa_location"] = pa_location
+
+        st.markdown("### View")
+        _pa_view_default = _ss.get("pa_view", "Daily")
+        _pa_view_idx = 0 if _pa_view_default == "Daily" else 1
+        pa_view = st.radio(
+            "View", ["Daily", "Monthly"],
+            index=_pa_view_idx,
+            horizontal=True, label_visibility="collapsed",
         )
-        _local_df = pd.DataFrame()
-        merge_log = []
-        if uploaded_files:
-            _parsed = []
-            for f in uploaded_files:
-                _df = parse_single_file(f.read(), filename=f.name)
-                if not _df.empty:
-                    _parsed.append((f.name, _df))
-            if _parsed:
-                _local_df, merge_log = deduplicate_and_merge(_parsed)
-                _data_exists = not _local_df.empty
+        _ss["pa_view"] = pa_view
 
-    # ── Date / Month selector ────────────────────────────────────────────────
-    st.markdown("---")
-
-    # We need available dates for the date picker.  For remote storage,
-    # we derive them from the partition index metadata (min/max dates per
-    # partition) — NOT by loading all data.
-    # For local uploads, we derive them from the small in-memory df.
-
-    if _data_exists:
-        # Get current resources for the selected map type
-        _current_resources = tuple(sorted(_ss.resource_assignments[map_type]))
-        _current_excludes = tuple(sorted(EXCLUDE_PROCS))
-        _idx_hash = get_index_hash() if storage_is_configured() else ""
-
-        if storage_is_configured():
-            # Derive date range from partition index (no data loading)
-            _min_d = date.fromisoformat(_data_summary["min_date"])
-            _max_d = date.fromisoformat(_data_summary["max_date"])
-        else:
-            _min_d = _local_df["complete_date"].min()
-            _max_d = _local_df["complete_date"].max()
-
-        if view_mode == "Daily":
-            _fc_data = load_forecasts(map_type)
-            forecast_dates: list = []
-            _fc_max_d = _max_d
-            if _fc_data:
-                _fc_start_d = _max_d + timedelta(days=1)
-                _fc_end_d   = _fc_data["forecast_end"]
-                forecast_dates = [
-                    _fc_start_d + timedelta(days=_i)
-                    for _i in range((_fc_end_d - _fc_start_d).days + 1)
-                ]
-                _fc_max_d = _fc_end_d
-
-            if "_pending_date" in _ss:
-                _pending = _ss.pop("_pending_date")
-                if _min_d <= _pending <= _fc_max_d:
-                    _ss["date_picker"] = _pending
-
-            if (
-                "date_picker" not in _ss
-                or _ss["date_picker"] < _min_d
-                or _ss["date_picker"] > _fc_max_d
-            ):
-                _ss["date_picker"] = _max_d
-
-            st.markdown("### Date")
-            _fc_note = (
-                f"  +  forecast to **{_fc_max_d}**" if forecast_dates else ""
-            )
-            st.caption(f"{_min_d} → {_max_d}{_fc_note}")
-
-            picked_date = st.date_input(
-                "Select date",
-                min_value=_min_d,
-                max_value=_fc_max_d,
-                label_visibility="collapsed",
-                key="date_picker",
-            )
-            selected_date = picked_date
-
-            # Determine if this is a forecast date
-            _is_forecast_date = selected_date > _max_d
-
-            # Prev/Next buttons — navigate by day across full range
-            # Use simple prev/next day since we don't load all dates
-            _nc1, _nc2 = st.columns(2)
-            with _nc1:
-                if st.button(
-                    "◄ Prev", width="stretch",
-                    disabled=(selected_date <= _min_d),
-                ):
-                    _ss["_pending_date"] = selected_date - timedelta(days=1)
-                    st.rerun()
-            with _nc2:
-                if st.button(
-                    "Next ►", width="stretch",
-                    disabled=(selected_date >= _fc_max_d),
-                ):
-                    _ss["_pending_date"] = selected_date + timedelta(days=1)
-                    st.rerun()
-
-            if _fc_data:
-                _fc_trained_on = _fc_data.get("last_data_date")
-                if _fc_trained_on is not None and _fc_trained_on != _max_d:
-                    st.markdown(
-                        '<div style="background:#7a3800;color:#FFE0B2;padding:0.5rem 0.7rem;'
-                        'border-radius:6px;font-size:0.78rem;margin-top:0.3rem;">'
-                        "⚠ Forecast is out of date. Use the <strong>Refresh Forecast</strong> "
-                        "button in Data Management to retrain."
-                        "</div>",
-                        unsafe_allow_html=True,
-                    )
-            else:
-                st.caption("No forecast available — use Refresh Forecast to generate one.")
-
-            st.markdown("---")
-            st.markdown("### Hour Range")
-
-            def _fmt_h(h: int) -> str:
-                hr12 = 12 if h % 12 == 0 else h % 12
-                suf  = "AM" if h < 12 else "PM"
-                return f"{hr12}:00 {suf}"
-
-            hour_range = st.slider(
-                "Hours", 0, 23, (0, 23), label_visibility="collapsed"
-            )
-            st.caption(f"{_fmt_h(hour_range[0])} → {_fmt_h(hour_range[1])}")
-
-        else:  # Monthly view
-            # Build month list from partition index dates
-            import itertools
-            _avail_months = []
-            d = date(_min_d.year, _min_d.month, 1)
-            end_m = date(_max_d.year, _max_d.month, 1)
-            while d <= end_m:
-                _avail_months.append((d.year, d.month))
-                if d.month == 12:
-                    d = date(d.year + 1, 1, 1)
-                else:
-                    d = date(d.year, d.month + 1, 1)
-
-            if not _avail_months:
-                st.warning("No data found for this map type.")
-                st.stop()
-
-            _month_labels = [
-                f"{_cal.month_name[m]} {y}" for y, m in _avail_months
-            ]
-
-            st.markdown("### Month")
-            _sel_month_label = st.selectbox(
-                "Select month",
-                _month_labels,
-                index=len(_avail_months) - 1,
-                label_visibility="collapsed",
-            )
-            _sel_idx = _month_labels.index(_sel_month_label)
-            selected_year, selected_month = _avail_months[_sel_idx]
-
-        # ── Resource allocation ──────────────────────────────────────────────
         st.markdown("---")
-        with st.expander("Resource Allocation", expanded=False):
-            st.markdown(
-                "Reassign instruments between maps. "
-                "Each resource should appear in only one map."
+
+        # Date range from partition index
+        _pa_data_ok = False
+        _pa_min_d = date.today() - timedelta(days=30)
+        _pa_max_d = date.today()
+        if storage_is_configured():
+            try:
+                _pa_ensure = ensure_partitioned_storage()
+                if _pa_ensure:
+                    _pa_summary = get_data_summary()
+                    if _pa_summary.get("total_rows", 0) > 0:
+                        _pa_data_ok = True
+                        _pa_min_d = date.fromisoformat(_pa_summary["min_date"])
+                        _pa_max_d = date.fromisoformat(_pa_summary["max_date"])
+            except Exception:
+                pass
+
+        if pa_view == "Daily":
+            st.markdown("### Date")
+            if _pa_data_ok:
+                st.caption(f"{_pa_min_d} → {_pa_max_d}")
+            _pa_date_default = _ss.get("pa_date", _pa_max_d)
+            if isinstance(_pa_date_default, str):
+                try:
+                    _pa_date_default = date.fromisoformat(_pa_date_default)
+                except Exception:
+                    _pa_date_default = _pa_max_d
+            if _pa_date_default < _pa_min_d or _pa_date_default > _pa_max_d:
+                _pa_date_default = _pa_max_d
+            pa_date = st.date_input(
+                "Select date",
+                value=_pa_date_default,
+                min_value=_pa_min_d,
+                max_value=_pa_max_d,
+                label_visibility="collapsed",
+                key="pa_date_picker",
             )
-            new_assignments = {}
-            for mt in MAP_TYPES:
-                new_assignments[mt] = st.multiselect(
-                    mt, options=ALL_RESOURCES,
-                    default=_ss.resource_assignments.get(mt, []),
-                    key=f"res_{mt}",
-                )
-            _flat  = [r for rs in new_assignments.values() for r in rs]
-            _dupes = sorted({r for r in _flat if _flat.count(r) > 1})
-            if _dupes:
-                st.warning(f"Duplicate assignments: {', '.join(_dupes)}")
-
-            _ra, _rb = st.columns(2)
-            with _ra:
-                if st.button("Apply", width="stretch", type="primary"):
-                    _ss.resource_assignments = new_assignments
-                    st.cache_data.clear()
-                    st.rerun()
-            with _rb:
-                if st.button("Reset defaults", width="stretch"):
-                    _ss.resource_assignments = deepcopy(DEFAULT_RESOURCES)
-                    st.cache_data.clear()
-                    st.rerun()
-
+            _ss["pa_date"] = pa_date
+            _pa_date_str = pa_date.isoformat()
+        else:
+            # Monthly selector
+            import calendar as _cal3
+            st.markdown("### Month")
+            _pa_avail_months = []
+            _d = date(_pa_min_d.year, _pa_min_d.month, 1)
+            _end_m = date(_pa_max_d.year, _pa_max_d.month, 1)
+            while _d <= _end_m:
+                _pa_avail_months.append((_d.year, _d.month))
+                if _d.month == 12:
+                    _d = date(_d.year + 1, 1, 1)
+                else:
+                    _d = date(_d.year, _d.month + 1, 1)
+            if not _pa_avail_months:
+                _pa_avail_months = [(_pa_max_d.year, _pa_max_d.month)]
+            _pa_month_labels = [f"{_cal3.month_name[m]} {y}" for y, m in _pa_avail_months]
+            _pa_sel_label = st.selectbox(
+                "Select month", _pa_month_labels,
+                index=len(_pa_avail_months) - 1,
+                label_visibility="collapsed",
+                key="pa_month_picker",
+            )
+            _pa_sel_idx = _pa_month_labels.index(_pa_sel_label)
+            _pa_sel_year, _pa_sel_month = _pa_avail_months[_pa_sel_idx]
+            _pa_date_str = f"{_pa_sel_year:04d}-{_pa_sel_month:02d}"
+            _ss["pa_date"] = _pa_date_str
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PENDING UPLOAD PROCESSING
@@ -1448,4 +1538,171 @@ if _ss["active_dashboard"] == "analytics":
                     )
 
 else:
-    pass  # Pre-Analytics UI rendered in Step 3
+    # ═══════════════════════════════════════════════════════════════════════
+    # PRE-ANALYTICS MAIN PANEL
+    # ═══════════════════════════════════════════════════════════════════════
+    st.write("Pre-analytics block reached")
+    try:
+        import plotly.graph_objects as _pgo
+        import numpy as _np
+
+        pa_location = _ss.get("pa_location", "Keck")
+        pa_view     = _ss.get("pa_view", "Daily")
+        _pa_ds      = _ss.get("pa_date", date.today().isoformat())
+        if isinstance(_pa_ds, date):
+            _pa_ds = _pa_ds.isoformat()
+
+        # Build date label for the header
+        if len(_pa_ds) == 7:
+            import calendar as _calpa
+            _pa_yr, _pa_mo = int(_pa_ds[:4]), int(_pa_ds[5:7])
+            _pa_date_label = f"{_calpa.month_name[_pa_mo]} {_pa_yr}"
+        else:
+            _pa_date_label = pd.Timestamp(_pa_ds).strftime("%B %d, %Y")
+
+        render_header(f"Pre-Analytics · {pa_location}", _pa_date_label,
+                      active_dashboard="pre_analytics")
+
+        # ── Load draw data ───────────────────────────────────────────────────────
+        _draw_df = load_draw_data(_pa_ds, pa_view)
+
+        # ── KPI strip (Step 3b) ──────────────────────────────────────────────────
+        _loc_df = _draw_df[_draw_df["location"] == pa_location] if not _draw_df.empty else _draw_df
+        _pa_total_draws   = len(_loc_df)
+        _pa_total_samples = int(_loc_df["samples"].sum()) if not _loc_df.empty else 0
+        _pa_active_techs  = int(_loc_df["display_name"].nunique()) if not _loc_df.empty else 0
+        if not _loc_df.empty:
+            _peak_h_val   = int(_loc_df.groupby("hour").size().idxmax())
+            _pa_peak_hour = HOUR_LABELS.get(_peak_h_val, str(_peak_h_val))
+        else:
+            _pa_peak_hour = "—"
+
+        _kc1, _kc2, _kc3, _kc4 = st.columns(4)
+        with _kc1:
+            st.markdown(metric_card("Total Draws", f"{_pa_total_draws:,}", accent=True),
+                        unsafe_allow_html=True)
+        with _kc2:
+            st.markdown(metric_card("Total Samples", f"{_pa_total_samples:,}"),
+                        unsafe_allow_html=True)
+        with _kc3:
+            st.markdown(metric_card("Active Techs", str(_pa_active_techs)),
+                        unsafe_allow_html=True)
+        with _kc4:
+            st.markdown(metric_card("Peak Hour", _pa_peak_hour), unsafe_allow_html=True)
+
+        st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
+
+        # Hour labels 0-23
+        _PA_HOUR_LABELS = [HOUR_LABELS[h] for h in range(24)]
+
+        # Shift rendering order per location
+        _PA_SHIFT_ORDER = {
+            "Keck":   ["Early AM", "AM", "PM", "NS"],
+            "Norris": ["AM", "PM", "NS"],
+            "HC3":    [None],
+        }
+
+        def _render_pa_heatmap(draw_df, location, shift, view, heatmap_key):
+            """Render one Plotly heatmap for a location/shift, plus click detail panel."""
+            _pivot = build_draw_pivot(draw_df, location, shift, view)
+            _techs = list(_pivot.index)
+            _vals  = _pivot.values.astype(float)
+
+            # Color scale max: 95th-pct of non-zero values
+            _nonzero = _vals[_vals > 0]
+            _vmax_pa = float(_np.percentile(_nonzero, 95)) if len(_nonzero) > 0 else 1.0
+            _vmax_pa = max(_vmax_pa, 1.0)
+
+            _text_vals = [
+                [str(int(round(v))) if v > 0 else "" for v in row]
+                for row in _vals
+            ]
+
+            _fig = _pgo.Figure(data=_pgo.Heatmap(
+                z=_vals,
+                x=_PA_HOUR_LABELS,
+                y=_techs,
+                text=_text_vals,
+                texttemplate="%{text}",
+                colorscale="Teal",
+                zmin=0,
+                zmax=_vmax_pa,
+                xgap=1,
+                ygap=1,
+                colorbar=dict(title="Draws/hour", thickness=12, len=0.9),
+            ))
+            _plot_h = max(250, len(_techs) * 35 + 80)
+            _fig.update_layout(
+                height=_plot_h,
+                margin=dict(l=10, r=10, t=10, b=10),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(tickfont=dict(size=10), side="bottom"),
+                yaxis=dict(tickfont=dict(size=11), autorange="reversed"),
+            )
+
+            _sel_event = st.plotly_chart(
+                _fig,
+                use_container_width=True,
+                on_select="rerun",
+                key=heatmap_key,
+            )
+
+            # ── Cell click → detail panel (Step 3d) ─────────────────────────────
+            _cell_key = f"selected_cell_{heatmap_key}"
+            if _sel_event and hasattr(_sel_event, "selection") and _sel_event.selection:
+                _pts = _sel_event.selection.get("points", [])
+                if _pts:
+                    _pt = _pts[0]
+                    _sel_tech   = _pt.get("y")
+                    _sel_hlabel = _pt.get("x")
+                    _sel_hour   = next(
+                        (h for h, lbl in HOUR_LABELS.items() if lbl == _sel_hlabel), None
+                    )
+                    if _sel_tech is not None and _sel_hour is not None:
+                        _ss[_cell_key] = {
+                            "tech": _sel_tech, "hour": _sel_hour, "hlabel": _sel_hlabel
+                        }
+
+            _stored = _ss.get(_cell_key)
+            if _stored:
+                _d_tech   = _stored["tech"]
+                _d_hour   = _stored["hour"]
+                _d_hlabel = _stored["hlabel"]
+                _detail   = (
+                    draw_df[
+                        (draw_df["display_name"] == _d_tech) &
+                        (draw_df["hour"] == _d_hour)
+                    ].copy()
+                    if not draw_df.empty else pd.DataFrame()
+                )
+                st.markdown(
+                    f'<div class="section-heading">Draws for {_d_tech} at {_d_hlabel}</div>',
+                    unsafe_allow_html=True,
+                )
+                if _detail.empty:
+                    st.info(f"No draws for **{_d_tech}** at **{_d_hlabel}**.")
+                else:
+                    _detail_disp = _detail[["draw_datetime", "samples"]].copy()
+                    _detail_disp["draw_datetime"] = pd.to_datetime(
+                        _detail_disp["draw_datetime"]
+                    ).dt.strftime("%Y-%m-%d %H:%M")
+                    _detail_disp.columns = ["Draw Timestamp", "Samples"]
+                    _detail_disp = _detail_disp.sort_values("Draw Timestamp").reset_index(drop=True)
+                    st.dataframe(
+                        _detail_disp, width="stretch",
+                        height=min(80 + 35 * len(_detail_disp), 450),
+                    )
+                    st.caption(
+                        f"{len(_detail_disp)} draw(s)  ·  "
+                        f"{int(_detail_disp['Samples'].sum())} total sample(s)"
+                    )
+
+        # ── Render heatmaps per shift (Step 3c) ──────────────────────────────────
+        for _pa_shift in _PA_SHIFT_ORDER.get(pa_location, [None]):
+            if pa_location != "HC3" and _pa_shift is not None:
+                st.subheader(f"{pa_location} — {_pa_shift}")
+            _hkey = f"heatmap_{pa_location}_{_pa_shift or 'all'}"
+            _render_pa_heatmap(_draw_df, pa_location, _pa_shift, pa_view, _hkey)
+    except Exception as e:
+        st.exception(e)
