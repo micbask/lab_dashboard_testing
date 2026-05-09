@@ -119,16 +119,6 @@ def render(params: dict, ss) -> None:
         render_header(f"Pre-Analytics · {pa_location}", _pa_date_label)
 
         _draw_df, _draw_debug = load_draw_data(_pa_ds, pa_view)
-        _staff_dict, _staff_raw = load_phlebotomy_staff()
-
-        with st.expander("Debug — name matching", expanded=True):
-            st.write("CSV Drawn Tech — first 5 raw values:", _staff_raw)
-            st.write("Staff lookup keys — first 10 (normalized):",
-                     _draw_debug.get("staff_keys", []))
-            st.write("Parquet Drawn Tech — first 10 raw values:",
-                     _draw_debug.get("raw_drawn_tech", []))
-            st.write("Rows before name-match filter:", _draw_debug.get("rows_before", 0))
-            st.write("Rows after name-match filter:", _draw_debug.get("rows_after", 0))
 
         _loc_df = (
             _draw_df[_draw_df["location"] == pa_location]
@@ -181,6 +171,58 @@ def render(params: dict, ss) -> None:
                 for row in _z
             ]
 
+            # Pre-compute per-cell hover content. Streamlit's plotly_chart has
+            # no on_hover event, so hover-driven detail must be delivered from
+            # inside Plotly via hovertemplate against a customdata grid.
+            if shift is None:
+                _sub_for_hover = (
+                    draw_df[draw_df["location"] == location]
+                    if not draw_df.empty else draw_df
+                )
+            else:
+                _sub_for_hover = (
+                    draw_df[
+                        (draw_df["location"] == location) &
+                        (draw_df["shift"] == shift)
+                    ] if not draw_df.empty else draw_df
+                )
+
+            _sep = "─" * 30
+            _grouped_details: dict = {}
+            if not _sub_for_hover.empty:
+                for (_tech, _hour), _grp in _sub_for_hover.groupby(
+                    ["display_name", "hour"]
+                ):
+                    _grp_sorted = _grp.sort_values("draw_datetime")
+                    _hlabel = HOUR_LABELS.get(int(_hour), str(_hour))
+                    _lines = [f"<b>{_tech} @ {_hlabel}</b>", _sep]
+                    for _, _r in _grp_sorted.iterrows():
+                        _t = pd.to_datetime(_r["draw_datetime"]).strftime("%H:%M")
+                        _s = int(_r["samples"])
+                        _lines.append(
+                            f"{_t}  —  {_s} sample{'s' if _s != 1 else ''}"
+                        )
+                    _lines.append(_sep)
+                    _n_d = len(_grp_sorted)
+                    _n_s = int(_grp_sorted["samples"].sum())
+                    _lines.append(
+                        f"<b>{_n_d} draw{'s' if _n_d != 1 else ''} "
+                        f"·  {_n_s} total sample{'s' if _n_s != 1 else ''}</b>"
+                    )
+                    _grouped_details[(_tech, int(_hour))] = "<br>".join(_lines)
+
+            _customdata = [
+                [
+                    _grouped_details.get(
+                        (_tech, _h),
+                        f"<b>{_tech} @ {HOUR_LABELS.get(_h, str(_h))}</b>"
+                        f"<br>{_sep}<br><i>No draws</i>",
+                    )
+                    for _h in range(24)
+                ]
+                for _tech in _techs
+            ]
+
             _fig = _pgo.Figure(data=_pgo.Heatmap(
                 z=_z,
                 x=_x,
@@ -203,14 +245,24 @@ def render(params: dict, ss) -> None:
                 plot_bgcolor="rgba(0,0,0,0)",
                 xaxis=dict(tickfont=dict(size=10), side="bottom"),
                 yaxis=dict(tickfont=dict(size=11), autorange="reversed"),
+                hoverlabel=dict(
+                    bgcolor="white",
+                    bordercolor="#6F1828",
+                    font=dict(
+                        size=12,
+                        family="Inter, system-ui, sans-serif",
+                        color="#1a1a1a",
+                    ),
+                    align="left",
+                ),
             )
 
             _cell_key = f"selected_cell_{heatmap_key}"
             _sel_event = st.plotly_chart(
                 _fig,
                 use_container_width=True,
-                on_select="rerun",
                 key=heatmap_key,
+                config={"displayModeBar": False},
             )
 
             if _sel_event and hasattr(_sel_event, "selection") and _sel_event.selection:
