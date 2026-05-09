@@ -25,8 +25,8 @@ from config import VMAX, HOUR_LABELS, NAVY, GOLD, STEEL
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-MATPLOTLIB FONT
-═════════════════════════════════════════════════════════════════════════════
+# MATPLOTLIB FONT
+# ═════════════════════════════════════════════════════════════════════════════
 
 def setup_mpl_font() -> None:
     """Use Palatino if available, fall back to generic serif."""
@@ -39,8 +39,8 @@ def setup_mpl_font() -> None:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-CSS INJECTION
-═════════════════════════════════════════════════════════════════════════════
+# CSS INJECTION
+# ═════════════════════════════════════════════════════════════════════════════
 
 def inject_css() -> None:
     """Inject all global CSS styles."""
@@ -153,14 +153,21 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     background-color: #6F1828 !important;
 }
 
-/* Nav buttons — base typography (colors injected per-render by render_header) */
-html body .stButton > button[aria-label="ANALYTICS"],
-html body .stButton > button[aria-label="PRE-ANALYTICS"] {
-    font-size: 0.75rem !important;
+/* Nav buttons — base typography (colors injected per-render by render_header).
+   Streamlit exposes the widget `key` as a class `st-key-{key}` on the wrapper
+   div, which is the reliable way to target a specific button (the button
+   element itself does NOT carry aria-label by default). */
+html body .st-key-nav_analytics .stButton > button,
+html body .st-key-nav_analytics button,
+html body .st-key-nav_pre_analytics .stButton > button,
+html body .st-key-nav_pre_analytics button {
+    font-size: 0.72rem !important;
     font-weight: 700 !important;
-    letter-spacing: 0.06em !important;
-    padding: 0.35rem 0.9rem !important;
+    letter-spacing: 0.08em !important;
+    padding: 0.45rem 0.9rem !important;
     text-shadow: none !important;
+    border-radius: 6px !important;
+    min-height: 38px !important;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -539,8 +546,8 @@ div[data-testid="stDataFrame"] {
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-UI HELPER FUNCTIONS
-═════════════════════════════════════════════════════════════════════════════
+# UI HELPER FUNCTIONS
+# ═════════════════════════════════════════════════════════════════════════════
 
 def metric_card(label: str, value: str, sub: str = "", accent: bool = False) -> str:
     """Return an HTML string for a styled metric card."""
@@ -558,12 +565,13 @@ def metric_card(label: str, value: str, sub: str = "", accent: bool = False) -> 
 def render_header(map_type: str, date_str: str) -> None:
     """Render the branded Keck Medicine header with in-session nav buttons.
 
+    Layout: a single horizontal row containing title block, two nav buttons,
+    and the date label. The whole row is dressed up as the maroon banner via
+    a CSS rule that uses `:has()` to find the row containing the nav-marker.
+
     Routing is driven by st.session_state["_nav_dashboard"] which is set
-    synchronously on button click before st.rerun(), so there is no race
-    condition with st.query_params update timing.
+    synchronously on button click before st.rerun().
     """
-    # Read active dashboard from session_state (set by nav buttons) or
-    # fall back to query_params for initial direct-URL access.
     _active = st.session_state.get(
         "_nav_dashboard",
         st.query_params.get("dashboard", "analytics"),
@@ -572,7 +580,7 @@ def render_header(map_type: str, date_str: str) -> None:
     # Color tokens
     _gold      = "#F1AB1F"
     _ghost_bg  = "rgba(241,171,31,0.15)"
-    _ghost_fg  = "rgba(255,255,255,0.6)"
+    _ghost_fg  = "rgba(255,255,255,0.85)"
     _ghost_bdr = "rgba(241,171,31,0.40)"
     _a_bg   = _gold      if _active == "analytics"     else _ghost_bg
     _a_fg   = "#1a1a1a"  if _active == "analytics"     else _ghost_fg
@@ -581,46 +589,86 @@ def render_header(map_type: str, date_str: str) -> None:
     _pa_fg  = "#1a1a1a"  if _active == "pre_analytics" else _ghost_fg
     _pa_bdr = _gold      if _active == "pre_analytics" else _ghost_bdr
 
-    # Header banner HTML + scoped CSS.
-    # Nav button colors use `html body .stButton > button[aria-label]` which
-    # scores (0,0,2,2) specificity — higher than the global maroon rule
-    # `html body .stButton > button` at (0,0,1,3) — so gold wins the cascade.
+    # Scoped CSS:
+    # - .st-key-nav_analytics / .st-key-nav_pre_analytics are wrapper classes
+    #   Streamlit attaches to keyed widgets — reliable button targeting.
+    # - The horizontal block that contains both nav-button wrappers gets the
+    #   maroon banner background via the :has() selector.
     st.markdown(f"""
-    <div class="keck-header">
-      <div>
-        <h1>Productivity Dashboard</h1>
-        <p class="subtitle">{map_type}</p>
-      </div>
-      <div style="text-align:right;">
-        <span class="keck-date-label">{date_str}</span>
-      </div>
-    </div>
     <style>
-      html body .stButton > button[aria-label="ANALYTICS"] {{
+      /* Maroon banner: any horizontal row containing our nav buttons. */
+      div[data-testid="stHorizontalBlock"]:has(.st-key-nav_analytics) {{
+        background: linear-gradient(135deg, #6F1828 0%, #521322 60%, #3d0e19 100%);
+        padding: 1.4rem 1.8rem 1.4rem 1.8rem !important;
+        border-radius: 10px !important;
+        margin-bottom: 1.4rem !important;
+        align-items: center !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      }}
+      /* Nav button colors — keyed wrapper class beats the global maroon rule. */
+      html body .st-key-nav_analytics button {{
         background-color: {_a_bg} !important;
         color: {_a_fg} !important;
         border: 1px solid {_a_bdr} !important;
       }}
-      html body .stButton > button[aria-label="PRE-ANALYTICS"] {{
+      html body .st-key-nav_pre_analytics button {{
         background-color: {_pa_bg} !important;
         color: {_pa_fg} !important;
         border: 1px solid {_pa_bdr} !important;
       }}
+      html body .st-key-nav_analytics button:hover,
+      html body .st-key-nav_pre_analytics button:hover {{
+        background-color: #d99518 !important;
+        color: #1a1a1a !important;
+        border-color: #d99518 !important;
+      }}
+      /* Title + date typography inside the banner row. */
+      .keck-header-title h1 {{
+        color: #ffffff !important;
+        font-family: 'Palatino Linotype','Palatino',serif !important;
+        font-size: 1.85rem !important;
+        font-weight: 700 !important;
+        margin: 0 !important;
+        line-height: 1.15 !important;
+      }}
+      .keck-header-title .subtitle {{
+        color: #EDC153 !important;
+        font-size: 0.95rem !important;
+        font-weight: 500 !important;
+        margin: 0.35rem 0 0 0 !important;
+      }}
+      .keck-header-date {{
+        color: rgba(255,255,255,0.85) !important;
+        font-size: 0.95rem !important;
+        font-weight: 500 !important;
+        text-align: right !important;
+      }}
     </style>
     """, unsafe_allow_html=True)
 
-    # Nav buttons — session_state is set synchronously before rerun so routing
-    # is guaranteed to see the new value on the very next script execution.
-    _spacer, _na, _nb = st.columns([0.60, 0.20, 0.20])
-    with _na:
+    cols = st.columns([0.42, 0.18, 0.20, 0.20], vertical_alignment="center")
+    with cols[0]:
+        st.markdown(
+            f"""<div class="keck-header-title">
+                  <h1>Productivity Dashboard</h1>
+                  <p class="subtitle">{map_type}</p>
+                </div>""",
+            unsafe_allow_html=True,
+        )
+    with cols[1]:
         if st.button("ANALYTICS", key="nav_analytics", use_container_width=True):
             st.session_state["_nav_dashboard"] = "analytics"
             st.rerun()
-    with _nb:
+    with cols[2]:
         if st.button("PRE-ANALYTICS", key="nav_pre_analytics",
                      use_container_width=True):
             st.session_state["_nav_dashboard"] = "pre_analytics"
             st.rerun()
+    with cols[3]:
+        st.markdown(
+            f'<div class="keck-header-date">{date_str}</div>',
+            unsafe_allow_html=True,
+        )
 
 
 def status_chip(text: str, level: str = "ok") -> None:
@@ -633,8 +681,8 @@ def status_chip(text: str, level: str = "ok") -> None:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-PIVOT STYLING
-═════════════════════════════════════════════════════════════════════════════
+# PIVOT STYLING
+# ═════════════════════════════════════════════════════════════════════════════
 
 def style_pivot(pivot: pd.DataFrame, vmax: int, cmap: str = "viridis_r"):
     """Apply colormap background-gradient styling to the pivot DataFrame."""
@@ -682,8 +730,8 @@ def style_monthly_pivot(pivot: pd.DataFrame, vmax: int):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-PNG EXPORT
-═════════════════════════════════════════════════════════════════════════════
+# PNG EXPORT
+# ═════════════════════════════════════════════════════════════════════════════
 
 def build_png(
     df_dh: pd.DataFrame,
