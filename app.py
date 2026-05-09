@@ -44,9 +44,9 @@ from ui_components import (
 )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG  (must be the first Streamlit call)
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 st.set_page_config(
     page_title="Lab Productivity · Keck Medicine",
     page_icon="🧪",
@@ -58,9 +58,9 @@ inject_css()
 setup_mpl_font()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # PASSWORD GATE
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 _app_password = st.secrets.get("app_password", None)
 
 if "app_authenticated" not in st.session_state:
@@ -149,32 +149,28 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
     st.stop()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # SESSION STATE INITIALISATION
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 _ss = st.session_state
 
 if "resource_assignments" not in _ss:
     _ss.resource_assignments = deepcopy(DEFAULT_RESOURCES)
 if "last_map_type" not in _ss:
     _ss.last_map_type = None
-if "active_dashboard" not in _ss:
-    _ss["active_dashboard"] = "analytics"
+
+_active_dashboard = st.query_params.get("dashboard", "analytics")
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # LOCAL HELPER FUNCTIONS
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 
 def build_pivot(
     df: pd.DataFrame,
     selected_date: date,
     hour_range: tuple[int, int],
 ) -> tuple:
-    """Build the procedure x hour pivot table for a given date and hour window.
-
-    df is already filtered to the correct resources/site by load_filtered_data.
-    """
     h_start, h_end = hour_range
     hours   = list(range(h_start, h_end + 1))
     df_date = df[df["complete_date"] == selected_date].copy()
@@ -206,10 +202,6 @@ def build_pivot(
 def build_monthly_pivot(
     df: pd.DataFrame, year: int, month: int,
 ) -> tuple:
-    """Build a procedure x hour pivot of daily-average volumes.
-
-    df is already filtered to the correct resources/site and month.
-    """
     month_start = date(year, month, 1)
     month_end   = date(year, month, _cal.monthrange(year, month)[1])
     month_df    = df[
@@ -244,7 +236,6 @@ def build_monthly_pivot(
 def build_weekday_pivot(
     month_df: pd.DataFrame, year: int, month: int,
 ) -> tuple:
-    """Build a weekday x hour pivot of average total volume."""
     if month_df.empty:
         return None, {}
 
@@ -276,20 +267,27 @@ def build_weekday_pivot(
     return pivot, wd_counts
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # ── PRE-ANALYTICS DATA LAYER ──
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 
+import re as _re
 import base64 as _b64
 import io as _io
 
-@st.cache_data(show_spinner=False, ttl=3600)
-def load_phlebotomy_staff() -> dict:
-    """Load config/phlebotomy_staff.csv from GitHub and return a name-keyed lookup.
+def normalize_name(name) -> "str | None":
+    if name is None:
+        return None
+    _s = str(name)
+    _s = ''.join(c for c in _s if c.isprintable())
+    _s = _re.sub(r'\s+', ' ', _s).strip()
+    if not _s or _s == "-" or _s.lower() == "nan":
+        return None
+    return _s.lower()
 
-    Returns: normalized_name -> {display_name, location, shift}
-      shift is a str ('Early AM','AM','PM','NS') or None for HC3.
-    """
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def load_phlebotomy_staff() -> tuple:
     import requests as _req
     _repo  = st.secrets["github"]["repo"]
     _token = st.secrets["github"]["token"]
@@ -303,51 +301,41 @@ def load_phlebotomy_staff() -> dict:
         headers=_headers, timeout=30,
     )
     if _resp.status_code == 404:
-        return {}
+        return {}, []
     _resp.raise_for_status()
-    _raw = _b64.b64decode(_resp.json()["content"].strip())
-    _df  = pd.read_csv(_io.BytesIO(_raw))
+    _raw_bytes = _b64.b64decode(_resp.json()["content"].strip())
+    _df = pd.read_csv(_io.BytesIO(_raw_bytes))
     _lookup: dict = {}
+    _debug_raw: list = []
     for _, _row in _df.iterrows():
-        _name = str(_row["Drawn Tech"]).strip()
+        _raw_name = str(_row["Drawn Tech"])
+        if len(_debug_raw) < 5:
+            _debug_raw.append(repr(_raw_name))
+        _display = _raw_name.strip()
         _loc  = str(_row["Location"]).strip()
         _sh_raw = _row["Shift"]
         _shift  = (
             None if (pd.isna(_sh_raw) or str(_sh_raw).strip() in ("", "nan"))
             else str(_sh_raw).strip()
         )
-        _key = _name.lower()
-        _lookup[_key] = {
-            "display_name": _name,
-            "location": _loc,
-            "shift": _shift,
-        }
-    return _lookup
-
-
-def normalize_name(name) -> "str | None":
-    """Return name.strip().lower(), or None for null/empty/'-' values."""
-    if name is None:
-        return None
-    _s = str(name).strip()
-    if not _s or _s == "-" or _s.lower() == "nan":
-        return None
-    return _s.lower()
+        _key = normalize_name(_raw_name)
+        if _key:
+            _lookup[_key] = {
+                "display_name": _display,
+                "location": _loc,
+                "shift": _shift,
+            }
+    return _lookup, _debug_raw
 
 
 @st.cache_data(show_spinner=False, ttl=300)
-def load_draw_data(date_str: str, view: str) -> pd.DataFrame:
-    """Load pre-analytics draw data for the given date or month.
-
-    Parameters:
-        date_str: 'YYYY-MM-DD' for daily, 'YYYY-MM' for monthly
-        view:     'Daily' or 'Monthly'
-
-    Returns DataFrame (one row per unique draw) with columns:
-        display_name, location, shift, draw_datetime, hour, samples
-    """
+def load_draw_data(date_str: str, view: str) -> tuple:
     from storage import load_filtered_data, get_index_hash
     import calendar as _cal2
+
+    _empty = pd.DataFrame(
+        columns=["display_name", "location", "shift", "draw_datetime", "hour", "samples"]
+    )
 
     if view == "Daily":
         _d = date.fromisoformat(date_str)
@@ -366,42 +354,57 @@ def load_draw_data(date_str: str, view: str) -> pd.DataFrame:
         _index_hash=_idx_hash,
     )
 
+    _debug: dict = {
+        "raw_drawn_tech": [],
+        "staff_keys": [],
+        "rows_before": 0,
+        "rows_after": 0,
+    }
+
     if _raw.empty or "Drawn Tech" not in _raw.columns or "Date/Time - Drawn" not in _raw.columns:
-        return pd.DataFrame(
-            columns=["display_name", "location", "shift", "draw_datetime", "hour", "samples"]
-        )
+        return _empty, _debug
+
+    _debug["raw_drawn_tech"] = (
+        _raw["Drawn Tech"].dropna().astype(str).head(10).tolist()
+    )
 
     _df = _raw[["Drawn Tech", "Date/Time - Drawn"]].copy()
-
-    # Exclude nulls / placeholders
-    _df = _df[_df["Drawn Tech"].apply(normalize_name).notna()].copy()
     _df["_norm"] = _df["Drawn Tech"].apply(normalize_name)
+    _df = _df[_df["_norm"].notna()].copy()
 
-    # Keep only known phlebotomists
-    _staff = load_phlebotomy_staff()
+    _staff, _ = load_phlebotomy_staff()
+    _debug["staff_keys"] = list(_staff.keys())[:10]
+    _debug["rows_before"] = len(_df)
+
     _df = _df[_df["_norm"].isin(_staff)].copy()
+    _debug["rows_after"] = len(_df)
+
     if _df.empty:
-        return pd.DataFrame(
-            columns=["display_name", "location", "shift", "draw_datetime", "hour", "samples"]
-        )
+        return _empty, _debug
 
     _df["Date/Time - Drawn"] = pd.to_datetime(_df["Date/Time - Drawn"])
 
-    # Group by tech + draw timestamp → samples count
+    # FIX (Bug 1): group by the original 'Drawn Tech' column so each unique
+    # draw event is counted against the raw name, then derive _norm afterward
+    # for the staff-dict lookup.  display_name comes from the staff dict.
     _grp = (
-        _df.groupby(["_norm", "Date/Time - Drawn"], as_index=False)
+        _df.groupby(["Drawn Tech", "Date/Time - Drawn"], as_index=False)
            .size()
            .rename(columns={"size": "samples"})
     )
 
-    # Map back to staff metadata
+    _grp["_norm"]        = _grp["Drawn Tech"].apply(normalize_name)
     _grp["display_name"] = _grp["_norm"].map(lambda k: _staff[k]["display_name"])
     _grp["location"]     = _grp["_norm"].map(lambda k: _staff[k]["location"])
     _grp["shift"]        = _grp["_norm"].map(lambda k: _staff[k]["shift"])
     _grp["draw_datetime"] = _grp["Date/Time - Drawn"]
     _grp["hour"]          = _grp["draw_datetime"].dt.hour
 
-    return _grp[["display_name", "location", "shift", "draw_datetime", "hour", "samples"]].reset_index(drop=True)
+    return (
+        _grp[["display_name", "location", "shift", "draw_datetime", "hour", "samples"]]
+        .reset_index(drop=True),
+        _debug,
+    )
 
 
 def build_draw_pivot(
@@ -410,17 +413,8 @@ def build_draw_pivot(
     shift: "str | None",
     view: str,
 ) -> pd.DataFrame:
-    """Build a tech × hour pivot of draw counts for one location/shift.
+    _staff, _ = load_phlebotomy_staff()
 
-    For Daily:  values = draw count per tech per hour.
-    For Monthly: values = average draws per tech per hour
-                 (sum / distinct dates in data).
-
-    All techs for this location/shift appear as rows even with zero draws.
-    """
-    _staff = load_phlebotomy_staff()
-
-    # All techs for this location/shift (for row completeness)
     _all_techs = sorted(
         info["display_name"]
         for info in _staff.values()
@@ -432,11 +426,12 @@ def build_draw_pivot(
     if draw_df.empty:
         return pd.DataFrame(0, index=_all_techs, columns=_hours)
 
-    # Filter to this location / shift
     if shift is None:
         _sub = draw_df[draw_df["location"] == location].copy()
     else:
-        _sub = draw_df[(draw_df["location"] == location) & (draw_df["shift"] == shift)].copy()
+        _sub = draw_df[
+            (draw_df["location"] == location) & (draw_df["shift"] == shift)
+        ].copy()
 
     if _sub.empty:
         return pd.DataFrame(0, index=_all_techs, columns=_hours)
@@ -447,6 +442,7 @@ def build_draw_pivot(
             values="samples", aggfunc="count", fill_value=0,
         ).reindex(index=_all_techs, columns=_hours, fill_value=0)
     )
+    _pivot.index = _all_techs
 
     if view == "Monthly":
         _n_days = max(int(_sub["draw_datetime"].dt.date.nunique()), 1)
@@ -455,13 +451,12 @@ def build_draw_pivot(
     return _pivot
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
-    if _ss["active_dashboard"] == "analytics":
+    if _active_dashboard == "analytics":
 
-        # ── Map type selector ────────────────────────────────────────────────────
         st.markdown("### Map Type")
         map_type = st.selectbox("Map type", MAP_TYPES, label_visibility="collapsed")
 
@@ -469,21 +464,18 @@ with st.sidebar:
             _ss.pop("date_picker", None)
             _ss.last_map_type = map_type
 
-        # ── View mode toggle ─────────────────────────────────────────────────────
         st.markdown("### View")
         view_mode = st.radio(
             "View", ["Daily", "Monthly"],
             horizontal=True, label_visibility="collapsed",
         )
 
-        # ── Time-basis toggle ────────────────────────────────────────────────────
         st.markdown("### Time Basis")
         time_basis = st.radio(
             "Time Basis", ["Completed", "In-Lab"],
             horizontal=True, label_visibility="collapsed",
         )
 
-        # ── Pending action: retrain forecast models ──────────────────────────────
         if _ss.pop("pending_forecast_retrain", False):
             if storage_is_configured():
                 with st.spinner("Retraining forecast models…"):
@@ -492,7 +484,6 @@ with st.sidebar:
             else:
                 st.warning("No storage configured — cannot retrain forecasts.")
 
-        # ── Pending action: reset entire dataset ─────────────────────────────────
         if _ss.pop("pending_reset", False):
             try:
                 if storage_is_configured():
@@ -504,7 +495,6 @@ with st.sidebar:
             except Exception as _rst_err:
                 st.error(f"Reset failed: {_rst_err}")
 
-        # ── Pending action: delete a date range ──────────────────────────────────
         if "pending_delete_range" in _ss:
             del_info = _ss.pop("pending_delete_range")
             try:
@@ -517,10 +507,6 @@ with st.sidebar:
             except Exception as _dr_err:
                 st.error(f"Delete failed: {_dr_err}")
 
-        # ── Data source & loading ────────────────────────────────────────────────
-        # CRITICAL: We do NOT load any data here.  We only read the partition
-        # index (a tiny JSON) to show summary stats.  Actual data is loaded
-        # lazily when the main panel renders, filtered to exactly what's needed.
         st.markdown("---")
         st.markdown("### Data Source")
 
@@ -550,7 +536,6 @@ with st.sidebar:
                 status_chip("Load error", level="error")
                 st.error(f"Could not read data index: {_load_err}")
 
-            # ── Data Management expander ─────────────────────────────────────────
             st.markdown("---")
             with st.expander("Data Management", expanded=not _data_exists):
 
@@ -572,7 +557,6 @@ with st.sidebar:
 
                 if authorized:
 
-                    # ── Refresh data ─────────────────────────────────────────────
                     st.markdown('<div class="refresh-btn">', unsafe_allow_html=True)
                     if st.button("↺  Refresh data", width="stretch", key="refresh_data_btn"):
                         st.cache_data.clear()
@@ -580,7 +564,6 @@ with st.sidebar:
                         st.rerun()
                     st.markdown('</div>', unsafe_allow_html=True)
 
-                    # ── Refresh Forecast (manual trigger only — issue #7) ────────
                     if st.button(
                         "⟳  Refresh Forecast", width="stretch",
                         key="refresh_forecast_btn",
@@ -589,7 +572,6 @@ with st.sidebar:
                         _ss["pending_forecast_retrain"] = True
                         st.rerun()
 
-                    # ── Current dataset summary ──────────────────────────────────
                     if _data_exists:
                         st.markdown("**Current dataset**")
                         st.caption(
@@ -599,7 +581,6 @@ with st.sidebar:
                             f"Partitions: **{_data_summary['partitions']}**"
                         )
 
-                        # ── Remove a date range ──────────────────────────────────
                         with st.expander("Remove a date range", expanded=False):
                             st.caption(
                                 "Permanently deletes all rows in the chosen window "
@@ -639,7 +620,6 @@ with st.sidebar:
 
                         st.markdown("---")
 
-                    # ── Upload new file(s) ───────────────────────────────────────
                     st.markdown("**Step 1 — Select file(s)**")
                     new_files = st.file_uploader(
                         "Upload files", type=["xlsx", "xls", "csv"],
@@ -663,7 +643,6 @@ with st.sidebar:
                             _ss["pending_upload"] = _ss.pop("staged_files")
                             st.rerun()
 
-                    # ── Danger zone ──────────────────────────────────────────────
                     st.markdown("---")
                     st.markdown("**Danger zone**")
                     if st.button(
@@ -673,7 +652,6 @@ with st.sidebar:
                         st.rerun()
 
         else:
-            # No remote storage — local file upload only
             st.markdown("**Data source:** Local file upload")
             st.caption(
                 "Configure GitHub in Streamlit secrets to enable persistent storage."
@@ -694,22 +672,14 @@ with st.sidebar:
                     _local_df, merge_log = deduplicate_and_merge(_parsed)
                     _data_exists = not _local_df.empty
 
-        # ── Date / Month selector ────────────────────────────────────────────────
         st.markdown("---")
 
-        # We need available dates for the date picker.  For remote storage,
-        # we derive them from the partition index metadata (min/max dates per
-        # partition) — NOT by loading all data.
-        # For local uploads, we derive them from the small in-memory df.
-
         if _data_exists:
-            # Get current resources for the selected map type
             _current_resources = tuple(sorted(_ss.resource_assignments[map_type]))
             _current_excludes = tuple(sorted(EXCLUDE_PROCS))
             _idx_hash = get_index_hash() if storage_is_configured() else ""
 
             if storage_is_configured():
-                # Derive date range from partition index (no data loading)
                 _min_d = date.fromisoformat(_data_summary["min_date"])
                 _max_d = date.fromisoformat(_data_summary["max_date"])
             else:
@@ -756,11 +726,8 @@ with st.sidebar:
                 )
                 selected_date = picked_date
 
-                # Determine if this is a forecast date
                 _is_forecast_date = selected_date > _max_d
 
-                # Prev/Next buttons — navigate by day across full range
-                # Use simple prev/next day since we don't load all dates
                 _nc1, _nc2 = st.columns(2)
                 with _nc1:
                     if st.button(
@@ -804,8 +771,7 @@ with st.sidebar:
                 )
                 st.caption(f"{_fmt_h(hour_range[0])} → {_fmt_h(hour_range[1])}")
 
-            else:  # Monthly view
-                # Build month list from partition index dates
+            else:
                 import itertools
                 _avail_months = []
                 d = date(_min_d.year, _min_d.month, 1)
@@ -835,7 +801,6 @@ with st.sidebar:
                 _sel_idx = _month_labels.index(_sel_month_label)
                 selected_year, selected_month = _avail_months[_sel_idx]
 
-            # ── Resource allocation ──────────────────────────────────────────────
             st.markdown("---")
             with st.expander("Resource Allocation", expanded=False):
                 st.markdown(
@@ -868,30 +833,24 @@ with st.sidebar:
 
 
     else:
-        # ── Pre-Analytics sidebar ────────────────────────────────────────────
         st.markdown("### Location")
-        _pa_location_default = _ss.get("pa_location", "Keck")
-        _pa_loc_idx = ["Keck", "Norris", "HC3"].index(_pa_location_default) if _pa_location_default in ["Keck", "Norris", "HC3"] else 0
+        # FIX (Bug 2): use the radio return value directly; do not write to or
+        # read from session_state for this value.
         pa_location = st.radio(
             "Location", ["Keck", "Norris", "HC3"],
-            index=_pa_loc_idx,
             horizontal=True, label_visibility="collapsed",
+            key="pa_location_radio",
         )
-        _ss["pa_location"] = pa_location
 
         st.markdown("### View")
-        _pa_view_default = _ss.get("pa_view", "Daily")
-        _pa_view_idx = 0 if _pa_view_default == "Daily" else 1
         pa_view = st.radio(
             "View", ["Daily", "Monthly"],
-            index=_pa_view_idx,
             horizontal=True, label_visibility="collapsed",
+            key="pa_view_radio",
         )
-        _ss["pa_view"] = pa_view
 
         st.markdown("---")
 
-        # Date range from partition index
         _pa_data_ok = False
         _pa_min_d = date.today() - timedelta(days=30)
         _pa_max_d = date.today()
@@ -930,7 +889,6 @@ with st.sidebar:
             _ss["pa_date"] = pa_date
             _pa_date_str = pa_date.isoformat()
         else:
-            # Monthly selector
             import calendar as _cal3
             st.markdown("### Month")
             _pa_avail_months = []
@@ -956,9 +914,9 @@ with st.sidebar:
             _pa_date_str = f"{_pa_sel_year:04d}-{_pa_sel_month:02d}"
             _ss["pa_date"] = _pa_date_str
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # PENDING UPLOAD PROCESSING
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 if _ss.get("pending_upload"):
     upload_list = _ss["pending_upload"]
     if isinstance(upload_list, dict):
@@ -967,11 +925,10 @@ if _ss.get("pending_upload"):
     _n_files = len(upload_list)
     _file_names = ", ".join(f['name'] for f in upload_list)
     render_header(map_type if "map_type" in dir() else "—",
-                  "Processing upload…", active_dashboard=_ss.get("active_dashboard","analytics"))
+                  "Processing upload…")
 
     with st.status(f"Processing {_n_files} file(s)…", expanded=True) as _upload_status:
         try:
-            # Step 1 — parse all uploaded files
             st.write(f"**Step 1 / 3** — Parsing {_n_files} file(s): {_file_names}")
             _parsed_frames = []
             for _uf_info in upload_list:
@@ -987,7 +944,6 @@ if _ss.get("pending_upload"):
                 new_df, _ = deduplicate_and_merge(_parsed_frames)
             st.write(f"Combined: **{len(new_df):,}** rows from {_n_files} file(s)")
 
-            # Step 2 — Clean procedure names
             st.write("**Step 2 / 3** — Cleaning and validating…")
             _up_bad = int(
                 new_df["Order Procedure"]
@@ -998,7 +954,6 @@ if _ss.get("pending_upload"):
                 new_df = clean_procedure_names(new_df)
                 st.write(f"Procedure names corrected ({_up_bad:,} row(s) fixed).")
 
-            # Step 3 — Ingest into partitioned storage (only affected partitions)
             st.write("**Step 3 / 3** — Ingesting into partitioned storage…")
             stats = ingest_new_data(new_df)
             st.write(
@@ -1006,8 +961,6 @@ if _ss.get("pending_upload"):
                 f"**{stats['rows_after']:,}** rows (+{stats['rows_added']:,} new)"
             )
 
-            # Clear caches so the next render picks up new data
-            # NO fresh_df — the next render will read only what it needs
             _ss.pop("pending_upload", None)
             st.cache_data.clear()
             _ss.pop("_partition_index", None)
@@ -1028,12 +981,12 @@ if _ss.get("pending_upload"):
     st.stop()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # MAIN PANEL — no data guard
-# ═════════════════════════════════════════════════════════════════════════════
-if _ss["active_dashboard"] == "analytics" and not _data_exists:
+# ════════════════════════════════════════════════════════════════════════════════
+if _active_dashboard == "analytics" and not _data_exists:
     render_header(map_type if "map_type" in dir() else "Lab Productivity",
-                  "—", active_dashboard="analytics")
+                  "—")
     st.info(
         "Welcome!  Upload a file or configure GitHub in your "
         "Streamlit secrets to start viewing lab productivity heatmaps."
@@ -1041,16 +994,10 @@ if _ss["active_dashboard"] == "analytics" and not _data_exists:
     st.stop()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════
 # MAIN PANEL — conditional on active dashboard
-# ═════════════════════════════════════════════════════════════════════════════
-if _ss["active_dashboard"] == "analytics":
-    # MAIN PANEL — LOAD DATA (filtered, lazy, partition-aware)
-    # ═════════════════════════════════════════════════════════════════════════════
-    # THIS is where data loading happens — only the data needed for the current
-    # view, filtered by date range, resources, and excluded procedures.
-
+# ════════════════════════════════════════════════════════════════════════════════
+if _active_dashboard == "analytics":
     if view_mode == "Daily":
         _is_forecast_view = selected_date > _max_d
 
@@ -1068,7 +1015,6 @@ if _ss["active_dashboard"] == "analytics":
             df_date_hour = None
             df_date      = pd.DataFrame()
         else:
-            # Load ONLY this date's data, filtered to the right resources
             if storage_is_configured():
                 filtered_df = load_filtered_data(
                     start_date=selected_date,
@@ -1085,7 +1031,6 @@ if _ss["active_dashboard"] == "analytics":
                     ~_local_df["Order Procedure"].isin(_EP)
                 ].copy()
 
-            # Apply time-basis swap
             if time_basis == "In-Lab":
                 _has_inlab = "inlab_date" in filtered_df.columns and filtered_df["inlab_date"].notna().any()
                 if _has_inlab:
@@ -1100,7 +1045,7 @@ if _ss["active_dashboard"] == "analytics":
 
         date_str = pd.Timestamp(selected_date).strftime("%B %d, %Y")
         _header_suffix = "  ·  Forecast" if _is_forecast_view else ""
-        render_header(map_type, date_str + _header_suffix, active_dashboard=_ss["active_dashboard"])
+        render_header(map_type, date_str + _header_suffix)
 
         if _is_forecast_view:
             st.markdown(
@@ -1131,7 +1076,6 @@ if _ss["active_dashboard"] == "analytics":
                 )
             st.stop()
 
-        # ── Metrics row ──────────────────────────────────────────────────────────
         _hour_cols  = [c for c in pivot.columns if c != "Total"]
         if not _hour_cols or pivot.empty:
             st.info("No completed procedures found for this site on the selected date.")
@@ -1168,7 +1112,6 @@ if _ss["active_dashboard"] == "analytics":
 
         st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
 
-        # ── Heatmap table ────────────────────────────────────────────────────────
         if _is_forecast_view:
             _heading_label = "Forecast Volume by Procedure &amp; Hour"
         elif time_basis == "In-Lab":
@@ -1207,7 +1150,6 @@ if _ss["active_dashboard"] == "analytics":
             st.dataframe(style_pivot(pivot, VMAX[map_type]),
                          width="stretch", height=_table_h)
 
-        # ── Downloads ────────────────────────────────────────────────────────────
         _file_prefix = map_type.replace(" ", "_")
         _date_tag    = pd.Timestamp(selected_date).strftime("%Y-%m-%d")
 
@@ -1244,13 +1186,9 @@ if _ss["active_dashboard"] == "analytics":
 
         st.markdown("---")
 
-        # ── Hourly bar chart ─────────────────────────────────────────────────────
         with st.expander("Hourly Volume", expanded=False):
             _hourly = pivot[_hour_cols].sum().reset_index()
             _hourly.columns = ["Hour", "Total Volume"]
-            # st.bar_chart sorts nominal x-axis alphabetically ("10AM, 10PM,
-            # 11AM, ..."), so render via altair with an explicit sort that
-            # matches _hour_cols (12AM → 11PM within the current hour range).
             _hourly_chart = (
                 alt.Chart(_hourly)
                 .mark_bar()
@@ -1262,7 +1200,6 @@ if _ss["active_dashboard"] == "analytics":
             )
             st.altair_chart(_hourly_chart, use_container_width=True)
 
-        # ── Cell drill-down (historical only) ────────────────────────────────────
         if not _is_forecast_view:
             with st.expander("Drill into a cell — individual completion events", expanded=False):
                 st.markdown(
@@ -1317,11 +1254,9 @@ if _ss["active_dashboard"] == "analytics":
                     )
 
     else:
-        # ── Monthly view ─────────────────────────────────────────────────────────
         month_name_str = f"{_cal.month_name[selected_month]} {selected_year}"
-        render_header(map_type, month_name_str, active_dashboard=_ss["active_dashboard"])
+        render_header(map_type, month_name_str)
 
-        # Load ONLY this month's data, filtered to the right resources
         _month_start = date(selected_year, selected_month, 1)
         _month_end = date(selected_year, selected_month,
                           _cal.monthrange(selected_year, selected_month)[1])
@@ -1341,7 +1276,6 @@ if _ss["active_dashboard"] == "analytics":
                 ~_local_df["Order Procedure"].isin(EXCLUDE_PROCS)
             ].copy()
 
-        # Apply time-basis swap
         if time_basis == "In-Lab":
             _has_inlab = "inlab_date" in filtered_df.columns and filtered_df["inlab_date"].notna().any()
             if _has_inlab:
@@ -1360,7 +1294,6 @@ if _ss["active_dashboard"] == "analytics":
             st.warning(f"No data found for **{map_type}** in **{month_name_str}**.")
             st.stop()
 
-        # ── Monthly metrics row ──────────────────────────────────────────────────
         _m_hour_cols  = [c for c in monthly_pivot.columns if c != "Total"]
         _m_total_vol  = int(round(monthly_pivot["Total"].sum() * n_days))
         _m_top_proc   = monthly_pivot["Total"].idxmax()
@@ -1390,7 +1323,6 @@ if _ss["active_dashboard"] == "analytics":
 
         st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
 
-        # ── Monthly heatmap ──────────────────────────────────────────────────────
         st.markdown(
             f'<div class="section-heading">'
             f'{map_type} - Monthly Average | {month_name_str} | N = {n_days} days'
@@ -1413,7 +1345,6 @@ if _ss["active_dashboard"] == "analytics":
             width="stretch", height=_m_table_h,
         )
 
-        # ── Monthly downloads ────────────────────────────────────────────────────
         _m_file_prefix = map_type.replace(" ", "_")
         _m_month_label = _cal.month_name[selected_month]
         _m_file_tag    = f"{_m_month_label}_{selected_year}"
@@ -1451,7 +1382,6 @@ if _ss["active_dashboard"] == "analytics":
 
         st.markdown("---")
 
-        # ── Weekday pattern expander ─────────────────────────────────────────────
         with st.expander("Hourly Volume by Day of Week", expanded=False):
             weekday_pivot, _wd_counts = build_weekday_pivot(
                 month_raw_df, selected_year, selected_month
@@ -1541,18 +1471,17 @@ else:
     # ═══════════════════════════════════════════════════════════════════════
     # PRE-ANALYTICS MAIN PANEL
     # ═══════════════════════════════════════════════════════════════════════
-    st.write("Pre-analytics block reached")
+    # FIX (Bug 2): pa_location and pa_view come from the sidebar radio return
+    # values directly (set earlier in the with st.sidebar: else branch).
+    # Do NOT re-read from session_state here — that would return the stale
+    # value from the previous render and require a double-click to take effect.
     try:
         import plotly.graph_objects as _pgo
         import numpy as _np
 
-        pa_location = _ss.get("pa_location", "Keck")
-        pa_view     = _ss.get("pa_view", "Daily")
-        _pa_ds      = _ss.get("pa_date", date.today().isoformat())
-        if isinstance(_pa_ds, date):
-            _pa_ds = _pa_ds.isoformat()
+        # _pa_date_str is set in the sidebar else branch; use it directly.
+        _pa_ds = _pa_date_str
 
-        # Build date label for the header
         if len(_pa_ds) == 7:
             import calendar as _calpa
             _pa_yr, _pa_mo = int(_pa_ds[:4]), int(_pa_ds[5:7])
@@ -1560,13 +1489,18 @@ else:
         else:
             _pa_date_label = pd.Timestamp(_pa_ds).strftime("%B %d, %Y")
 
-        render_header(f"Pre-Analytics · {pa_location}", _pa_date_label,
-                      active_dashboard="pre_analytics")
+        render_header(f"Pre-Analytics · {pa_location}", _pa_date_label)
 
-        # ── Load draw data ───────────────────────────────────────────────────────
-        _draw_df = load_draw_data(_pa_ds, pa_view)
+        _draw_df, _draw_debug = load_draw_data(_pa_ds, pa_view)
+        _staff_dict, _staff_raw = load_phlebotomy_staff()
 
-        # ── KPI strip (Step 3b) ──────────────────────────────────────────────────
+        with st.expander("Debug — name matching", expanded=True):
+            st.write("CSV Drawn Tech — first 5 raw values:", _staff_raw)
+            st.write("Staff lookup keys — first 10 (normalized):", _draw_debug.get("staff_keys", []))
+            st.write("Parquet Drawn Tech — first 10 raw values:", _draw_debug.get("raw_drawn_tech", []))
+            st.write("Rows before name-match filter:", _draw_debug.get("rows_before", 0))
+            st.write("Rows after name-match filter:", _draw_debug.get("rows_after", 0))
+
         _loc_df = _draw_df[_draw_df["location"] == pa_location] if not _draw_df.empty else _draw_df
         _pa_total_draws   = len(_loc_df)
         _pa_total_samples = int(_loc_df["samples"].sum()) if not _loc_df.empty else 0
@@ -1592,10 +1526,8 @@ else:
 
         st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
 
-        # Hour labels 0-23
         _PA_HOUR_LABELS = [HOUR_LABELS[h] for h in range(24)]
 
-        # Shift rendering order per location
         _PA_SHIFT_ORDER = {
             "Keck":   ["Early AM", "AM", "PM", "NS"],
             "Norris": ["AM", "PM", "NS"],
@@ -1603,24 +1535,23 @@ else:
         }
 
         def _render_pa_heatmap(draw_df, location, shift, view, heatmap_key):
-            """Render one Plotly heatmap for a location/shift, plus click detail panel."""
             _pivot = build_draw_pivot(draw_df, location, shift, view)
-            _techs = list(_pivot.index)
-            _vals  = _pivot.values.astype(float)
+            _techs = _pivot.index.tolist()
+            _z     = _pivot.values.tolist()
+            _x     = _PA_HOUR_LABELS
 
-            # Color scale max: 95th-pct of non-zero values
-            _nonzero = _vals[_vals > 0]
-            _vmax_pa = float(_np.percentile(_nonzero, 95)) if len(_nonzero) > 0 else 1.0
+            _flat  = [v for row in _z for v in row if v > 0]
+            _vmax_pa = float(_np.percentile(_flat, 95)) if _flat else 1.0
             _vmax_pa = max(_vmax_pa, 1.0)
 
             _text_vals = [
                 [str(int(round(v))) if v > 0 else "" for v in row]
-                for row in _vals
+                for row in _z
             ]
 
             _fig = _pgo.Figure(data=_pgo.Heatmap(
-                z=_vals,
-                x=_PA_HOUR_LABELS,
+                z=_z,
+                x=_x,
                 y=_techs,
                 text=_text_vals,
                 texttemplate="%{text}",
@@ -1648,7 +1579,6 @@ else:
                 key=heatmap_key,
             )
 
-            # ── Cell click → detail panel (Step 3d) ─────────────────────────────
             _cell_key = f"selected_cell_{heatmap_key}"
             if _sel_event and hasattr(_sel_event, "selection") and _sel_event.selection:
                 _pts = _sel_event.selection.get("points", [])
@@ -1698,7 +1628,6 @@ else:
                         f"{int(_detail_disp['Samples'].sum())} total sample(s)"
                     )
 
-        # ── Render heatmaps per shift (Step 3c) ──────────────────────────────────
         for _pa_shift in _PA_SHIFT_ORDER.get(pa_location, [None]):
             if pa_location != "HC3" and _pa_shift is not None:
                 st.subheader(f"{pa_location} — {_pa_shift}")
