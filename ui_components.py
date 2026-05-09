@@ -543,20 +543,83 @@ def metric_card(label: str, value: str, sub: str = "", accent: bool = False) -> 
     )
 
 
-def render_header(map_type: str, date_str: str) -> None:
-    """Render the branded Keck Medicine header banner."""
+def render_header(map_type: str, date_str: str, active_dashboard: str = "analytics") -> None:
+    """Render the branded Keck Medicine header banner with navigation buttons."""
+    _a_active  = (active_dashboard == "analytics")
+    _pa_active = (active_dashboard == "pre_analytics")
+    _a_bg  = "#F1AB1F"              if _a_active  else "rgba(241,171,31,0.25)"
+    _pa_bg = "#F1AB1F"              if _pa_active else "rgba(241,171,31,0.25)"
+    _a_fw  = "700"                  if _a_active  else "500"
+    _pa_fw = "700"                  if _pa_active else "500"
+
     st.markdown(f"""
-    <div class="keck-header">
+    <style>
+    [data-testid="stMarkdownContainer"]:has(.keck-nav-a-marker)
+        + [data-testid="stBaseButton-secondary"] > button,
+    [data-testid="stMarkdownContainer"]:has(.keck-nav-a-marker)
+        + [data-testid="stBaseButton-primary"] > button {{
+        background-color: {_a_bg} !important;
+        color: #3a1a00 !important;
+        font-weight: {_a_fw} !important;
+        border: 1px solid rgba(241,171,31,0.55) !important;
+        border-radius: 12px !important;
+        font-size: 0.64rem !important;
+        letter-spacing: 0.9px !important;
+        padding: 3px 10px !important;
+        min-height: 24px !important;
+        height: auto !important;
+        text-shadow: none !important;
+        text-transform: uppercase !important;
+        width: 100% !important;
+    }}
+    [data-testid="stMarkdownContainer"]:has(.keck-nav-pa-marker)
+        + [data-testid="stBaseButton-secondary"] > button,
+    [data-testid="stMarkdownContainer"]:has(.keck-nav-pa-marker)
+        + [data-testid="stBaseButton-primary"] > button {{
+        background-color: {_pa_bg} !important;
+        color: #3a1a00 !important;
+        font-weight: {_pa_fw} !important;
+        border: 1px solid rgba(241,171,31,0.55) !important;
+        border-radius: 12px !important;
+        font-size: 0.62rem !important;
+        letter-spacing: 0.8px !important;
+        padding: 3px 8px !important;
+        min-height: 24px !important;
+        height: auto !important;
+        text-shadow: none !important;
+        text-transform: uppercase !important;
+        width: 100% !important;
+    }}
+    [data-testid="stHorizontalBlock"]:has(.keck-nav-a-marker) {{
+        margin-top: -3.4rem !important;
+        margin-bottom: 1rem !important;
+        position: relative !important;
+        z-index: 10 !important;
+    }}
+    </style>
+    <div class="keck-header" style="padding-bottom:3.5rem;">
       <div>
         <h1>Productivity Dashboard</h1>
         <p class="subtitle">{map_type}</p>
       </div>
       <div style="text-align:right;">
-        <span class="keck-badge">Analytics</span>
         <span class="keck-date-label">{date_str}</span>
       </div>
     </div>
     """, unsafe_allow_html=True)
+
+    # Nav buttons – pulled up into header via negative-margin CSS above
+    _, _nc1, _nc2 = st.columns([4.0, 0.95, 1.25])
+    with _nc1:
+        st.markdown('<div class="keck-nav-a-marker"></div>', unsafe_allow_html=True)
+        if st.button("ANALYTICS", key="nav_analytics"):
+            st.session_state["active_dashboard"] = "analytics"
+            st.rerun()
+    with _nc2:
+        st.markdown('<div class="keck-nav-pa-marker"></div>', unsafe_allow_html=True)
+        if st.button("PRE-ANALYTICS", key="nav_pre_analytics"):
+            st.session_state["active_dashboard"] = "pre_analytics"
+            st.rerun()
 
 
 def status_chip(text: str, level: str = "ok") -> None:
