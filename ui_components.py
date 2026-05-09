@@ -524,11 +524,16 @@ def metric_card(label: str, value: str, sub: str = "", accent: bool = False) -> 
 def render_header(map_type: str, date_str: str) -> None:
     """Render the branded Keck Medicine header banner.
 
-    Layout: title block, two nav buttons (ANALYTICS / PRE-ANALYTICS),
-    date label — all in one horizontal row that gets dressed up as the
-    maroon banner via a :has() CSS selector keyed off the nav-button
-    wrapper class. Nav clicks update st.query_params so the URL stays
-    in sync, and app.py reads it back on every rerun.
+    Layout: ANALYTICS / PRE-ANALYTICS buttons on the left (where the
+    title used to be), with the gold subtitle directly underneath. The
+    date sits flush right. The whole row is dressed as the maroon banner
+    via a :has() selector that targets the outer horizontal block (the
+    one that contains both the subtitle marker and a nav button); the
+    inner block holding just the buttons is matched separately to set
+    the 12px button gap.
+
+    Nav clicks update st.query_params and call st.rerun(), so the URL
+    stays in sync without leaving the Streamlit session.
     """
     _active = st.session_state.get(
         "_nav_dashboard",
@@ -540,8 +545,9 @@ def render_header(map_type: str, date_str: str) -> None:
 
     st.markdown(f"""
     <style>
-      /* Maroon banner: any horizontal row containing our nav buttons. */
-      div[data-testid="stHorizontalBlock"]:has(.st-key-nav_analytics) {{
+      /* Outer maroon banner: the row that contains BOTH the subtitle
+         marker and a nav button (i.e. the wrapping st.columns block). */
+      div[data-testid="stHorizontalBlock"]:has(.keck-header-subtitle):has(.st-key-nav_analytics) {{
           background: linear-gradient(135deg, #6F1828 0%, #521322 100%);
           padding: 1.2rem 2rem !important;
           border-radius: 10px !important;
@@ -549,44 +555,42 @@ def render_header(map_type: str, date_str: str) -> None:
           align-items: center !important;
           box-shadow: 0 2px 8px rgba(111,24,40,0.25);
       }}
-      /* Pill shape & typography for both nav buttons. */
+      /* Inner button row: nav buttons but no subtitle marker. */
+      div[data-testid="stHorizontalBlock"]:has(.st-key-nav_analytics):not(:has(.keck-header-subtitle)) {{
+          gap: 12px !important;
+      }}
+      /* Squarish rounded nav buttons — match the banner's shape language. */
       html body .st-key-nav_analytics button,
       html body .st-key-nav_pre_analytics button {{
-          border-radius: 20px !important;
-          padding: 5px 16px !important;
-          font-size: 12px !important;
+          border-radius: 8px !important;
+          padding: 12px 32px !important;
+          font-size: 14px !important;
           font-weight: 700 !important;
-          letter-spacing: 0.08em !important;
+          letter-spacing: 0.06em !important;
           text-shadow: none !important;
           min-height: 0 !important;
           line-height: 1.4 !important;
       }}
-      /* Active pill — gold. */
+      /* Active button — gold. */
       html body .st-key-{_active_key} button {{
           background-color: #F1AB1F !important;
           color: #1a1a1a !important;
           border: none !important;
       }}
-      /* Inactive pill — dim. */
+      /* Inactive button — dim. */
       html body .st-key-{_other_key} button {{
-          background-color: rgba(241,171,31,0.20) !important;
-          color: rgba(255,255,255,0.5) !important;
+          background-color: rgba(241,171,31,0.15) !important;
+          color: rgba(255,255,255,0.6) !important;
           border: 1px solid rgba(241,171,31,0.4) !important;
       }}
-      /* Title + date typography inside the banner row. */
-      .keck-header-title h1 {{
-          color: #ffffff !important;
-          font-size: 1.85rem !important;
-          font-weight: 700 !important;
-          margin: 0 !important;
-          line-height: 1.15 !important;
-      }}
-      .keck-header-title .subtitle {{
+      /* Gold subtitle directly below the buttons. */
+      .keck-header-subtitle {{
           color: #EDC153 !important;
           font-size: 0.95rem !important;
           font-weight: 500 !important;
-          margin: 0.35rem 0 0 0 !important;
+          margin: 0.5rem 0 0 0 !important;
       }}
+      /* Date — top-right of the banner. */
       .keck-header-date {{
           color: rgba(255,255,255,0.85) !important;
           font-size: 0.95rem !important;
@@ -596,25 +600,24 @@ def render_header(map_type: str, date_str: str) -> None:
     </style>
     """, unsafe_allow_html=True)
 
-    cols = st.columns([0.50, 0.13, 0.17, 0.20], vertical_alignment="center")
+    cols = st.columns([0.65, 0.35], vertical_alignment="center")
     with cols[0]:
+        btn_cols = st.columns([0.30, 0.40, 0.30])
+        with btn_cols[0]:
+            if st.button("ANALYTICS", key="nav_analytics",
+                         use_container_width=True):
+                st.query_params["dashboard"] = "analytics"
+                st.rerun()
+        with btn_cols[1]:
+            if st.button("PRE-ANALYTICS", key="nav_pre_analytics",
+                         use_container_width=True):
+                st.query_params["dashboard"] = "pre_analytics"
+                st.rerun()
         st.markdown(
-            f"""<div class="keck-header-title">
-                  <h1>Productivity Dashboard</h1>
-                  <p class="subtitle">{map_type}</p>
-                </div>""",
+            f'<div class="keck-header-subtitle">{map_type}</div>',
             unsafe_allow_html=True,
         )
     with cols[1]:
-        if st.button("ANALYTICS", key="nav_analytics", use_container_width=True):
-            st.query_params["dashboard"] = "analytics"
-            st.rerun()
-    with cols[2]:
-        if st.button("PRE-ANALYTICS", key="nav_pre_analytics",
-                     use_container_width=True):
-            st.query_params["dashboard"] = "pre_analytics"
-            st.rerun()
-    with cols[3]:
         st.markdown(
             f'<div class="keck-header-date">{date_str}</div>',
             unsafe_allow_html=True,
