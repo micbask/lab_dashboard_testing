@@ -543,83 +543,43 @@ def metric_card(label: str, value: str, sub: str = "", accent: bool = False) -> 
     )
 
 
-def render_header(map_type: str, date_str: str, active_dashboard: str = "analytics") -> None:
-    """Render the branded Keck Medicine header banner with navigation buttons."""
-    _a_active  = (active_dashboard == "analytics")
-    _pa_active = (active_dashboard == "pre_analytics")
-    _a_bg  = "#F1AB1F"              if _a_active  else "rgba(241,171,31,0.25)"
-    _pa_bg = "#F1AB1F"              if _pa_active else "rgba(241,171,31,0.25)"
-    _a_fw  = "700"                  if _a_active  else "500"
-    _pa_fw = "700"                  if _pa_active else "500"
+def render_header(map_type: str, date_str: str) -> None:
+    """Render the branded Keck Medicine header banner with HTML anchor navigation."""
+    _active = st.query_params.get("dashboard", "analytics")
+
+    def _nav_style(is_active: bool) -> str:
+        if is_active:
+            return (
+                "display:inline-block; background:#F1AB1F; color:#1a1a1a; "
+                "font-weight:700; padding:7px 20px; border-radius:4px; "
+                "text-decoration:none; font-size:13px; margin-left:8px; "
+                "letter-spacing:0.05em;"
+            )
+        return (
+            "display:inline-block; background:rgba(241,171,31,0.20); "
+            "color:rgba(255,255,255,0.45); font-weight:400; padding:7px 20px; "
+            "border-radius:4px; text-decoration:none; font-size:13px; "
+            "margin-left:8px; letter-spacing:0.05em; "
+            "border:1px solid rgba(241,171,31,0.35);"
+        )
+
+    _nav_html = (
+        f'<a href="?dashboard=analytics" style="{_nav_style(_active == "analytics")}">ANALYTICS</a>'
+        f'<a href="?dashboard=pre_analytics" style="{_nav_style(_active == "pre_analytics")}">PRE-ANALYTICS</a>'
+    )
 
     st.markdown(f"""
-    <style>
-    [data-testid="stMarkdownContainer"]:has(.keck-nav-a-marker)
-        + [data-testid="stBaseButton-secondary"] > button,
-    [data-testid="stMarkdownContainer"]:has(.keck-nav-a-marker)
-        + [data-testid="stBaseButton-primary"] > button {{
-        background-color: {_a_bg} !important;
-        color: #3a1a00 !important;
-        font-weight: {_a_fw} !important;
-        border: 1px solid rgba(241,171,31,0.55) !important;
-        border-radius: 12px !important;
-        font-size: 0.64rem !important;
-        letter-spacing: 0.9px !important;
-        padding: 3px 10px !important;
-        min-height: 24px !important;
-        height: auto !important;
-        text-shadow: none !important;
-        text-transform: uppercase !important;
-        width: 100% !important;
-    }}
-    [data-testid="stMarkdownContainer"]:has(.keck-nav-pa-marker)
-        + [data-testid="stBaseButton-secondary"] > button,
-    [data-testid="stMarkdownContainer"]:has(.keck-nav-pa-marker)
-        + [data-testid="stBaseButton-primary"] > button {{
-        background-color: {_pa_bg} !important;
-        color: #3a1a00 !important;
-        font-weight: {_pa_fw} !important;
-        border: 1px solid rgba(241,171,31,0.55) !important;
-        border-radius: 12px !important;
-        font-size: 0.62rem !important;
-        letter-spacing: 0.8px !important;
-        padding: 3px 8px !important;
-        min-height: 24px !important;
-        height: auto !important;
-        text-shadow: none !important;
-        text-transform: uppercase !important;
-        width: 100% !important;
-    }}
-    [data-testid="stHorizontalBlock"]:has(.keck-nav-a-marker) {{
-        margin-top: -3.4rem !important;
-        margin-bottom: 1rem !important;
-        position: relative !important;
-        z-index: 10 !important;
-    }}
-    </style>
-    <div class="keck-header" style="padding-bottom:3.5rem;">
+    <div class="keck-header">
       <div>
         <h1>Productivity Dashboard</h1>
         <p class="subtitle">{map_type}</p>
       </div>
       <div style="text-align:right;">
         <span class="keck-date-label">{date_str}</span>
+        <div style="margin-top:8px;">{_nav_html}</div>
       </div>
     </div>
     """, unsafe_allow_html=True)
-
-    # Nav buttons – pulled up into header via negative-margin CSS above
-    _, _nc1, _nc2 = st.columns([4.0, 0.95, 1.25])
-    with _nc1:
-        st.markdown('<div class="keck-nav-a-marker"></div>', unsafe_allow_html=True)
-        if st.button("ANALYTICS", key="nav_analytics"):
-            st.session_state["active_dashboard"] = "analytics"
-            st.rerun()
-    with _nc2:
-        st.markdown('<div class="keck-nav-pa-marker"></div>', unsafe_allow_html=True)
-        if st.button("PRE-ANALYTICS", key="nav_pre_analytics"):
-            st.session_state["active_dashboard"] = "pre_analytics"
-            st.rerun()
 
 
 def status_chip(text: str, level: str = "ok") -> None:
