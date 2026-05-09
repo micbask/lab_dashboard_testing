@@ -258,15 +258,26 @@ def render(params: dict, ss) -> None:
             )
 
             _cell_key = f"selected_cell_{heatmap_key}"
+            _seen_sel_key = f"seen_sel_{heatmap_key}"
             _sel_event = st.plotly_chart(
                 _fig,
                 use_container_width=True,
+                on_select="rerun",
+                selection_mode="points",
                 key=heatmap_key,
                 config={"displayModeBar": False},
             )
 
+            _pts = []
             if _sel_event and hasattr(_sel_event, "selection") and _sel_event.selection:
                 _pts = _sel_event.selection.get("points", [])
+
+            # Streamlit replays the last selection on every rerun. Guard the
+            # toggle against unrelated reruns (sidebar changes etc.) by acting
+            # only when the selection signature actually changes.
+            _sig = tuple((p.get("y"), p.get("x")) for p in _pts)
+            if _sig != ss.get(_seen_sel_key):
+                ss[_seen_sel_key] = _sig
                 if _pts:
                     _pt = _pts[0]
                     _sel_tech   = _pt.get("y")
@@ -276,19 +287,20 @@ def render(params: dict, ss) -> None:
                     )
                     if _sel_tech is not None and _sel_hour is not None:
                         _current = ss.get(_cell_key)
-                        # Toggle: same cell clicked again → clear selection.
                         if (
                             _current
                             and _current["tech"] == _sel_tech
                             and _current["hour"] == _sel_hour
                         ):
-                            del ss[_cell_key]
+                            ss.pop(_cell_key, None)
                         else:
                             ss[_cell_key] = {
                                 "tech": _sel_tech,
                                 "hour": _sel_hour,
                                 "hlabel": _sel_hlabel,
                             }
+                else:
+                    ss.pop(_cell_key, None)
 
             _stored = ss.get(_cell_key)
             if _stored:
