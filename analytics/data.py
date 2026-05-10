@@ -108,3 +108,46 @@ def build_weekday_pivot(
     pivot.index = [f"{_day_names[wd]}  (×{wd_counts[wd]})" for wd in range(7)]
     pivot.columns = [HOUR_LABELS[c] if isinstance(c, int) else c for c in pivot.columns]
     return pivot, wd_counts
+
+
+def load_monthly_avg_for_comparison(
+    df: pd.DataFrame,
+    selected_date: date,
+    procedures: list,
+) -> pd.DataFrame:
+    """Build a procedure × hour-of-day average-per-day pivot for the month
+    that contains `selected_date`, restricted to the given procedures.
+
+    Used by the Daily heatmap's hover tooltip in analytics/dashboard.py to
+    compare today's count to the month's per-day average for the same
+    (procedure, hour) cell. The returned DataFrame is indexed by procedure
+    (subset of `procedures`) with integer hour columns 0..23. Each cell is
+    the month-summed count for that procedure/hour divided by the number
+    of distinct dates that have any data in the month.
+
+    Returns an empty DataFrame if `df` has no rows in the selected month or
+    no rows for any of the requested procedures.
+    """
+    if df is None or df.empty or not procedures:
+        return pd.DataFrame()
+
+    year, month = selected_date.year, selected_date.month
+    month_start = date(year, month, 1)
+    month_end   = date(year, month, _cal.monthrange(year, month)[1])
+
+    month_df = df[
+        (df["complete_date"] >= month_start) &
+        (df["complete_date"] <= month_end) &
+        (df["Order Procedure"].isin(procedures))
+    ]
+    if month_df.empty:
+        return pd.DataFrame()
+
+    pivot = (
+        month_df.pivot_table(
+            index="Order Procedure", columns="hour",
+            values="Complete Volume", aggfunc="sum", fill_value=0,
+        ).reindex(index=procedures, columns=list(range(24)), fill_value=0)
+    )
+    n_days = max(int(month_df["complete_date"].nunique()), 1)
+    return pivot / n_days
