@@ -380,108 +380,15 @@ html body section[data-testid="stSidebar"] [data-testid="stDateInput"] input:foc
 }
 
 /* ═══════════════════════════════════════════════════════
-   DATE PICKER POPUP  — dark theme to match the sidebar.
-   The calendar renders inside a baseweb portal/popover so the
-   selectors are global; only the dark theme is applied here.
+   DATE PICKER POPUP
+   ═══════════════════════════════════════════════════════
+   No custom CSS — the previous dark-theme override broke empty
+   placeholder cells (rendered as solid white blocks), hover state
+   (white circle clashing with the maroon selected day), and the
+   month / year select. Streamlit's default light calendar is clean
+   and professional; a light popup against the dark trigger input is
+   an acceptable trade-off vs. a half-broken dark theme.
    ═══════════════════════════════════════════════════════ */
-[data-baseweb="popover"] [data-baseweb="calendar"],
-[data-baseweb="calendar"] {
-    background: #1a1a1a !important;
-    background-color: #1a1a1a !important;
-    border: 1px solid rgba(241, 171, 31, 0.3) !important;
-    border-radius: 8px !important;
-    color: #ffffff !important;
-    padding: 8px !important;
-}
-[data-baseweb="popover"] [data-baseweb="calendar"] *,
-[data-baseweb="calendar"] * {
-    color: #ffffff !important;
-    background-color: transparent !important;
-}
-[data-baseweb="popover"] [data-baseweb="calendar"] button,
-[data-baseweb="calendar"] button {
-    color: #ffffff !important;
-    background-color: transparent !important;
-    border: none !important;
-}
-[data-baseweb="popover"] [data-baseweb="calendar"] button:hover,
-[data-baseweb="calendar"] button:hover {
-    background: rgba(241, 171, 31, 0.15) !important;
-    background-color: rgba(241, 171, 31, 0.15) !important;
-    color: #ffffff !important;
-}
-[data-baseweb="popover"] [data-baseweb="calendar"] svg,
-[data-baseweb="calendar"] svg {
-    fill: #ffffff !important;
-    color: #ffffff !important;
-}
-/* Month / year select inside the calendar header. */
-[data-baseweb="popover"] [data-baseweb="calendar"] [data-baseweb="select"],
-[data-baseweb="calendar"] [data-baseweb="select"] {
-    background: rgba(255, 255, 255, 0.05) !important;
-    background-color: rgba(255, 255, 255, 0.05) !important;
-    border: 1px solid rgba(255, 255, 255, 0.15) !important;
-    border-radius: 4px !important;
-}
-[data-baseweb="popover"] [data-baseweb="calendar"] [data-baseweb="select"] > div:first-child,
-[data-baseweb="popover"] [data-baseweb="calendar"] [data-baseweb="select"] [role="combobox"],
-[data-baseweb="popover"] [data-baseweb="calendar"] [data-baseweb="select"] [data-baseweb="input"],
-[data-baseweb="calendar"] [data-baseweb="select"] > div:first-child,
-[data-baseweb="calendar"] [data-baseweb="select"] [role="combobox"],
-[data-baseweb="calendar"] [data-baseweb="select"] [data-baseweb="input"] {
-    background: rgba(255, 255, 255, 0.05) !important;
-    background-color: rgba(255, 255, 255, 0.05) !important;
-    color: #ffffff !important;
-    border: none !important;
-    border-radius: 4px !important;
-}
-[data-baseweb="popover"] [data-baseweb="calendar"] [data-baseweb="select"] svg,
-[data-baseweb="calendar"] [data-baseweb="select"] svg {
-    fill: #ffffff !important;
-    color: #ffffff !important;
-}
-/* Weekday header letters above the date grid. */
-[data-baseweb="popover"] [data-baseweb="calendar"] [data-testid="calendar-day-label"],
-[data-baseweb="popover"] [data-baseweb="calendar"] abbr,
-[data-baseweb="calendar"] [data-testid="calendar-day-label"],
-[data-baseweb="calendar"] abbr {
-    color: rgba(255, 255, 255, 0.55) !important;
-    background-color: transparent !important;
-    text-decoration: none !important;
-}
-[data-baseweb="popover"] [data-baseweb="calendar"] [role="gridcell"] button,
-[data-baseweb="popover"] [data-baseweb="calendar"] [data-testid="calendar-day"],
-[data-baseweb="calendar"] [role="gridcell"] button,
-[data-baseweb="calendar"] [data-testid="calendar-day"] {
-    color: #ffffff !important;
-    background-color: transparent !important;
-}
-/* Selected date — USC cardinal (#790A26). */
-[data-baseweb="popover"] [data-baseweb="calendar"] [aria-selected="true"] button,
-[data-baseweb="popover"] [data-baseweb="calendar"] [data-selected="true"],
-[data-baseweb="popover"] [data-baseweb="calendar"] [aria-selected="true"],
-[data-baseweb="calendar"] [aria-selected="true"] button,
-[data-baseweb="calendar"] [data-selected="true"] {
-    background: #790A26 !important;
-    background-color: #790A26 !important;
-    color: #ffffff !important;
-    border-radius: 4px !important;
-}
-[data-baseweb="popover"] [data-baseweb="calendar"] [aria-selected="true"] *,
-[data-baseweb="calendar"] [aria-selected="true"] * {
-    background-color: transparent !important;
-    color: #ffffff !important;
-}
-/* Today (unselected) — gold outline ring. */
-[data-baseweb="popover"] [data-baseweb="calendar"] [data-today="true"] button,
-[data-baseweb="calendar"] [data-today="true"] button {
-    border: 1px solid rgba(241, 171, 31, 0.6) !important;
-    border-radius: 4px !important;
-}
-[data-baseweb="popover"] [data-baseweb="calendar"] [aria-disabled="true"] button,
-[data-baseweb="calendar"] [aria-disabled="true"] button {
-    color: rgba(255, 255, 255, 0.25) !important;
-}
 
 /* ═══════════════════════════════════════════════════════
    SIDEBAR SLIDER  — hide the redundant 0/23 min/max tick-bar
