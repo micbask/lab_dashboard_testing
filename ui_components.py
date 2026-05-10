@@ -74,13 +74,32 @@ section.main {
     border-right: 1px solid #2e2e2e !important;
 }
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
-    color: #EDC153 !important;
-    font-size: 0.72rem !important;
-    font-weight: 700 !important;
+    color: rgba(241, 171, 31, 0.75) !important;
+    font-size: 11px !important;
+    font-weight: 500 !important;
     text-transform: uppercase !important;
     letter-spacing: 0.08em !important;
-    margin-bottom: 0.25rem !important;
-    margin-top: 0.1rem !important;
+    margin-bottom: 6px !important;
+    margin-top: 24px !important;
+}
+/* The first sidebar section label has no top margin so it sits flush
+   under the sidebar's own top padding rather than picking up a double
+   gap. Targets the first stElementContainer in the sidebar's vertical
+   block — Streamlit puts each sidebar widget in its own container and
+   the section labels are always the first markdown blocks. */
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"]
+    > [data-testid="stElementContainer"]:first-child
+    [data-testid="stMarkdownContainer"] h3 {
+    margin-top: 0 !important;
+}
+/* Small muted caption used for date ranges + hour-range readouts under
+   their respective inputs. 10 px / 40 % white, no extra spacing. */
+[data-testid="stSidebar"] .sidebar-meta-caption {
+    font-size: 10px !important;
+    color: rgba(255, 255, 255, 0.4) !important;
+    margin-top: 6px !important;
+    line-height: 1.3 !important;
+    font-family: 'Inter', system-ui, sans-serif !important;
 }
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
 [data-testid="stSidebar"] label {
@@ -195,8 +214,10 @@ html body [data-testid="stBaseButton-primary"]:disabled {
 /* ═══════════════════════════════════════════════════════
    DATE INPUT
    ═══════════════════════════════════════════════════════ */
-[data-testid="stDateInput"] input,
-[data-testid="stSidebar"] [data-testid="stDateInput"] input {
+/* Default styling for date inputs OUTSIDE the sidebar (admin date-
+   range editor lives inside its own expander where this still
+   applies). */
+[data-testid="stDateInput"] input {
     background-color: #6F1828 !important;
     color: #ffffff !important;
     border: 1px solid #57121f !important;
@@ -205,6 +226,21 @@ html body [data-testid="stBaseButton-primary"]:disabled {
 [data-testid="stDateInput"] > div > div > div > svg {
     fill: #ffffff !important;
     color: #ffffff !important;
+}
+/* Sidebar date inputs get a much subtler treatment — no maroon fill,
+   subtle outline, gold focus ring. */
+html body [data-testid="stSidebar"] [data-testid="stDateInput"] input {
+    background: rgba(255, 255, 255, 0.05) !important;
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    color: #ffffff !important;
+    border: 1px solid rgba(255, 255, 255, 0.15) !important;
+    border-radius: 6px !important;
+    padding: 8px 12px !important;
+}
+html body [data-testid="stSidebar"] [data-testid="stDateInput"] input:focus {
+    border-color: #F1AB1F !important;
+    outline: none !important;
+    box-shadow: 0 0 0 1px rgba(241, 171, 31, 0.35) !important;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -270,6 +306,60 @@ html body [data-testid="stBaseButton-primary"]:disabled {
 }
 [data-baseweb="calendar"] [aria-disabled="true"] button {
     color: #cccccc !important;
+}
+
+/* ═══════════════════════════════════════════════════════
+   SIDEBAR SLIDER  — hide the redundant 0/23 min/max tick-bar
+   labels above the track so the only readout is the
+   .sidebar-meta-caption beneath ("12:00 AM → 11:00 PM").
+   ═══════════════════════════════════════════════════════ */
+[data-testid="stSidebar"] [data-testid="stSliderTickBar"],
+[data-testid="stSidebar"] [data-testid="stSliderTickBarMin"],
+[data-testid="stSidebar"] [data-testid="stSliderTickBarMax"],
+[data-testid="stSidebar"] [data-testid="stTickBar"],
+[data-testid="stSidebar"] [data-testid="stTickBarMin"],
+[data-testid="stSidebar"] [data-testid="stTickBarMax"] {
+    display: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════
+   PREV / NEXT DATE NAV BUTTONS
+   ═══════════════════════════════════════════════════════
+   Subtle outlined buttons (not primary CTAs). Targets the
+   keyed st.button wrappers analytics/dashboard.py emits as
+   nav_prev_date / nav_next_date — the .st-key-* class lives
+   on the widget-wrapping container.  Specificity must beat
+   the global `html body .stButton > button` rule and the
+   sidebar-button override directly above. */
+html body [data-testid="stSidebar"] .st-key-nav_prev_date button,
+html body [data-testid="stSidebar"] .st-key-nav_next_date button,
+html body [data-testid="stSidebar"] .st-key-nav_prev_date .stButton > button,
+html body [data-testid="stSidebar"] .st-key-nav_next_date .stButton > button {
+    background: transparent !important;
+    background-color: transparent !important;
+    color: #ffffff !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    padding: 6px 14px !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+    min-height: 0 !important;
+}
+html body [data-testid="stSidebar"] .st-key-nav_prev_date button:hover,
+html body [data-testid="stSidebar"] .st-key-nav_next_date button:hover {
+    background: rgba(255, 255, 255, 0.05) !important;
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    border-color: rgba(255, 255, 255, 0.18) !important;
+}
+html body [data-testid="stSidebar"] .st-key-nav_prev_date button:disabled,
+html body [data-testid="stSidebar"] .st-key-nav_next_date button:disabled {
+    background: transparent !important;
+    background-color: transparent !important;
+    border-color: rgba(255, 255, 255, 0.06) !important;
+    color: rgba(255, 255, 255, 0.3) !important;
+    opacity: 0.6 !important;
 }
 
 /* ═══════════════════════════════════════════════════════
