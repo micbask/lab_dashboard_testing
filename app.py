@@ -68,6 +68,30 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# Streamlit Community Cloud appends "· Streamlit" to the document title
+# after every rerun. Pin the title to "Lab Productivity" on script load
+# and watch for any subsequent mutation so the suffix never sticks.
+st.markdown(
+    """
+    <script>
+    (function() {
+        const desiredTitle = "Lab Productivity";
+        document.title = desiredTitle;
+        const observer = new MutationObserver(function() {
+            if (document.title !== desiredTitle) {
+                document.title = desiredTitle;
+            }
+        });
+        const titleEl = document.querySelector('title');
+        if (titleEl) {
+            observer.observe(titleEl, { childList: true });
+        }
+    })();
+    </script>
+    """,
+    unsafe_allow_html=True,
+)
+
 inject_css()
 setup_mpl_font()
 
@@ -205,10 +229,14 @@ else:
 
 # ═════════════════════════════════════════════════════════════════════════════
 # FOOTER  (rendered on both dashboards)
+# Sits in normal document flow as the last block. The dashboard render()
+# functions now `return` (rather than `st.stop()`) on no-data / empty
+# states so this footer is reached on every view, including the TAT
+# view, the "no data" welcome state, and the pre-analytics page.
 # ═════════════════════════════════════════════════════════════════════════════
 st.markdown(
     f'<div style="text-align: center; font-size: 12px; '
-    f'color: rgba(255,255,255,0.35); padding: 24px 0 12px 0;">'
+    f'color: rgba(0, 0, 0, 0.4); padding: 32px 0 16px 0;">'
     f'© {datetime.now().year} Laboratory Productivity Dashboard. '
     f'All rights reserved.'
     f'</div>',
