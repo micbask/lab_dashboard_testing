@@ -1,41 +1,13 @@
 import calendar as _cal
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
-import streamlit_shadcn_ui as ui
 
 from config import HOUR_LABELS
 from storage import storage_is_configured, get_data_summary, ensure_partitioned_storage
 from ui_components import metric_card, render_header
 from pre_analytics.data import load_phlebotomy_staff, load_draw_data, build_draw_pivot
-
-
-def _coerce_to_date(val):
-    """Coerce a shadcn date_picker return value to a datetime.date.
-
-    The library passes its `value` arg straight through to JSON
-    marshalling with no type coercion of its own, so we feed it an ISO
-    string (the only JSON-safe option) and have to handle whatever the
-    JS side sends back: a datetime, a date, an ISO string (with or
-    without time / timezone), or None.
-    """
-    if val is None:
-        return None
-    if isinstance(val, datetime):
-        return val.date()
-    if isinstance(val, date):
-        return val
-    if isinstance(val, str):
-        try:
-            return datetime.fromisoformat(val.replace("Z", "+00:00")).date()
-        except (ValueError, TypeError):
-            pass
-        try:
-            return date.fromisoformat(val[:10])
-        except (ValueError, TypeError):
-            pass
-    return None
 
 
 def render_sidebar(ss) -> dict:
@@ -100,36 +72,19 @@ def render_sidebar(ss) -> dict:
             ):
                 _pa_date_default = _pa_max_d
 
-            # shadcn date picker — light-themed by design; we accept the
-            # library's native styling.
-            #
-            # The library passes `default_value` straight through to
-            # JSON marshalling with no type coercion (verified by
-            # reading the v0.1.19 source). date / datetime aren't JSON-
-            # serializable so they blow up the marshaller; we send an
-            # ISO date string and parse the return via _coerce_to_date.
-            #
-            # The library's init_session writes the seed value to a
-            # session_state slot only once per session. A stale date
-            # object stored under the previous "pa_date_picker" key
-            # from a prior deploy would otherwise keep getting re-read
-            # and re-marshalled. Use a fresh key prefix
-            # ("pa_date_dp_iso") so the picker initialises clean.
-            _picked = ui.date_picker(
-                key="pa_date_dp_iso",
-                mode="single",
-                label="",
-                default_value=_pa_date_default.isoformat(),
+            # Native st.date_input — built-in min/max enforcement,
+            # single-click selection, month / year dropdowns at the top
+            # of the calendar popup. Trigger styling (dark fill, white
+            # text) is in ui_components CSS; popup uses Streamlit's
+            # default light theme.
+            pa_date = st.date_input(
+                "Select date",
+                value=_pa_date_default,
+                min_value=_pa_min_d,
+                max_value=_pa_max_d,
+                label_visibility="collapsed",
+                key="pa_date_picker",
             )
-            _picked_d = _coerce_to_date(_picked)
-            if (
-                _picked_d is not None
-                and _pa_min_d <= _picked_d <= _pa_max_d
-            ):
-                pa_date = _picked_d
-            else:
-                pa_date = _pa_date_default
-
             ss["pa_date"] = pa_date
             _pa_date_str = pa_date.isoformat()
             # Date-range metadata caption — sits BELOW the date input,
