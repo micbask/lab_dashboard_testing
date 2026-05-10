@@ -522,18 +522,16 @@ def metric_card(label: str, value: str, sub: str = "", accent: bool = False) -> 
 
 
 def render_header(map_type: str, date_str: str) -> None:
-    """Render the Keck Medicine banner with a st.button-based tab bar.
+    """Render the Keck Medicine banner.
 
-    Layout: two st.button widgets wrapped in a .nav-tab-container row
-    on the left of the maroon banner (vertically centered, gold subtitle
-    underneath); date label flush right. Clicks update st.query_params
-    and call st.rerun(), so navigation stays in-session — no anchor
-    tags, no new-tab opens.
+    Layout: title block on the left (h1 "Laboratory Productivity
+    Dashboard" + gold subtitle, matching main_test_2 typography);
+    a small st.button-based segmented-control tab bar pinned to the
+    top-right with the date below it. Banner is slimmer than the
+    earlier version (tighter vertical padding + smaller buttons).
 
-    The maroon banner and the pill container are both styled via :has()
-    selectors on the surrounding stHorizontalBlocks (the markdown
-    wrappers around the columns don't actually re-parent widgets in
-    Streamlit's DOM, so we use :has() as the reliable style target).
+    Nav clicks write st.query_params and call st.rerun(), so the URL
+    and active dashboard stay in sync without any anchor-tag reload.
     """
     _active = st.session_state.get(
         "_nav_dashboard",
@@ -543,61 +541,60 @@ def render_header(map_type: str, date_str: str) -> None:
 
     st.markdown(f"""
     <style>
-      /* Outer maroon banner: row containing both subtitle marker and a nav button. */
-      div[data-testid="stHorizontalBlock"]:has(.keck-header-subtitle):has(.st-key-nav_analytics) {{
+      /* Outer maroon banner: row containing the title block AND a nav button. */
+      div[data-testid="stHorizontalBlock"]:has(.keck-header-title):has(.st-key-nav_analytics) {{
           background: linear-gradient(135deg, #6F1828 0%, #521322 100%);
-          padding: 1.2rem 2rem !important;
+          padding: 0.85rem 1.8rem !important;
           border-radius: 10px !important;
           margin-bottom: 1.4rem !important;
-          align-items: center !important;
           box-shadow: 0 2px 8px rgba(111,24,40,0.25);
       }}
-      /* Unified pill container for the two nav buttons. The .nav-tab-container
-         class is included per spec; the inner stHorizontalBlock that holds the
-         buttons is the actual style target since markdown wrappers don't span
-         widgets in Streamlit's DOM. */
+      /* Inner pill container — nav buttons row, pinned to the right edge of
+         its column so the tab bar lives in the top-right corner. */
       .nav-tab-container,
-      div[data-testid="stHorizontalBlock"]:has(.st-key-nav_analytics):not(:has(.keck-header-subtitle)) {{
+      div[data-testid="stHorizontalBlock"]:has(.st-key-nav_analytics):not(:has(.keck-header-title)) {{
+          display: flex !important;
+          width: fit-content !important;
+          max-width: fit-content !important;
+          margin-left: auto !important;
           background: rgba(0,0,0,0.25) !important;
           border-radius: 8px !important;
-          padding: 4px !important;
+          padding: 3px !important;
           gap: 2px !important;
-          display: inline-flex !important;
-          max-width: fit-content !important;
       }}
-      /* Columns inside the pill should hug their button instead of growing. */
-      div[data-testid="stHorizontalBlock"]:has(.st-key-nav_analytics):not(:has(.keck-header-subtitle)) > div {{
+      /* Columns inside the pill collapse to button width. */
+      div[data-testid="stHorizontalBlock"]:has(.st-key-nav_analytics):not(:has(.keck-header-title)) > div {{
           flex: 0 0 auto !important;
           width: auto !important;
           min-width: 0 !important;
       }}
-      /* Both nav buttons — base (inactive) state. */
+      /* Nav buttons — small, bolded segmented-control tabs. */
       html body .st-key-nav_analytics button,
       html body .st-key-nav_pre_analytics button {{
           background: transparent !important;
           color: rgba(255,255,255,0.6) !important;
           border: none !important;
-          border-radius: 6px !important;
-          padding: 8px 28px !important;
-          font-weight: 600 !important;
-          font-size: 13px !important;
+          border-radius: 5px !important;
+          padding: 4px 14px !important;
+          font-weight: 700 !important;
+          font-size: 11px !important;
           letter-spacing: 0.06em !important;
           box-shadow: none !important;
-          min-width: 130px !important;
+          min-width: 75px !important;
           min-height: 0 !important;
           line-height: 1.4 !important;
           text-shadow: none !important;
           outline: none !important;
           text-decoration: none !important;
       }}
-      /* Subtle hover on inactive only — no dramatic color change. */
+      /* Subtle hover on inactive only. */
       html body .st-key-nav_analytics button:hover,
       html body .st-key-nav_pre_analytics button:hover {{
           background: rgba(255,255,255,0.10) !important;
           color: rgba(255,255,255,0.85) !important;
           border: none !important;
       }}
-      /* Kill focus ring / outline on click. */
+      /* Kill focus ring. */
       html body .st-key-nav_analytics button:focus,
       html body .st-key-nav_analytics button:focus-visible,
       html body .st-key-nav_pre_analytics button:focus,
@@ -605,7 +602,7 @@ def render_header(map_type: str, date_str: str) -> None:
           outline: none !important;
           box-shadow: none !important;
       }}
-      /* Active button override — gold, bold, white text. */
+      /* Active button — gold, white text. */
       html body .st-key-{_active_key} button,
       html body .st-key-{_active_key} button:hover,
       html body .st-key-{_active_key} button:focus {{
@@ -614,25 +611,43 @@ def render_header(map_type: str, date_str: str) -> None:
           font-weight: 700 !important;
           border: none !important;
       }}
-      /* Subtitle (gold) below the tab bar. */
-      .keck-header-subtitle {{
-          color: #EDC153 !important;
-          font-size: 0.95rem !important;
-          font-weight: 500 !important;
-          margin: 0.5rem 0 0 0 !important;
+      /* Title typography — matches main_test_2 production banner. */
+      .keck-header-title h1 {{
+          color: #ffffff !important;
+          font-size: 1.5rem !important;
+          font-weight: 700 !important;
+          letter-spacing: 0.2px !important;
+          margin: 0 !important;
+          line-height: 1.15 !important;
       }}
-      /* Date — top-right of the banner. */
+      .keck-header-title .subtitle {{
+          color: #EDC153 !important;
+          font-size: 0.87rem !important;
+          margin: 0.25rem 0 0 !important;
+          opacity: 0.95 !important;
+          font-weight: 500 !important;
+      }}
+      /* Date — sits flush right just below the tab bar. */
       .keck-header-date {{
           color: rgba(255,255,255,0.85) !important;
-          font-size: 0.95rem !important;
+          font-size: 0.85rem !important;
           font-weight: 500 !important;
           text-align: right !important;
+          margin-top: 0.4rem !important;
       }}
     </style>
     """, unsafe_allow_html=True)
 
-    cols = st.columns([0.65, 0.35], vertical_alignment="center")
+    cols = st.columns([0.72, 0.28], vertical_alignment="center")
     with cols[0]:
+        st.markdown(
+            f'''<div class="keck-header-title">
+                  <h1>Laboratory Productivity Dashboard</h1>
+                  <p class="subtitle">{map_type}</p>
+                </div>''',
+            unsafe_allow_html=True,
+        )
+    with cols[1]:
         st.markdown('<div class="nav-tab-container">', unsafe_allow_html=True)
         nav_cols = st.columns([1, 1])
         with nav_cols[0]:
@@ -646,11 +661,6 @@ def render_header(map_type: str, date_str: str) -> None:
                 st.query_params["dashboard"] = "pre_analytics"
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown(
-            f'<div class="keck-header-subtitle">{map_type}</div>',
-            unsafe_allow_html=True,
-        )
-    with cols[1]:
         st.markdown(
             f'<div class="keck-header-date">{date_str}</div>',
             unsafe_allow_html=True,
