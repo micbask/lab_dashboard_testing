@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit_shadcn_ui as ui
 
 from config import (
     DEFAULT_RESOURCES, VMAX, ALL_RESOURCES, MAP_TYPES,
@@ -296,7 +297,15 @@ def render_sidebar(ss) -> dict:
             map_type = BENCH_LABEL_TO_VALUE[_bench_short]
 
         if ss.last_map_type != map_type:
+            # Reset both the old st.date_input state (in case it lingers
+            # from a previous deploy) and the new shadcn picker state.
             ss.pop("date_picker", None)
+            ss.pop("analytics_date", None)
+            # Bump the shadcn picker's key version so it remounts with
+            # the new default on the next render.
+            ss["_analytics_date_version"] = (
+                ss.get("_analytics_date_version", 0) + 1
+            )
             ss.last_map_type = map_type
 
         # ── 2. Time Basis  (keyed; widget owns session_state) ──
@@ -419,31 +428,65 @@ def render_sidebar(ss) -> dict:
                         ]
                         _fc_max_d = _fc_end_d
 
+                # Canonical selected date — stored in session state under
+                # "analytics_date". The shadcn picker remembers its own
+                # internal state once mounted, so when Prev/Next mutates
+                # the date externally we bump "_analytics_date_version" to
+                # remount the picker with the new default. User picks via
+                # the shadcn UI flow directly into ss["analytics_date"]
+                # without any version bump (the component already shows
+                # the picked date).
                 if "_pending_date" in ss:
                     _pending = ss.pop("_pending_date")
                     if _min_d <= _pending <= _fc_max_d:
-                        ss["date_picker"] = _pending
+                        ss["analytics_date"] = _pending
+                        ss["_analytics_date_version"] = (
+                            ss.get("_analytics_date_version", 0) + 1
+                        )
 
                 if (
-                    "date_picker" not in ss
-                    or ss["date_picker"] < _min_d
-                    or ss["date_picker"] > _fc_max_d
+                    "analytics_date" not in ss
+                    or not isinstance(ss["analytics_date"], date)
+                    or ss["analytics_date"] < _min_d
+                    or ss["analytics_date"] > _fc_max_d
                 ):
-                    ss["date_picker"] = _max_d
+                    ss["analytics_date"] = _max_d
+                    ss["_analytics_date_version"] = (
+                        ss.get("_analytics_date_version", 0) + 1
+                    )
 
                 st.markdown(
                     '<div class="sidebar-section-label">DATE</div>',
                     unsafe_allow_html=True,
                 )
 
-                picked_date = st.date_input(
-                    "Select date",
-                    min_value=_min_d,
-                    max_value=_fc_max_d,
-                    label_visibility="collapsed",
-                    key="date_picker",
+                # shadcn date picker — light-themed by design; we accept
+                # the library's native styling per the integration spec.
+                # Returns datetime.datetime (or None); convert to date so
+                # the rest of the pipeline (which expects date objects)
+                # keeps working unchanged.
+                _picker_key = (
+                    f"analytics_date_picker_v"
+                    f"{ss.get('_analytics_date_version', 0)}"
                 )
-                selected_date = picked_date
+                _picked = ui.date_picker(
+                    key=_picker_key,
+                    mode="single",
+                    label="",
+                    default_value=ss["analytics_date"],
+                )
+                if _picked is not None:
+                    _picked_d = (
+                        _picked.date() if hasattr(_picked, "date")
+                        else _picked
+                    )
+                    if (
+                        isinstance(_picked_d, date)
+                        and _min_d <= _picked_d <= _fc_max_d
+                    ):
+                        ss["analytics_date"] = _picked_d
+
+                selected_date = ss["analytics_date"]
                 _is_forecast_date = selected_date > _max_d
 
                 # Date-range metadata caption — sits BELOW the date input,
