@@ -551,11 +551,15 @@ def render_header(map_type: str, date_str: str) -> None:
 
     st.markdown(f"""
     <style>
-      /* ── Outer maroon banner ── positioning context for the date. */
+      /* ── Outer maroon banner ── positioning context for the date.
+            Vertical padding bumped from 0.85rem → 1.2rem to add a
+            visible gap between the nav pill (pinned to the top via
+            normal flow) and the date (pinned 0.85rem from the bottom
+            via absolute positioning). */
       {_banner_sel} {{
           position: relative !important;
           background: linear-gradient(135deg, #6F1828 0%, #521322 100%);
-          padding: 0.85rem 1.8rem !important;
+          padding: 1.2rem 1.8rem !important;
           border-radius: 10px !important;
           margin-bottom: 1.4rem !important;
           box-shadow: 0 2px 8px rgba(111,24,40,0.25);
