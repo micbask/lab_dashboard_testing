@@ -541,17 +541,18 @@ def render_header(map_type: str, date_str: str) -> None:
 
     st.markdown(f"""
     <style>
-      /* Outer maroon banner: row containing the title block AND a nav button. */
+      /* Outer maroon banner — also the positioning context for the date,
+         which is absolutely positioned at the bottom-right corner. */
       div[data-testid="stHorizontalBlock"]:has(.keck-header-title):has(.st-key-nav_analytics) {{
+          position: relative !important;
           background: linear-gradient(135deg, #6F1828 0%, #521322 100%);
           padding: 0.85rem 1.8rem !important;
           border-radius: 10px !important;
           margin-bottom: 1.4rem !important;
           box-shadow: 0 2px 8px rgba(111,24,40,0.25);
       }}
-      /* Inner pill container — nav buttons row, pinned to the right edge of
-         its column so the tab bar lives in the top-right corner. */
-      .nav-tab-container,
+      /* Inner pill container — nav buttons row, pinned to the right edge
+         of its column so the tab bar lives in the top-right corner. */
       div[data-testid="stHorizontalBlock"]:has(.st-key-nav_analytics):not(:has(.keck-header-title)) {{
           display: flex !important;
           width: fit-content !important;
@@ -568,7 +569,10 @@ def render_header(map_type: str, date_str: str) -> None:
           width: auto !important;
           min-width: 0 !important;
       }}
-      /* Nav buttons — small, bolded segmented-control tabs. */
+      /* Nav buttons — extra-specific selector beats the global maroon
+         button rule (same specificity but later in the cascade isn't
+         enough when Streamlit re-applies inline styles). */
+      html body div[data-testid="stHorizontalBlock"]:has(.st-key-nav_analytics):not(:has(.keck-header-title)) .stButton > button,
       html body .st-key-nav_analytics button,
       html body .st-key-nav_pre_analytics button {{
           background: transparent !important;
@@ -582,6 +586,7 @@ def render_header(map_type: str, date_str: str) -> None:
           box-shadow: none !important;
           min-width: 90px !important;
           min-height: 0 !important;
+          height: auto !important;
           line-height: 1.4 !important;
           text-shadow: none !important;
           outline: none !important;
@@ -627,16 +632,20 @@ def render_header(map_type: str, date_str: str) -> None:
           opacity: 0.95 !important;
           font-weight: 500 !important;
       }}
-      /* Date — second row on the right, aligned horizontally with the
-         gold subtitle on the left. The small margin-top compensates
-         for the pill being a touch taller than the title h1 so the
-         baselines of the date and subtitle land on the same line. */
+      /* Date — absolutely positioned at the banner's bottom-right.
+         With banner padding 0.85rem, this lands the date on the same
+         horizontal line as the gold subtitle in the left column,
+         independent of Streamlit's vertical-block gap behavior. */
       .keck-header-date {{
+          position: absolute !important;
+          right: 1.8rem !important;
+          bottom: 0.85rem !important;
           color: rgba(255,255,255,0.85) !important;
           font-size: 0.87rem !important;
           font-weight: 500 !important;
           text-align: right !important;
-          margin-top: 0.1rem !important;
+          margin: 0 !important;
+          line-height: 1 !important;
       }}
     </style>
     """, unsafe_allow_html=True)
@@ -651,7 +660,6 @@ def render_header(map_type: str, date_str: str) -> None:
             unsafe_allow_html=True,
         )
     with cols[1]:
-        st.markdown('<div class="nav-tab-container">', unsafe_allow_html=True)
         nav_cols = st.columns([1, 1])
         with nav_cols[0]:
             if st.button("ANALYTICS", key="nav_analytics",
@@ -663,7 +671,6 @@ def render_header(map_type: str, date_str: str) -> None:
                          use_container_width=True):
                 st.query_params["dashboard"] = "pre_analytics"
                 st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
         st.markdown(
             f'<div class="keck-header-date">{date_str}</div>',
             unsafe_allow_html=True,
