@@ -151,3 +151,209 @@ def load_monthly_avg_for_comparison(
     )
     n_days = max(int(month_df["complete_date"].nunique()), 1)
     return pivot / n_days
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# TAT DATA LAYER (Phase 1)
+# ════════════════════════════════════════════════════════════════════════════
+
+# Patient-Location prefixes that pick out each USC facility from the raw
+# data. Keck inpatient/clinic locations all start with "USC"; Norris
+# Cancer Center locations all start with "NCI".
+_TAT_FACILITY_PREFIX = {
+    "Keck":   "USC",
+    "Norris": "NCI",
+}
+
+# Stat columns reported per priority group inside `build_tat_table`'s
+# MultiIndex output. The order here is the order they appear in the
+# rendered table.
+_TAT_STAT_COLS = ["n", "Mean", "Min", "Max", "% <1h"]
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def load_tat_data(
+    date_str: str, view: str, facility: str,
+) -> pd.DataFrame:
+    """Load Turn-Around-Time data for a facility/date range from the
+    partitioned Parquet store.
+
+    Parameters
+    ----------
+    date_str : str
+        'YYYY-MM-DD' for `view='Daily'`; 'YYYY-MM' for `view='Monthly'`.
+    view : str
+        'Daily' or 'Monthly'.
+    facility : str
+        'Keck' (Patient Location startswith 'USC') or
+        'Norris' (Patient Location startswith 'NCI').
+
+    Returns a DataFrame with columns
+        ['Order Procedure', 'Collection Priority', 'TAT_minutes']
+    where TAT_minutes is a float computed as
+    (Date/Time - Complete) − (Date/Time - Drawn) in minutes. Rows whose
+    Date/Time - Drawn is null are dropped before the computation.
+
+    Uses the same partition-aware loader (`load_filtered_data`) as the
+    existing volume heatmaps; the resource and procedure-exclusion filters
+    are bypassed by passing empty tuples, then the facility filter is
+    applied on Patient Location after the partition load.
+    """
+    if view == "Daily":
+        target_date = date.fromisoformat(date_str)
+        start_d, end_d = target_date, target_date
+    else:  # Monthly — date_str is 'YYYY-MM'
+        year  = int(date_str[:4])
+        month = int(date_str[5:7])
+        start_d = date(year, month, 1)
+        end_d   = date(year, month, _cal.monthrange(year, month)[1])
+
+    _empty = pd.DataFrame(
+        columns=["Order Procedure", "Collection Priority", "TAT_minutes"]
+    )
+
+    if not storage_is_configured():
+        return _empty
+
+    df = load_filtered_data(
+        start_date=start_d,
+        end_date=end_d,
+        resources=(),       # skip resource filter — TAT spans all benches
+        exclude_procs=(),   # skip exclusion filter — TAT spans all procs
+        _index_hash=get_index_hash(),
+    )
+    if df.empty:
+        return _empty
+
+    needed = [
+        "Order Procedure", "Collection Priority", "Patient Location",
+        "Date/Time - Complete", "Date/Time - Drawn",
+    ]
+    keep = [c for c in needed if c in df.columns]
+    if "Date/Time - Complete" not in keep or "Date/Time - Drawn" not in keep:
+        return _empty
+    df = df[keep].copy()
+
+    df["Date/Time - Complete"] = pd.to_datetime(
+        df["Date/Time - Complete"], errors="coerce"
+    )
+    df["Date/Time - Drawn"] = pd.to_datetime(
+        df["Date/Time - Drawn"], errors="coerce"
+    )
+
+    # Re-apply the date-range filter on the actual Complete timestamp (the
+    # partition loader filtered on the derived `complete_date` which is
+    # day-precision; this guard is cheap and keeps the contract precise).
+    cmpl = df["Date/Time - Complete"]
+    df = df[
+        cmpl.notna()
+        & (cmpl.dt.date >= start_d)
+        & (cmpl.dt.date <= end_d)
+    ]
+
+    prefix = _TAT_FACILITY_PREFIX.get(facility, "")
+    if prefix and "Patient Location" in df.columns:
+        loc = df["Patient Location"].fillna("").astype(str)
+        df = df[loc.str.startswith(prefix)]
+
+    df = df[df["Date/Time - Drawn"].notna()]
+    if df.empty:
+        return _empty
+
+    tat_seconds = (
+        df["Date/Time - Complete"] - df["Date/Time - Drawn"]
+    ).dt.total_seconds()
+    df = df.assign(TAT_minutes=(tat_seconds / 60.0).astype(float))
+
+    return (
+        df[["Order Procedure", "Collection Priority", "TAT_minutes"]]
+        .reset_index(drop=True)
+    )
+
+
+def get_top_procedures_by_volume(
+    tat_df: pd.DataFrame, n: int = 10,
+) -> list:
+    """Return the top `n` `Order Procedure` names by sample count in
+    `tat_df`. Used to seed the default procedure-filter selection on
+    the TAT view.
+    """
+    if tat_df is None or tat_df.empty:
+        return []
+    return (
+        tat_df["Order Procedure"]
+        .value_counts()
+        .head(n)
+        .index.tolist()
+    )
+
+
+def build_tat_table(
+    tat_df: pd.DataFrame,
+    selected_procedures: list,
+) -> pd.DataFrame:
+    """Build a per-procedure TAT statistics table with priority-grouped
+    MultiIndex columns.
+
+    Three groups are computed for each procedure:
+      • Routine  — rows where Collection Priority == 'RT'
+      • Stat     — rows where Collection Priority == 'ST'
+      • Combined — every row for that procedure regardless of priority
+
+    Per group the function reports n, Mean, Min, Max, and % <1h
+    (percentage of samples with TAT_minutes < 60). Procedures that have
+    no rows in a given group get None for every stat column in that
+    group; Phase-2 rendering will display those as "—".
+
+    The returned DataFrame has one row per procedure in
+    `selected_procedures` and a pandas MultiIndex column structure:
+
+        Level 0:  ['Procedure',  'Routine', 'Stat', 'Combined']
+        Level 1:  ['Procedure', then 'n','Mean','Min','Max','% <1h' x 3]
+
+    Rows are sorted by Combined n descending; procedures with no
+    Combined samples sort to the bottom.
+    """
+    columns = pd.MultiIndex.from_tuples(
+        [("Procedure", "Procedure")]
+        + [("Routine",  c) for c in _TAT_STAT_COLS]
+        + [("Stat",     c) for c in _TAT_STAT_COLS]
+        + [("Combined", c) for c in _TAT_STAT_COLS]
+    )
+
+    if tat_df is None or tat_df.empty or not selected_procedures:
+        return pd.DataFrame(columns=columns)
+
+    def _group_stats(group_df: pd.DataFrame) -> list:
+        """Return [n, Mean, Min, Max, % <1h] or 5 Nones for an empty group."""
+        if group_df.empty:
+            return [None, None, None, None, None]
+        tats = group_df["TAT_minutes"].astype(float)
+        return [
+            int(len(tats)),
+            float(tats.mean()),
+            float(tats.min()),
+            float(tats.max()),
+            float((tats < 60).mean() * 100.0),
+        ]
+
+    sel = tat_df[tat_df["Order Procedure"].isin(selected_procedures)]
+
+    rows = []
+    for proc in selected_procedures:
+        proc_rows = sel[sel["Order Procedure"] == proc]
+        rt   = proc_rows[proc_rows["Collection Priority"] == "RT"]
+        stat = proc_rows[proc_rows["Collection Priority"] == "ST"]
+        comb = proc_rows
+        rows.append(
+            [proc] + _group_stats(rt) + _group_stats(stat) + _group_stats(comb)
+        )
+
+    out = pd.DataFrame(rows, columns=columns)
+
+    # Sort by Combined n descending; rows with None n drop to the bottom.
+    out = (
+        out.sort_values(("Combined", "n"), ascending=False, na_position="last")
+        .reset_index(drop=True)
+    )
+    return out
