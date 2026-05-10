@@ -35,13 +35,20 @@ from analytics.data import (
 )
 
 
-# Viridis / Oranges endpoint hex codes for the small legend swatches that
-# accompany each Plotly heatmap. Picked off Plotly's built-in colorscales
-# so the swatch matches the actual gradient rendered in the chart.
-_VIRIDIS_LOW  = "#440154"
-_VIRIDIS_HIGH = "#fde725"
+# Viridis_r / Oranges endpoint hex codes for the small legend swatches
+# that accompany each Plotly heatmap. Picked off Plotly's built-in
+# colorscales so the swatch matches the actual gradient in the chart.
+# Note Viridis is REVERSED on the analytics heatmaps (Viridis_r) so dark
+# = high values, yellow = low values.
+_VIRIDIS_LOW  = "#fde725"   # bright yellow — Viridis_r low end
+_VIRIDIS_HIGH = "#440154"   # deep purple   — Viridis_r high end
 _ORANGES_LOW  = "#fff5eb"
 _ORANGES_HIGH = "#7f2704"
+
+# Solid neutral fill used to render the Total column on every analytics
+# heatmap. Keeps Total cells out of the colorscale so a wide-range
+# full-day sum doesn't compress the per-hour gradient.
+_TOTAL_NEUTRAL = "#ececec"
 
 
 def _build_analytics_heatmap(
@@ -58,36 +65,64 @@ def _build_analytics_heatmap(
     locked axis ranges, transparent background, and a white hover tooltip
     matching the rest of the app.
 
-    `zmax` is computed as the 95th percentile of non-zero hour cells —
-    excluding the `Total` column so the wide-range full-day totals don't
-    compress the per-hour color range. Falls back to 1.0 if every hour
-    cell is zero.
-    """
-    z = pivot.values.astype(float)
-    y = pivot.index.tolist()
-    x = pivot.columns.tolist()
+    The pivot is split into two `go.Heatmap` traces stacked on the same
+    y-axis so row order/heights line up automatically:
 
-    # Exclude the Total column from zmax computation so the per-hour cells
-    # use the full colour range.
-    _hour_idx = [i for i, c in enumerate(x) if c != "Total"]
-    if _hour_idx:
-        _hv = z[:, _hour_idx]
-        _nz = _hv[_hv > 0]
-        zmax = float(np.percentile(_nz, 95)) if _nz.size else 1.0
+      • Hour columns (24 cells) — coloured with `colorscale`. `zmax` is
+        the 95th percentile of non-zero hour cells (the Total column is
+        deliberately excluded so wide-range full-day totals don't
+        compress the per-hour gradient).
+      • Total column (1 cell)   — rendered with a solid neutral grey
+        fill via a 2-stop single-colour colorscale. Values stay
+        readable as integer text but are no longer part of the
+        gradient.
+
+    `customdata` (when supplied) is expected to match the pivot's full
+    shape (n_rows × n_cols). It's split into hour-cell customdata and
+    Total-cell customdata so the same `hovertemplate` works for both.
+    """
+    z_full = pivot.values.astype(float)
+    y = pivot.index.tolist()
+    cols = pivot.columns.tolist()
+
+    if "Total" in cols:
+        total_idx     = cols.index("Total")
+        hour_indices  = [i for i in range(len(cols)) if i != total_idx]
+        hour_cols     = [cols[i] for i in hour_indices]
+        z_hours       = z_full[:, hour_indices]
+        z_total       = z_full[:, [total_idx]]
+        cd_hours      = (
+            [[row[i] for i in hour_indices] for row in customdata]
+            if customdata is not None else None
+        )
+        cd_total      = (
+            [[row[total_idx]] for row in customdata]
+            if customdata is not None else None
+        )
     else:
-        zmax = 1.0
+        hour_cols = cols
+        z_hours   = z_full
+        z_total   = None
+        cd_hours  = customdata
+        cd_total  = None
+
+    # zmax keyed off hour cells only.
+    _nz = z_hours[z_hours > 0]
+    zmax = float(np.percentile(_nz, 95)) if _nz.size else 1.0
     zmax = max(zmax, 1.0)
 
-    text_vals = [
+    text_hours = [
         [str(int(round(v))) if v > 0 else "" for v in row]
-        for row in z
+        for row in z_hours
     ]
 
-    _heatmap_kwargs = dict(
-        z=z,
-        x=x,
+    fig = go.Figure()
+
+    _hours_kwargs = dict(
+        z=z_hours,
+        x=hour_cols,
         y=y,
-        text=text_vals,
+        text=text_hours,
         texttemplate="%{text}",
         hoverinfo="text",
         colorscale=colorscale,
@@ -98,10 +133,38 @@ def _build_analytics_heatmap(
         showscale=False,
         hovertemplate=hovertemplate,
     )
-    if customdata is not None:
-        _heatmap_kwargs["customdata"] = customdata
+    if cd_hours is not None:
+        _hours_kwargs["customdata"] = cd_hours
+    fig.add_trace(go.Heatmap(**_hours_kwargs))
 
-    fig = go.Figure(data=go.Heatmap(**_heatmap_kwargs))
+    if z_total is not None:
+        text_total = [
+            [str(int(round(v))) if v > 0 else "" for v in row]
+            for row in z_total
+        ]
+        # Solid neutral fill: 2-stop colorscale with the same colour at
+        # both ends, plus zmin=zmax=1 so every cell maps to that colour
+        # regardless of the underlying total value.
+        _total_kwargs = dict(
+            z=z_total,
+            x=["Total"],
+            y=y,
+            text=text_total,
+            texttemplate="%{text}",
+            hoverinfo="text",
+            colorscale=[[0.0, _TOTAL_NEUTRAL], [1.0, _TOTAL_NEUTRAL]],
+            zmin=0,
+            zmax=1,
+            xgap=1,
+            ygap=1,
+            showscale=False,
+            hovertemplate=hovertemplate,
+            textfont=dict(color="#1a1a1a", size=11),
+        )
+        if cd_total is not None:
+            _total_kwargs["customdata"] = cd_total
+        fig.add_trace(go.Heatmap(**_total_kwargs))
+
     fig.update_traces(hoverongaps=False)
 
     # Procedure names are long — automargin gives the y-axis whatever it
@@ -779,8 +842,9 @@ def render(params: dict, ss) -> None:
                 f'<div class="heatmap-legend">'
                 f'Colour scale: &nbsp;'
                 f'<strong style="color:{_ORANGES_LOW};">■</strong> low &nbsp;→&nbsp; '
-                f'<strong style="color:{_ORANGES_HIGH};">■</strong> high. &nbsp;'
-                f'Forecast values for {date_str}.'
+                f'<strong style="color:{_ORANGES_HIGH};">■</strong> high '
+                f'(hour columns only). &nbsp;'
+                f'<strong>Total</strong> column = forecasted full-day sum per procedure.'
                 f'</div>',
                 unsafe_allow_html=True,
             )
@@ -789,7 +853,8 @@ def render(params: dict, ss) -> None:
                 f'<div class="heatmap-legend">'
                 f'Colour scale: &nbsp;'
                 f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
-                f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high. &nbsp;'
+                f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
+                f'(hour columns only). &nbsp;'
                 f'<strong>Total</strong> column = full-day sum per procedure.'
                 f'</div>',
                 unsafe_allow_html=True,
@@ -857,7 +922,7 @@ def render(params: dict, ss) -> None:
 
             _fig = _build_analytics_heatmap(
                 pivot,
-                colorscale="Viridis",
+                colorscale="Viridis_r",
                 hovertemplate=(
                     "<b>%{y} @ %{x}</b><br>%{customdata}<extra></extra>"
                 ),
@@ -1070,7 +1135,8 @@ def render(params: dict, ss) -> None:
             f'Values = avg completed volume per day in hour. '
             f'Colour scale: &nbsp;'
             f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
-            f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high. &nbsp;'
+            f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
+            f'(hour columns only). &nbsp;'
             f'<strong>Total</strong> column = avg daily total per procedure.'
             f'</div>',
             unsafe_allow_html=True,
@@ -1078,7 +1144,7 @@ def render(params: dict, ss) -> None:
 
         _m_fig = _build_analytics_heatmap(
             monthly_pivot,
-            colorscale="Viridis",
+            colorscale="Viridis_r",
             hovertemplate=(
                 "<b>%{y} @ %{x}</b><br>Avg per day: %{z:.1f}<extra></extra>"
             ),
