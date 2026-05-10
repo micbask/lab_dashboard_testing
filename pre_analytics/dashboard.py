@@ -11,6 +11,33 @@ from ui_components import metric_card, render_header
 from pre_analytics.data import load_phlebotomy_staff, load_draw_data, build_draw_pivot
 
 
+def _coerce_to_date(val):
+    """Coerce a shadcn date_picker return value to a datetime.date.
+
+    The library passes its `value` arg straight through to JSON
+    marshalling with no type coercion of its own, so we feed it an ISO
+    string (the only JSON-safe option) and have to handle whatever the
+    JS side sends back: a datetime, a date, an ISO string (with or
+    without time / timezone), or None.
+    """
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    if isinstance(val, str):
+        try:
+            return datetime.fromisoformat(val.replace("Z", "+00:00")).date()
+        except (ValueError, TypeError):
+            pass
+        try:
+            return date.fromisoformat(val[:10])
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
 def render_sidebar(ss) -> dict:
     """Render pre-analytics sidebar widgets. Returns params dict for render()."""
     with st.sidebar:
@@ -74,32 +101,32 @@ def render_sidebar(ss) -> dict:
                 _pa_date_default = _pa_max_d
 
             # shadcn date picker — light-themed by design; we accept the
-            # library's native styling. The library only stringifies
-            # datetime instances (isinstance check on datetime, NOT
-            # date), so a plain date falls through and then fails JSON
-            # marshalling. Convert to datetime first. Returns
-            # datetime.datetime (or None); we convert the return back
-            # to date so downstream filtering stays the same.
-            _pa_default_dt = datetime.combine(
-                _pa_date_default, datetime.min.time()
-            )
+            # library's native styling.
+            #
+            # The library passes `default_value` straight through to
+            # JSON marshalling with no type coercion (verified by
+            # reading the v0.1.19 source). date / datetime aren't JSON-
+            # serializable so they blow up the marshaller; we send an
+            # ISO date string and parse the return via _coerce_to_date.
+            #
+            # The library's init_session writes the seed value to a
+            # session_state slot only once per session. A stale date
+            # object stored under the previous "pa_date_picker" key
+            # from a prior deploy would otherwise keep getting re-read
+            # and re-marshalled. Use a fresh key prefix
+            # ("pa_date_dp_iso") so the picker initialises clean.
             _picked = ui.date_picker(
-                key="pa_date_picker",
+                key="pa_date_dp_iso",
                 mode="single",
                 label="",
-                default_value=_pa_default_dt,
+                default_value=_pa_date_default.isoformat(),
             )
-            if _picked is not None:
-                _picked_d = (
-                    _picked.date() if hasattr(_picked, "date") else _picked
-                )
-                if (
-                    isinstance(_picked_d, date)
-                    and _pa_min_d <= _picked_d <= _pa_max_d
-                ):
-                    pa_date = _picked_d
-                else:
-                    pa_date = _pa_date_default
+            _picked_d = _coerce_to_date(_picked)
+            if (
+                _picked_d is not None
+                and _pa_min_d <= _picked_d <= _pa_max_d
+            ):
+                pa_date = _picked_d
             else:
                 pa_date = _pa_date_default
 
