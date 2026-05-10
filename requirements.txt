@@ -1,5 +1,4 @@
 streamlit>=1.36.0
-streamlit-shadcn-ui==0.1.19
 pandas>=2.0.0
 numpy>=1.26.0
 matplotlib>=3.8.0
