@@ -264,20 +264,15 @@ def _apply_in_lab_basis(filtered_df: pd.DataFrame) -> pd.DataFrame:
 def render_sidebar(ss) -> dict:
     """Render analytics sidebar widgets. Returns params dict for render()."""
     with st.sidebar:
+        # ── 1. Top widget: Testing Bench (Completed/In-Lab) / Facility (TAT) ──
         # Time Basis lives in session_state so we can read its current
         # value *before* rendering the top widget. That lets the top
-        # widget (Testing Bench when Completed/In-Lab, Facility when
-        # TAT) swap on the same rerun the user changes Time Basis.
+        # widget swap on the same rerun the user changes Time Basis.
         if "time_basis" not in st.session_state:
             st.session_state["time_basis"] = "Completed"
         current_time_basis = st.session_state["time_basis"]
 
-        # ── Top widget: Testing Bench (bench path) or Facility (TAT) ───
         if current_time_basis == "TAT":
-            # TAT view filters by accession-number prefix; the widget
-            # is a radio with a separate session-state key so the bench
-            # selection below isn't clobbered when the user toggles
-            # back to Completed / In-Lab.
             st.markdown("### Facility")
             map_type = st.radio(
                 "Facility", ["Keck", "Norris"],
@@ -285,9 +280,6 @@ def render_sidebar(ss) -> dict:
                 key="analytics_tat_facility",
             )
         else:
-            # Completed / In-Lab: short-labelled radio whose return
-            # value is converted to the full bench name on the same
-            # rerun, so first-click takes effect.
             st.markdown("### Testing Bench")
             _bench_short = st.radio(
                 "Testing Bench",
@@ -301,7 +293,7 @@ def render_sidebar(ss) -> dict:
             ss.pop("date_picker", None)
             ss.last_map_type = map_type
 
-        # ── Time Basis radio (keyed; widget owns session_state) ────────
+        # ── 2. Time Basis  (keyed; widget owns session_state) ──
         st.markdown("### Time Basis")
         time_basis = st.radio(
             "Time Basis", ["Completed", "In-Lab", "TAT"],
@@ -309,12 +301,14 @@ def render_sidebar(ss) -> dict:
             key="time_basis",
         )
 
+        # ── 3. View ──
         st.markdown("### View")
         view_mode = st.radio(
             "View", ["Daily", "Monthly"],
             horizontal=True, label_visibility="collapsed",
         )
 
+        # ── Pending background tasks (kicked off by buttons on a previous run) ──
         if ss.pop("pending_forecast_retrain", False):
             if storage_is_configured():
                 with st.spinner("Retraining forecast models…"):
@@ -346,35 +340,195 @@ def render_sidebar(ss) -> dict:
             except Exception as _dr_err:
                 st.error(f"Delete failed: {_dr_err}")
 
-        st.markdown("---")
-        st.markdown("### Data Source")
-
+        # ── Silent data-existence detection ──
+        # Fast partition-index read with NO UI. The Data Source caption
+        # / status chip / Data Management expander render later at the
+        # bottom of the sidebar; we just need _data_exists now so the
+        # Date and Hour Range sections above the Data Source block know
+        # whether they have anything to show.
         _data_exists = False
         _data_summary = {"total_rows": 0, "partitions": 0}
         _local_df = pd.DataFrame()
+        _load_err = None
 
         if storage_is_configured():
-            st.caption("Storage: GitHub (partitioned)")
-
             try:
                 _data_exists = ensure_partitioned_storage()
                 if _data_exists:
                     _data_summary = get_data_summary()
                     if _data_summary["total_rows"] == 0:
                         _data_exists = False
+            except Exception as _e:
+                _load_err = _e
+                _data_exists = False
 
-                if _data_exists:
-                    status_chip(
-                        f"{_data_summary['total_rows']:,} rows · "
-                        f"{_data_summary['min_date']} → {_data_summary['max_date']}",
-                        level="ok",
-                    )
+        # Defaults — overwritten when _data_exists.
+        _min_d = date.today()
+        _max_d = date.today()
+        _current_resources = ()
+        _current_excludes = ()
+        _idx_hash = ""
+        selected_date = date.today()
+        selected_year = date.today().year
+        selected_month = date.today().month
+        hour_range = (0, 23)
+        _fc_data = None
+        _is_forecast_date = False
+
+        if _data_exists:
+            if time_basis == "TAT":
+                _current_resources = ()
+                _current_excludes = ()
+            else:
+                _current_resources = tuple(sorted(ss.resource_assignments[map_type]))
+                _current_excludes = tuple(sorted(EXCLUDE_PROCS))
+            _idx_hash = get_index_hash() if storage_is_configured() else ""
+
+            if storage_is_configured():
+                _min_d = date.fromisoformat(_data_summary["min_date"])
+                _max_d = date.fromisoformat(_data_summary["max_date"])
+
+            # ── 4. Date  (Daily date picker + Prev/Next OR Monthly selector) ──
+            if view_mode == "Daily":
+                if time_basis == "TAT":
+                    _fc_data = None
+                    forecast_dates: list = []
+                    _fc_max_d = _max_d
                 else:
-                    status_chip("No data yet — upload below", level="warn")
+                    _fc_data = load_forecasts(map_type)
+                    forecast_dates = []
+                    _fc_max_d = _max_d
+                    if _fc_data:
+                        _fc_start_d = _max_d + timedelta(days=1)
+                        _fc_end_d   = _fc_data["forecast_end"]
+                        forecast_dates = [
+                            _fc_start_d + timedelta(days=_i)
+                            for _i in range((_fc_end_d - _fc_start_d).days + 1)
+                        ]
+                        _fc_max_d = _fc_end_d
 
-            except Exception as _load_err:
+                if "_pending_date" in ss:
+                    _pending = ss.pop("_pending_date")
+                    if _min_d <= _pending <= _fc_max_d:
+                        ss["date_picker"] = _pending
+
+                if (
+                    "date_picker" not in ss
+                    or ss["date_picker"] < _min_d
+                    or ss["date_picker"] > _fc_max_d
+                ):
+                    ss["date_picker"] = _max_d
+
+                st.markdown("### Date")
+                _fc_note = (
+                    f"  +  forecast to **{_fc_max_d}**" if forecast_dates else ""
+                )
+                st.caption(f"{_min_d} → {_max_d}{_fc_note}")
+
+                picked_date = st.date_input(
+                    "Select date",
+                    min_value=_min_d,
+                    max_value=_fc_max_d,
+                    label_visibility="collapsed",
+                    key="date_picker",
+                )
+                selected_date = picked_date
+                _is_forecast_date = selected_date > _max_d
+
+                _nc1, _nc2 = st.columns(2)
+                with _nc1:
+                    if st.button(
+                        "◄ Prev", width="stretch",
+                        disabled=(selected_date <= _min_d),
+                    ):
+                        ss["_pending_date"] = selected_date - timedelta(days=1)
+                        st.rerun()
+                with _nc2:
+                    if st.button(
+                        "Next ►", width="stretch",
+                        disabled=(selected_date >= _fc_max_d),
+                    ):
+                        ss["_pending_date"] = selected_date + timedelta(days=1)
+                        st.rerun()
+
+                if time_basis != "TAT":
+                    if _fc_data:
+                        _fc_trained_on = _fc_data.get("last_data_date")
+                        if _fc_trained_on is not None and _fc_trained_on != _max_d:
+                            st.markdown(
+                                '<div style="background:#7a3800;color:#FFE0B2;padding:0.5rem 0.7rem;'
+                                'border-radius:6px;font-size:0.78rem;margin-top:0.3rem;">'
+                                "⚠ Forecast is out of date. Use the <strong>Refresh Forecast</strong> "
+                                "button in Data Management to retrain."
+                                "</div>",
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.caption("No forecast available — use Refresh Forecast to generate one.")
+
+                    # ── 5. Hour Range  (Completed / In-Lab only) ──
+                    st.markdown("---")
+                    st.markdown("### Hour Range")
+
+                    def _fmt_h(h: int) -> str:
+                        hr12 = 12 if h % 12 == 0 else h % 12
+                        suf  = "AM" if h < 12 else "PM"
+                        return f"{hr12}:00 {suf}"
+
+                    hour_range = st.slider(
+                        "Hours", 0, 23, (0, 23), label_visibility="collapsed"
+                    )
+                    st.caption(f"{_fmt_h(hour_range[0])} → {_fmt_h(hour_range[1])}")
+
+            else:  # Monthly
+                _avail_months = []
+                d = date(_min_d.year, _min_d.month, 1)
+                end_m = date(_max_d.year, _max_d.month, 1)
+                while d <= end_m:
+                    _avail_months.append((d.year, d.month))
+                    if d.month == 12:
+                        d = date(d.year + 1, 1, 1)
+                    else:
+                        d = date(d.year, d.month + 1, 1)
+
+                if not _avail_months:
+                    st.warning("No data found for this map type.")
+                    st.stop()
+
+                _month_labels = [
+                    f"{_cal.month_name[m]} {y}" for y, m in _avail_months
+                ]
+
+                st.markdown("### Month")
+                _sel_month_label = st.selectbox(
+                    "Select month",
+                    _month_labels,
+                    index=len(_avail_months) - 1,
+                    label_visibility="collapsed",
+                )
+                _sel_idx = _month_labels.index(_sel_month_label)
+                selected_year, selected_month = _avail_months[_sel_idx]
+
+            # Resource Allocation expander removed (FIX 2).
+
+        # ── 6. Data Source  (storage caption + status chip) ──
+        # ── 7. Data Management (admin-gated expander; admin tools) ──
+        st.markdown("---")
+        if storage_is_configured():
+            st.markdown("### Data Source")
+            st.caption("Storage: GitHub (partitioned)")
+
+            if _load_err is not None:
                 status_chip("Load error", level="error")
                 st.error(f"Could not read data index: {_load_err}")
+            elif _data_exists:
+                status_chip(
+                    f"{_data_summary['total_rows']:,} rows · "
+                    f"{_data_summary['min_date']} → {_data_summary['max_date']}",
+                    level="ok",
+                )
+            else:
+                status_chip("No data yet — upload below", level="warn")
 
             st.markdown("---")
             with st.expander("Data Management", expanded=not _data_exists):
@@ -507,192 +661,6 @@ def render_sidebar(ss) -> dict:
                 if _parsed:
                     _local_df, _ = deduplicate_and_merge(_parsed)
                     _data_exists = not _local_df.empty
-
-        st.markdown("---")
-
-        # Defaults for values only set when data exists
-        _min_d = date.today()
-        _max_d = date.today()
-        _current_resources = ()
-        _current_excludes = ()
-        _idx_hash = ""
-        selected_date = date.today()
-        selected_year = date.today().year
-        selected_month = date.today().month
-        hour_range = (0, 23)
-        _fc_data = None
-        _is_forecast_date = False
-
-        if _data_exists:
-            if time_basis == "TAT":
-                # TAT view doesn't filter by bench resources or
-                # exclude any procedures — clearing these lets the
-                # downstream loader return all rows in the date range.
-                _current_resources = ()
-                _current_excludes = ()
-            else:
-                _current_resources = tuple(sorted(ss.resource_assignments[map_type]))
-                _current_excludes = tuple(sorted(EXCLUDE_PROCS))
-            _idx_hash = get_index_hash() if storage_is_configured() else ""
-
-            if storage_is_configured():
-                _min_d = date.fromisoformat(_data_summary["min_date"])
-                _max_d = date.fromisoformat(_data_summary["max_date"])
-            else:
-                _min_d = _local_df["complete_date"].min()
-                _max_d = _local_df["complete_date"].max()
-
-            if view_mode == "Daily":
-                if time_basis == "TAT":
-                    # No forecasts for TAT — keep the date picker bounded
-                    # by the actual data range only.
-                    _fc_data = None
-                    forecast_dates: list = []
-                    _fc_max_d = _max_d
-                else:
-                    _fc_data = load_forecasts(map_type)
-                    forecast_dates = []
-                    _fc_max_d = _max_d
-                    if _fc_data:
-                        _fc_start_d = _max_d + timedelta(days=1)
-                        _fc_end_d   = _fc_data["forecast_end"]
-                        forecast_dates = [
-                            _fc_start_d + timedelta(days=_i)
-                            for _i in range((_fc_end_d - _fc_start_d).days + 1)
-                        ]
-                        _fc_max_d = _fc_end_d
-
-                if "_pending_date" in ss:
-                    _pending = ss.pop("_pending_date")
-                    if _min_d <= _pending <= _fc_max_d:
-                        ss["date_picker"] = _pending
-
-                if (
-                    "date_picker" not in ss
-                    or ss["date_picker"] < _min_d
-                    or ss["date_picker"] > _fc_max_d
-                ):
-                    ss["date_picker"] = _max_d
-
-                st.markdown("### Date")
-                _fc_note = (
-                    f"  +  forecast to **{_fc_max_d}**" if forecast_dates else ""
-                )
-                st.caption(f"{_min_d} → {_max_d}{_fc_note}")
-
-                picked_date = st.date_input(
-                    "Select date",
-                    min_value=_min_d,
-                    max_value=_fc_max_d,
-                    label_visibility="collapsed",
-                    key="date_picker",
-                )
-                selected_date = picked_date
-                _is_forecast_date = selected_date > _max_d
-
-                _nc1, _nc2 = st.columns(2)
-                with _nc1:
-                    if st.button(
-                        "◄ Prev", width="stretch",
-                        disabled=(selected_date <= _min_d),
-                    ):
-                        ss["_pending_date"] = selected_date - timedelta(days=1)
-                        st.rerun()
-                with _nc2:
-                    if st.button(
-                        "Next ►", width="stretch",
-                        disabled=(selected_date >= _fc_max_d),
-                    ):
-                        ss["_pending_date"] = selected_date + timedelta(days=1)
-                        st.rerun()
-
-                if time_basis != "TAT":
-                    if _fc_data:
-                        _fc_trained_on = _fc_data.get("last_data_date")
-                        if _fc_trained_on is not None and _fc_trained_on != _max_d:
-                            st.markdown(
-                                '<div style="background:#7a3800;color:#FFE0B2;padding:0.5rem 0.7rem;'
-                                'border-radius:6px;font-size:0.78rem;margin-top:0.3rem;">'
-                                "⚠ Forecast is out of date. Use the <strong>Refresh Forecast</strong> "
-                                "button in Data Management to retrain."
-                                "</div>",
-                                unsafe_allow_html=True,
-                            )
-                    else:
-                        st.caption("No forecast available — use Refresh Forecast to generate one.")
-
-                    st.markdown("---")
-                    st.markdown("### Hour Range")
-
-                    def _fmt_h(h: int) -> str:
-                        hr12 = 12 if h % 12 == 0 else h % 12
-                        suf  = "AM" if h < 12 else "PM"
-                        return f"{hr12}:00 {suf}"
-
-                    hour_range = st.slider(
-                        "Hours", 0, 23, (0, 23), label_visibility="collapsed"
-                    )
-                    st.caption(f"{_fmt_h(hour_range[0])} → {_fmt_h(hour_range[1])}")
-
-            else:  # Monthly
-                _avail_months = []
-                d = date(_min_d.year, _min_d.month, 1)
-                end_m = date(_max_d.year, _max_d.month, 1)
-                while d <= end_m:
-                    _avail_months.append((d.year, d.month))
-                    if d.month == 12:
-                        d = date(d.year + 1, 1, 1)
-                    else:
-                        d = date(d.year, d.month + 1, 1)
-
-                if not _avail_months:
-                    st.warning("No data found for this map type.")
-                    st.stop()
-
-                _month_labels = [
-                    f"{_cal.month_name[m]} {y}" for y, m in _avail_months
-                ]
-
-                st.markdown("### Month")
-                _sel_month_label = st.selectbox(
-                    "Select month",
-                    _month_labels,
-                    index=len(_avail_months) - 1,
-                    label_visibility="collapsed",
-                )
-                _sel_idx = _month_labels.index(_sel_month_label)
-                selected_year, selected_month = _avail_months[_sel_idx]
-
-            if time_basis != "TAT":
-                st.markdown("---")
-                with st.expander("Resource Allocation", expanded=False):
-                    st.markdown(
-                        "Reassign instruments between maps. "
-                        "Each resource should appear in only one map."
-                    )
-                    new_assignments = {}
-                    for mt in MAP_TYPES:
-                        new_assignments[mt] = st.multiselect(
-                            mt, options=ALL_RESOURCES,
-                            default=ss.resource_assignments.get(mt, []),
-                            key=f"res_{mt}",
-                        )
-                    _flat  = [r for rs in new_assignments.values() for r in rs]
-                    _dupes = sorted({r for r in _flat if _flat.count(r) > 1})
-                    if _dupes:
-                        st.warning(f"Duplicate assignments: {', '.join(_dupes)}")
-
-                    _ra, _rb = st.columns(2)
-                    with _ra:
-                        if st.button("Apply", width="stretch", type="primary"):
-                            ss.resource_assignments = new_assignments
-                            st.cache_data.clear()
-                            st.rerun()
-                    with _rb:
-                        if st.button("Reset defaults", width="stretch"):
-                            ss.resource_assignments = deepcopy(DEFAULT_RESOURCES)
-                            st.cache_data.clear()
-                            st.rerun()
 
     # TAT view needs a single canonical date string for downstream
     # `load_tat_data` calls — 'YYYY-MM-DD' for Daily, 'YYYY-MM' for
