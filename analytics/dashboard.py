@@ -273,14 +273,20 @@ def render_sidebar(ss) -> dict:
         current_time_basis = st.session_state["time_basis"]
 
         if current_time_basis == "TAT":
-            st.markdown("### Facility")
+            st.markdown(
+                '<div class="sidebar-section-label">FACILITY</div>',
+                unsafe_allow_html=True,
+            )
             map_type = st.radio(
                 "Facility", ["Keck", "Norris"],
                 horizontal=True, label_visibility="collapsed",
                 key="analytics_tat_facility",
             )
         else:
-            st.markdown("### Testing Bench")
+            st.markdown(
+                '<div class="sidebar-section-label">TESTING BENCH</div>',
+                unsafe_allow_html=True,
+            )
             _bench_short = st.radio(
                 "Testing Bench",
                 list(BENCH_LABEL_TO_VALUE.keys()),
@@ -294,7 +300,10 @@ def render_sidebar(ss) -> dict:
             ss.last_map_type = map_type
 
         # ── 2. Time Basis  (keyed; widget owns session_state) ──
-        st.markdown("### Time Basis")
+        st.markdown(
+            '<div class="sidebar-section-label">TIME BASIS</div>',
+            unsafe_allow_html=True,
+        )
         time_basis = st.radio(
             "Time Basis", ["Completed", "In-Lab", "TAT"],
             horizontal=True, label_visibility="collapsed",
@@ -302,7 +311,10 @@ def render_sidebar(ss) -> dict:
         )
 
         # ── 3. View ──
-        st.markdown("### View")
+        st.markdown(
+            '<div class="sidebar-section-label">VIEW</div>',
+            unsafe_allow_html=True,
+        )
         view_mode = st.radio(
             "View", ["Daily", "Monthly"],
             horizontal=True, label_visibility="collapsed",
@@ -419,7 +431,10 @@ def render_sidebar(ss) -> dict:
                 ):
                     ss["date_picker"] = _max_d
 
-                st.markdown("### Date")
+                st.markdown(
+                    '<div class="sidebar-section-label">DATE</div>',
+                    unsafe_allow_html=True,
+                )
 
                 picked_date = st.date_input(
                     "Select date",
@@ -443,10 +458,15 @@ def render_sidebar(ss) -> dict:
                     unsafe_allow_html=True,
                 )
 
-                _nc1, _nc2 = st.columns(2)
+                # Compact arrow-only Prev/Next buttons. Layout uses
+                # st.columns([1, 1, 6]) so the two 44px buttons sit at
+                # the left edge with the rest of the row blank — keeps
+                # the column-gap close to the spec'd 8px without raw
+                # HTML wrappers (which would break st.button).
+                _nc1, _nc2, _nc_spacer = st.columns([1, 1, 6])
                 with _nc1:
                     if st.button(
-                        "◄ Prev", width="stretch",
+                        "←",
                         disabled=(selected_date <= _min_d),
                         key="nav_prev_date",
                     ):
@@ -454,7 +474,7 @@ def render_sidebar(ss) -> dict:
                         st.rerun()
                 with _nc2:
                     if st.button(
-                        "Next ►", width="stretch",
+                        "→",
                         disabled=(selected_date >= _fc_max_d),
                         key="nav_next_date",
                     ):
@@ -477,7 +497,10 @@ def render_sidebar(ss) -> dict:
                         st.caption("No forecast available — use Refresh Forecast to generate one.")
 
                     # ── 5. Hour Range  (Completed / In-Lab only) ──
-                    st.markdown("### Hour Range")
+                    st.markdown(
+                        '<div class="sidebar-section-label">HOUR RANGE</div>',
+                        unsafe_allow_html=True,
+                    )
 
                     def _fmt_h(h: int) -> str:
                         hr12 = 12 if h % 12 == 0 else h % 12
@@ -513,7 +536,10 @@ def render_sidebar(ss) -> dict:
                     f"{_cal.month_name[m]} {y}" for y, m in _avail_months
                 ]
 
-                st.markdown("### Month")
+                st.markdown(
+                    '<div class="sidebar-section-label">MONTH</div>',
+                    unsafe_allow_html=True,
+                )
                 _sel_month_label = st.selectbox(
                     "Select month",
                     _month_labels,
