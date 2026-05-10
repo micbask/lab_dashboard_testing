@@ -116,7 +116,7 @@ def render(params: dict, ss) -> None:
         else:
             _pa_date_label = pd.Timestamp(_pa_ds).strftime("%B %d, %Y")
 
-        render_header(f"Pre-Analytics · {pa_location}", _pa_date_label)
+        render_header(pa_location, _pa_date_label)
 
         _draw_df, _draw_debug = load_draw_data(_pa_ds, pa_view)
 
