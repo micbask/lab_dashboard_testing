@@ -264,45 +264,50 @@ def _apply_in_lab_basis(filtered_df: pd.DataFrame) -> pd.DataFrame:
 def render_sidebar(ss) -> dict:
     """Render analytics sidebar widgets. Returns params dict for render()."""
     with st.sidebar:
-        # Time Basis is rendered FIRST so its return value can conditionally
-        # drive the Map Type widget below. Reading from the radio's return
-        # value (rather than session state) means the Map Type swap takes
-        # effect on the same rerun the user changes Time Basis.
-        st.markdown("### Time Basis")
-        time_basis = st.radio(
-            "Time Basis", ["Completed", "In-Lab", "TAT"],
-            horizontal=True, label_visibility="collapsed",
-        )
+        # Time Basis lives in session_state so we can read its current
+        # value *before* rendering the top widget. That lets the top
+        # widget (Testing Bench when Completed/In-Lab, Facility when
+        # TAT) swap on the same rerun the user changes Time Basis.
+        if "time_basis" not in st.session_state:
+            st.session_state["time_basis"] = "Completed"
+        current_time_basis = st.session_state["time_basis"]
 
-        if time_basis == "TAT":
-            # TAT view operates on a Patient-Location facility, not a
-            # bench-resource map. Header keeps the original "Map Type"
-            # label; the widget remains a selectbox per the original
-            # behaviour, with a separate session-state key so the bench
-            # selection below isn't clobbered when the user toggles back
-            # to Completed/In-Lab.
-            st.markdown("### Map Type")
-            map_type = st.selectbox(
-                "Map type", ["Keck", "Norris"],
-                label_visibility="collapsed",
+        # ── Top widget: Testing Bench (bench path) or Facility (TAT) ───
+        if current_time_basis == "TAT":
+            # TAT view filters by accession-number prefix; the widget
+            # is a radio with a separate session-state key so the bench
+            # selection below isn't clobbered when the user toggles
+            # back to Completed / In-Lab.
+            st.markdown("### Facility")
+            map_type = st.radio(
+                "Facility", ["Keck", "Norris"],
+                horizontal=True, label_visibility="collapsed",
                 key="analytics_tat_facility",
             )
         else:
-            # Completed / In-Lab: short-labelled radio matching the
-            # styling of the Time Basis radio above. The radio's return
-            # value drives the conversion to the full bench name on the
-            # same rerun, so the first click responds immediately.
+            # Completed / In-Lab: short-labelled radio whose return
+            # value is converted to the full bench name on the same
+            # rerun, so first-click takes effect.
             st.markdown("### Testing Bench")
             _bench_short = st.radio(
                 "Testing Bench",
                 list(BENCH_LABEL_TO_VALUE.keys()),
                 horizontal=True, label_visibility="collapsed",
+                key="analytics_bench_short",
             )
             map_type = BENCH_LABEL_TO_VALUE[_bench_short]
 
         if ss.last_map_type != map_type:
             ss.pop("date_picker", None)
             ss.last_map_type = map_type
+
+        # ── Time Basis radio (keyed; widget owns session_state) ────────
+        st.markdown("### Time Basis")
+        time_basis = st.radio(
+            "Time Basis", ["Completed", "In-Lab", "TAT"],
+            horizontal=True, label_visibility="collapsed",
+            key="time_basis",
+        )
 
         st.markdown("### View")
         view_mode = st.radio(
