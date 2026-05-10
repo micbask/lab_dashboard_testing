@@ -769,8 +769,8 @@ def _render_tat_view(params: dict) -> None:
         _combined_under = None
     else:
         _total_samples = int(len(tat_df))
-        _routine = tat_df[tat_df["Collection Priority"].isin(["RT", "TS"])]
-        _stat    = tat_df[tat_df["Collection Priority"] == "ST"]
+        _routine = tat_df[tat_df["Collection Priority"] == "RT"]
+        _stat    = tat_df[tat_df["Collection Priority"].isin(["ST", "TS"])]
         _routine_mean = (
             float(_routine["TAT_minutes"].mean()) if not _routine.empty else None
         )
@@ -790,13 +790,13 @@ def _render_tat_view(params: dict) -> None:
     with _k2:
         st.markdown(
             metric_card("Avg TAT — Routine", format_tat(_routine_mean),
-                        sub="RT + TS samples"),
+                        sub="RT samples"),
             unsafe_allow_html=True,
         )
     with _k3:
         st.markdown(
             metric_card("Avg TAT — Stat", format_tat(_stat_mean),
-                        sub="ST samples"),
+                        sub="ST + TS samples"),
             unsafe_allow_html=True,
         )
     with _k4:
@@ -816,7 +816,7 @@ def _render_tat_view(params: dict) -> None:
 
     # ── Procedure filter ───────────────────────────────────────────────────
     _all_procs   = sorted(tat_df["Order Procedure"].dropna().unique().tolist())
-    _default_top = get_top_procedures_by_volume(tat_df, n=10)
+    _default_top = get_top_procedures_by_volume(tat_df, n=5)
     _filter_key  = f"tat_proc_filter_{_facility}_{_date_str}"
 
     st.markdown(
@@ -824,12 +824,12 @@ def _render_tat_view(params: dict) -> None:
         unsafe_allow_html=True,
     )
     _selected = st.multiselect(
-        "Filter procedures (defaults to top 10 by volume)",
+        "Filter procedures (defaults to top 5 by volume)",
         options=_all_procs,
         default=_default_top,
         key=_filter_key,
     )
-    # Empty selection → fall back to the top-10 default so the table and
+    # Empty selection → fall back to the top-5 default so the table and
     # chart never collapse to nothing on an accidental clear.
     if not _selected:
         _selected = _default_top
@@ -846,18 +846,12 @@ def _render_tat_view(params: dict) -> None:
         "Procedure",
         f"<span style='color:{_TAT_ROUTINE_COLOR}'>Routine</span><br>n",
         f"<span style='color:{_TAT_ROUTINE_COLOR}'>Routine</span><br>Mean",
-        f"<span style='color:{_TAT_ROUTINE_COLOR}'>Routine</span><br>Min",
-        f"<span style='color:{_TAT_ROUTINE_COLOR}'>Routine</span><br>Max",
         f"<span style='color:{_TAT_ROUTINE_COLOR}'>Routine</span><br>% <1h",
         f"<span style='color:{_TAT_STAT_COLOR}'>Stat</span><br>n",
         f"<span style='color:{_TAT_STAT_COLOR}'>Stat</span><br>Mean",
-        f"<span style='color:{_TAT_STAT_COLOR}'>Stat</span><br>Min",
-        f"<span style='color:{_TAT_STAT_COLOR}'>Stat</span><br>Max",
         f"<span style='color:{_TAT_STAT_COLOR}'>Stat</span><br>% <1h",
         f"<span style='color:{_TAT_COMBINED_COLOR}'>Combined</span><br>n",
         f"<span style='color:{_TAT_COMBINED_COLOR}'>Combined</span><br>Mean",
-        f"<span style='color:{_TAT_COMBINED_COLOR}'>Combined</span><br>Min",
-        f"<span style='color:{_TAT_COMBINED_COLOR}'>Combined</span><br>Max",
         f"<span style='color:{_TAT_COMBINED_COLOR}'>Combined</span><br>% <1h",
     ]
 
@@ -866,19 +860,19 @@ def _render_tat_view(params: dict) -> None:
     # dominates the eye.
     _hdr_fill_cells = (
         ["#ffffff"]
-        + ["rgba(0, 102, 204, 0.10)"]   * 5
-        + ["rgba(204, 102, 0, 0.10)"]   * 5
-        + ["rgba(68, 68, 68, 0.10)"]    * 5
+        + ["rgba(0, 102, 204, 0.10)"]   * 3
+        + ["rgba(204, 102, 0, 0.10)"]   * 3
+        + ["rgba(68, 68, 68, 0.10)"]    * 3
     )
     _cell_fill_cols = (
         ["#ffffff"]
-        + ["rgba(0, 102, 204, 0.04)"]   * 5
-        + ["rgba(204, 102, 0, 0.04)"]   * 5
-        + ["rgba(68, 68, 68, 0.04)"]    * 5
+        + ["rgba(0, 102, 204, 0.04)"]   * 3
+        + ["rgba(204, 102, 0, 0.04)"]   * 3
+        + ["rgba(68, 68, 68, 0.04)"]    * 3
     )
 
     # Build per-column value lists. n columns are integers (or "—");
-    # Mean/Min/Max use format_tat; %<1h uses format_pct.
+    # Mean uses format_tat; %<1h uses format_pct.
     def _fmt_n(v):
         if v is None or pd.isna(v):
             return "—"
@@ -887,32 +881,26 @@ def _render_tat_view(params: dict) -> None:
     _proc_col      = table_df[("Procedure", "Procedure")].tolist()
     _routine_n     = [_fmt_n(v)      for v in table_df[("Routine",  "n")]]
     _routine_mean_ = [format_tat(v)  for v in table_df[("Routine",  "Mean")]]
-    _routine_min   = [format_tat(v)  for v in table_df[("Routine",  "Min")]]
-    _routine_max   = [format_tat(v)  for v in table_df[("Routine",  "Max")]]
     _routine_pct   = [format_pct(v)  for v in table_df[("Routine",  "% <1h")]]
     _stat_n        = [_fmt_n(v)      for v in table_df[("Stat",     "n")]]
     _stat_mean_    = [format_tat(v)  for v in table_df[("Stat",     "Mean")]]
-    _stat_min      = [format_tat(v)  for v in table_df[("Stat",     "Min")]]
-    _stat_max      = [format_tat(v)  for v in table_df[("Stat",     "Max")]]
     _stat_pct      = [format_pct(v)  for v in table_df[("Stat",     "% <1h")]]
     _comb_n        = [_fmt_n(v)      for v in table_df[("Combined", "n")]]
     _comb_mean     = [format_tat(v)  for v in table_df[("Combined", "Mean")]]
-    _comb_min      = [format_tat(v)  for v in table_df[("Combined", "Min")]]
-    _comb_max      = [format_tat(v)  for v in table_df[("Combined", "Max")]]
     _comb_pct      = [format_pct(v)  for v in table_df[("Combined", "% <1h")]]
 
     _cell_values = [
         _proc_col,
-        _routine_n, _routine_mean_, _routine_min, _routine_max, _routine_pct,
-        _stat_n,    _stat_mean_,    _stat_min,    _stat_max,    _stat_pct,
-        _comb_n,    _comb_mean,     _comb_min,    _comb_max,    _comb_pct,
+        _routine_n, _routine_mean_, _routine_pct,
+        _stat_n,    _stat_mean_,    _stat_pct,
+        _comb_n,    _comb_mean,     _comb_pct,
     ]
-    _aligns = ["left"] + ["right"] * 15
-    _header_font_colors = ["#6F1828"] + ["#1a1a1a"] * 15
+    _aligns = ["left"] + ["right"] * 9
+    _header_font_colors = ["#6F1828"] + ["#1a1a1a"] * 9
 
     _tat_table_fig = go.Figure(
         data=go.Table(
-            columnwidth=[3] + [1] * 15,
+            columnwidth=[3] + [1] * 9,
             header=dict(
                 values=_tat_headers,
                 fill_color=_hdr_fill_cells,
