@@ -6,6 +6,7 @@ Handles: page config, auth gate, session-state init, dashboard routing.
 All rendering logic lives in analytics/ and pre_analytics/ modules.
 """
 
+import os
 from copy import deepcopy
 from datetime import datetime
 
@@ -18,11 +19,51 @@ import pre_analytics.dashboard as _pre_analytics
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# FAVICON  (generated on first run; Pillow ships transitively with matplotlib
+# which is in requirements.txt, so the import is safe)
+# ═════════════════════════════════════════════════════════════════════════════
+def _ensure_favicon(path: str = "assets/favicon.png") -> str | None:
+    """Generate the bar-chart favicon PNG on disk if it isn't already there.
+
+    The icon is a 64×64 transparent-background PNG with four ascending
+    USC-cardinal (#790A26) bars. Returns the path on success, or None if
+    Pillow isn't importable / the disk write fails (caller falls back to
+    an emoji so st.set_page_config never receives a broken value).
+    """
+    if os.path.exists(path):
+        return path
+    try:
+        from PIL import Image, ImageDraw
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        cardinal  = "#790A26"
+        bar_w     = 9
+        bar_gap   = 3
+        bottom    = 56          # 8 px of bottom padding (bars span y=bottom-h..bottom-1)
+        heights   = [18, 28, 38, 46]
+        x = 10                   # (64 − (4*9 + 3*3)) // 2 ≈ 10
+        for h in heights:
+            draw.rectangle(
+                [x, bottom - h, x + bar_w - 1, bottom - 1],
+                fill=cardinal,
+            )
+            x += bar_w + bar_gap
+        img.save(path, "PNG")
+        return path
+    except Exception:
+        return None
+
+
+_FAVICON = _ensure_favicon() or "🧪"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG  (must be the first Streamlit call)
 # ═════════════════════════════════════════════════════════════════════════════
 st.set_page_config(
-    page_title="Lab Productivity · Keck Medicine",
-    page_icon="🧪",
+    page_title="Lab Productivity",
+    page_icon=_FAVICON,
     layout="wide",
     initial_sidebar_state="expanded",
 )
