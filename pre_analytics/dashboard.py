@@ -3,6 +3,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
+import streamlit_shadcn_ui as ui
 
 from config import HOUR_LABELS
 from storage import storage_is_configured, get_data_summary, ensure_partitioned_storage
@@ -55,22 +56,47 @@ def render_sidebar(ss) -> dict:
                 '<div class="sidebar-section-label">DATE</div>',
                 unsafe_allow_html=True,
             )
+
+            # Resolve / clamp the default date from any prior session
+            # state value (may be a date or an ISO string) into a date
+            # inside the valid [min, max] window.
             _pa_date_default = ss.get("pa_date", _pa_max_d)
             if isinstance(_pa_date_default, str):
                 try:
                     _pa_date_default = date.fromisoformat(_pa_date_default)
                 except Exception:
                     _pa_date_default = _pa_max_d
-            if _pa_date_default < _pa_min_d or _pa_date_default > _pa_max_d:
+            if (
+                not isinstance(_pa_date_default, date)
+                or _pa_date_default < _pa_min_d
+                or _pa_date_default > _pa_max_d
+            ):
                 _pa_date_default = _pa_max_d
-            pa_date = st.date_input(
-                "Select date",
-                value=_pa_date_default,
-                min_value=_pa_min_d,
-                max_value=_pa_max_d,
-                label_visibility="collapsed",
+
+            # shadcn date picker — light-themed by design; we accept the
+            # library's native styling. Returns datetime.datetime (or
+            # None); convert to date so downstream filtering stays the
+            # same.
+            _picked = ui.date_picker(
                 key="pa_date_picker",
+                mode="single",
+                label="",
+                default_value=_pa_date_default,
             )
+            if _picked is not None:
+                _picked_d = (
+                    _picked.date() if hasattr(_picked, "date") else _picked
+                )
+                if (
+                    isinstance(_picked_d, date)
+                    and _pa_min_d <= _picked_d <= _pa_max_d
+                ):
+                    pa_date = _picked_d
+                else:
+                    pa_date = _pa_date_default
+            else:
+                pa_date = _pa_date_default
+
             ss["pa_date"] = pa_date
             _pa_date_str = pa_date.isoformat()
             # Date-range metadata caption — sits BELOW the date input,
