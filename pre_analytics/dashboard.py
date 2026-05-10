@@ -1,5 +1,5 @@
 import calendar as _cal
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -74,14 +74,20 @@ def render_sidebar(ss) -> dict:
                 _pa_date_default = _pa_max_d
 
             # shadcn date picker — light-themed by design; we accept the
-            # library's native styling. Returns datetime.datetime (or
-            # None); convert to date so downstream filtering stays the
-            # same.
+            # library's native styling. The library only stringifies
+            # datetime instances (isinstance check on datetime, NOT
+            # date), so a plain date falls through and then fails JSON
+            # marshalling. Convert to datetime first. Returns
+            # datetime.datetime (or None); we convert the return back
+            # to date so downstream filtering stays the same.
+            _pa_default_dt = datetime.combine(
+                _pa_date_default, datetime.min.time()
+            )
             _picked = ui.date_picker(
                 key="pa_date_picker",
                 mode="single",
                 label="",
-                default_value=_pa_date_default,
+                default_value=_pa_default_dt,
             )
             if _picked is not None:
                 _picked_d = (
