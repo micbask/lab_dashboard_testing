@@ -65,6 +65,33 @@ BENCH_LABEL_TO_VALUE = {
 }
 
 
+def _coerce_to_date(val):
+    """Coerce a shadcn date_picker return value to a datetime.date.
+
+    The library passes its `value` arg straight through to JSON
+    marshalling with no type coercion of its own, so we feed it an ISO
+    string (the only JSON-safe option) and have to handle whatever the
+    JS side sends back: a datetime, a date, an ISO string (with or
+    without time / timezone), or None.
+    """
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    if isinstance(val, str):
+        try:
+            return datetime.fromisoformat(val.replace("Z", "+00:00")).date()
+        except (ValueError, TypeError):
+            pass
+        try:
+            return date.fromisoformat(val[:10])
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
 def _build_analytics_heatmap(
     pivot: pd.DataFrame,
     *,
@@ -462,37 +489,39 @@ def render_sidebar(ss) -> dict:
 
                 # shadcn date picker — light-themed by design; we accept
                 # the library's native styling per the integration spec.
-                # The library only stringifies values that are datetime
-                # instances (isinstance check on datetime, NOT date) —
-                # passing a date object falls through unchanged and
-                # then fails JSON marshalling on the way into the JS
-                # component. Convert to datetime first.  Returns
-                # datetime.datetime (or None); we convert the return
-                # back to date so the downstream pipeline (which uses
-                # date everywhere) keeps working unchanged.
+                #
+                # The library passes `default_value` straight through to
+                # JSON marshalling with no type coercion (verified by
+                # reading streamlit_shadcn_ui/py_components/date_picker
+                # .py source, v0.1.19). Both `date` and `datetime` blow
+                # up the marshaller because neither is natively JSON-
+                # serializable. So we send an ISO date string and parse
+                # whatever the JS side sends back via _coerce_to_date.
+                #
+                # Also: the library uses init_session(default_value=...)
+                # to seed component state, which writes only once per
+                # session_state key. If a stale date object was stored
+                # under the old "analytics_date_picker_v*" key from a
+                # previous deploy, the library would keep reading that
+                # stale object and never pick up the new ISO string. We
+                # use a fresh "_dp_iso_v" prefix so the picker
+                # initialises clean slots.
                 _picker_key = (
-                    f"analytics_date_picker_v"
+                    f"analytics_date_dp_iso_v"
                     f"{ss.get('_analytics_date_version', 0)}"
-                )
-                _default_dt = datetime.combine(
-                    ss["analytics_date"], datetime.min.time()
                 )
                 _picked = ui.date_picker(
                     key=_picker_key,
                     mode="single",
                     label="",
-                    default_value=_default_dt,
+                    default_value=ss["analytics_date"].isoformat(),
                 )
-                if _picked is not None:
-                    _picked_d = (
-                        _picked.date() if hasattr(_picked, "date")
-                        else _picked
-                    )
-                    if (
-                        isinstance(_picked_d, date)
-                        and _min_d <= _picked_d <= _fc_max_d
-                    ):
-                        ss["analytics_date"] = _picked_d
+                _picked_d = _coerce_to_date(_picked)
+                if (
+                    _picked_d is not None
+                    and _min_d <= _picked_d <= _fc_max_d
+                ):
+                    ss["analytics_date"] = _picked_d
 
                 selected_date = ss["analytics_date"]
                 _is_forecast_date = selected_date > _max_d
