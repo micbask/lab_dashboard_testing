@@ -713,10 +713,16 @@ def render_header(map_type: str, date_str: str) -> None:
 
     cols = st.columns([0.72, 0.28], vertical_alignment="top")
     with cols[0]:
+        # Prefix the subtitle with the active-dashboard name so the
+        # banner reads "Analytics · Keck Core" / "Pre-Analytics · Keck"
+        # / etc. — matches the new login-page subtitle pattern.
+        _prefix = (
+            "Pre-Analytics" if _active == "pre_analytics" else "Analytics"
+        )
         st.markdown(
             f'''<div class="keck-header-title">
                   <h1>Laboratory Productivity Dashboard</h1>
-                  <p class="subtitle">{map_type}</p>
+                  <p class="subtitle">{_prefix} · {map_type}</p>
                 </div>''',
             unsafe_allow_html=True,
         )
