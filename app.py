@@ -110,104 +110,192 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
     _login_slot = st.empty()
     _auth_now = False
     with _login_slot.container():
-        # Hide Streamlit's "Press Enter to submit" hint inside the login
-        # form (it overlaps the password show/hide eye icon) and the
-        # "Press Enter to apply" InputInstructions chip.
+        # ── Login-page CSS ───────────────────────────────────────────────────
+        # The form wrapper itself IS the card. Streamlit's text input and
+        # submit button get re-styled inside the card via overrides keyed
+        # to #login-overlay so they don't leak into the rest of the app.
         st.markdown(
             """
             <style>
+              /* Hide Streamlit's form-input hints (e.g. "Press Enter to
+                 submit") that otherwise overlap the password show/hide
+                 eye icon — both site-wide on the login page (no other
+                 forms render here) and any nested form-instruction chip. */
               #login-overlay [data-testid="InputInstructions"],
-              #login-overlay div[data-testid="stFormSubmitButton"] + div,
-              #login-overlay [data-testid="stFormHint"] {
+              #login-overlay [data-testid="stFormHint"],
+              [data-testid="InputInstructions"] {
                   display: none !important;
+              }
+
+              /* The form wrapper IS the card. */
+              html body #login-overlay [data-testid="stForm"] {
+                  width: 360px !important;
+                  max-width: 360px !important;
+                  padding: 40px 36px !important;
+                  background: #ffffff !important;
+                  border: 0.5px solid rgba(0, 0, 0, 0.08) !important;
+                  border-radius: 12px !important;
+                  box-sizing: border-box !important;
+                  margin: 0 auto !important;
+                  box-shadow: none !important;
+              }
+
+              /* Password input — override the global stTextInput rules. */
+              html body #login-overlay [data-testid="stForm"]
+                  [data-testid="stTextInput"] input {
+                  width: 100% !important;
+                  padding: 11px 14px !important;
+                  font-size: 14px !important;
+                  font-weight: 400 !important;
+                  border: 1px solid rgba(0, 0, 0, 0.14) !important;
+                  border-radius: 8px !important;
+                  background: #ffffff !important;
+                  color: #1a1a1a !important;
+                  box-sizing: border-box !important;
+                  outline: none !important;
+                  box-shadow: none !important;
+                  font-family: 'Inter', system-ui, sans-serif !important;
+              }
+              html body #login-overlay [data-testid="stForm"]
+                  [data-testid="stTextInput"] input:focus {
+                  border-color: #790A26 !important;
+                  outline: none !important;
+                  box-shadow: 0 0 0 2px rgba(121, 10, 38, 0.12) !important;
+              }
+              html body #login-overlay [data-testid="stForm"]
+                  [data-testid="stTextInput"] {
+                  margin-bottom: 12px !important;
+              }
+
+              /* Sign-in button — override the maroon site-wide button rule
+                 with the login-page primary color (#790A26) and the
+                 spec'd geometry. */
+              html body #login-overlay [data-testid="stForm"] .stButton > button,
+              html body #login-overlay [data-testid="stForm"]
+                  [data-testid="stFormSubmitButton"] button,
+              html body #login-overlay [data-testid="stForm"]
+                  [data-testid="stBaseButton-primaryFormSubmit"],
+              html body #login-overlay [data-testid="stForm"]
+                  button[kind="primaryFormSubmit"] {
+                  width: 100% !important;
+                  padding: 11px 16px !important;
+                  font-size: 14px !important;
+                  font-weight: 500 !important;
+                  color: #ffffff !important;
+                  background: #790A26 !important;
+                  background-color: #790A26 !important;
+                  border: none !important;
+                  border-radius: 8px !important;
+                  cursor: pointer !important;
+                  text-shadow: none !important;
+                  box-shadow: none !important;
+                  font-family: 'Inter', system-ui, sans-serif !important;
+              }
+              html body #login-overlay [data-testid="stForm"]
+                  [data-testid="stFormSubmitButton"] button:hover,
+              html body #login-overlay [data-testid="stForm"]
+                  [data-testid="stBaseButton-primaryFormSubmit"]:hover {
+                  background: #5e0820 !important;
+                  background-color: #5e0820 !important;
+                  border: none !important;
+              }
+              html body #login-overlay [data-testid="stForm"]
+                  [data-testid="stFormSubmitButton"] button p,
+              html body #login-overlay [data-testid="stForm"]
+                  [data-testid="stFormSubmitButton"] button div {
+                  color: #ffffff !important;
+                  font-weight: 500 !important;
+                  font-size: 14px !important;
+                  text-shadow: none !important;
+              }
+
+              /* Bar-chart icon + title + subtitle inside the card. */
+              .login-icon-block { text-align: center; }
+              .login-icon-block svg {
+                  display: block;
+                  margin: 0 auto 20px auto;
+                  width: 34px;
+                  height: 34px;
+              }
+              .login-icon-block .login-title {
+                  font-size: 19px;
+                  font-weight: 500;
+                  color: #1a1a1a;
+                  text-align: center;
+                  line-height: 1.3;
+                  margin: 0 0 6px 0;
+                  font-family: 'Inter', system-ui, sans-serif;
+              }
+              .login-icon-block .login-subtitle {
+                  font-size: 11px;
+                  font-weight: 500;
+                  color: #C9941A;
+                  letter-spacing: 0.12em;
+                  text-align: center;
+                  margin: 0 0 32px 0;
+                  font-family: 'Inter', system-ui, sans-serif;
+              }
+
+              /* Footer underneath the card. */
+              .login-footer {
+                  text-align: center;
+                  font-size: 12px;
+                  color: rgba(0, 0, 0, 0.45);
+                  margin-top: 32px;
+                  font-family: 'Inter', system-ui, sans-serif;
               }
             </style>
             """,
             unsafe_allow_html=True,
         )
-        st.markdown('<div id="login-overlay">', unsafe_allow_html=True)
-        st.markdown('<div style="height: 15vh; min-height: 48px;"></div>',
-                    unsafe_allow_html=True)
+
+        # Push the card down a bit from the top of the viewport so it
+        # appears centered without using flex (which would conflict
+        # with Streamlit's default block layout).
+        st.markdown(
+            '<div id="login-overlay" style="padding-top: 10vh;">',
+            unsafe_allow_html=True,
+        )
         _, col, _ = st.columns([1, 0.9, 1])
         with col:
-            # Banner matches the in-app banner: same maroon gradient,
-            # padding, border-radius, shadow, and gold subtitle styling.
-            # CLINICAL LAB pill removed; title now reads
-            # "Laboratory Productivity Dashboard"; subtitle
-            # "Analytics · Pre-Analytics" advertises both views.
-            st.markdown(
-                """
-                <div style="
-                    background: linear-gradient(135deg, #6F1828 0%, #521322 100%);
-                    padding: 1.2rem 1.8rem;
-                    border-radius: 10px 10px 0 0;
-                    text-align: center;
-                    box-shadow: 0 2px 8px rgba(111,24,40,0.25);
-                ">
-                    <h1 style="
-                        color: #ffffff;
-                        font-family: 'Inter', system-ui, sans-serif;
-                        font-size: 1.5rem;
-                        font-weight: 700;
-                        letter-spacing: 0.2px;
-                        margin: 0;
-                        padding: 0;
-                        line-height: 1.2;
-                    ">Laboratory Productivity Dashboard</h1>
-                    <p style="
-                        color: #EDC153;
-                        font-family: 'Inter', system-ui, sans-serif;
-                        font-size: 0.87rem;
-                        font-weight: 500;
-                        margin: 0.2rem 0 0 0;
-                        padding: 0;
-                        opacity: 0.95;
-                        line-height: 1.2;
-                    ">Analytics &nbsp;·&nbsp; Pre-Analytics</p>
-                </div>
-                <div style="
-                    background: #ffffff;
-                    padding: 1.8rem 2.4rem 2.2rem 2.4rem;
-                    border-radius: 0 0 12px 12px;
-                    border: 1px solid #dde1e7;
-                    border-top: none;
-                    box-shadow: 0 8px 32px rgba(0,0,0,0.12);
-                ">
-                    <p style="
-                        color: #475569;
-                        font-size: 0.82rem;
-                        margin: 0 0 1.2rem 0;
-                        font-family: 'Inter', system-ui, sans-serif;
-                    ">Enter your access password to continue.</p>
-                """,
-                unsafe_allow_html=True,
-            )
             with st.form("login_form", enter_to_submit=True):
+                st.markdown(
+                    """
+                    <div class="login-icon-block">
+                      <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+                        <rect x="10" y="40" width="9" height="16" fill="#790A26"/>
+                        <rect x="22" y="30" width="9" height="26" fill="#790A26"/>
+                        <rect x="34" y="20" width="9" height="36" fill="#790A26"/>
+                        <rect x="46" y="10" width="9" height="46" fill="#790A26"/>
+                      </svg>
+                      <div class="login-title">Laboratory Productivity Dashboard</div>
+                      <div class="login-subtitle">ANALYTICS &nbsp;·&nbsp; PRE-ANALYTICS</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
                 password = st.text_input(
                     "Password", type="password",
                     label_visibility="collapsed",
                     placeholder="Password",
                 )
-                submitted = st.form_submit_button("Sign In", width="stretch")
+                submitted = st.form_submit_button("Sign in", width="stretch")
                 if submitted:
                     if password == st.secrets.get("app_password", ""):
                         st.session_state["app_authenticated"] = True
                         _auth_now = True
                     else:
                         st.error("Incorrect password. Please try again.")
+
+            # Footer beneath the card (stays inside the centered column).
             st.markdown(
-                f"""
-                </div>
-                <div style="text-align: center; font-size: 12px;
-                            color: rgba(0, 0, 0, 0.4);
-                            padding: 32px 0 16px 0;
-                            font-family: 'Inter', system-ui, sans-serif;">
-                    © {datetime.now().year} Laboratory Productivity Dashboard.
-                    All rights reserved.
-                </div>
-                """,
+                f'<div class="login-footer">'
+                f'© {datetime.now().year} Laboratory Productivity Dashboard. '
+                f'All rights reserved.'
+                f'</div>',
                 unsafe_allow_html=True,
             )
+
         st.markdown('</div>', unsafe_allow_html=True)
     if _auth_now:
         _login_slot.empty()  # instantly clear the overlay before rerun
