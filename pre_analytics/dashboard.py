@@ -13,14 +13,20 @@ from pre_analytics.data import load_phlebotomy_staff, load_draw_data, build_draw
 def render_sidebar(ss) -> dict:
     """Render pre-analytics sidebar widgets. Returns params dict for render()."""
     with st.sidebar:
-        st.markdown("### Location")
+        st.markdown(
+            '<div class="sidebar-section-label">LOCATION</div>',
+            unsafe_allow_html=True,
+        )
         pa_location = st.radio(
             "Location", ["Keck", "Norris", "HC3"],
             horizontal=True, label_visibility="collapsed",
             key="pa_location_radio",
         )
 
-        st.markdown("### View")
+        st.markdown(
+            '<div class="sidebar-section-label">VIEW</div>',
+            unsafe_allow_html=True,
+        )
         pa_view = st.radio(
             "View", ["Daily", "Monthly"],
             horizontal=True, label_visibility="collapsed",
@@ -45,7 +51,10 @@ def render_sidebar(ss) -> dict:
                 pass
 
         if pa_view == "Daily":
-            st.markdown("### Date")
+            st.markdown(
+                '<div class="sidebar-section-label">DATE</div>',
+                unsafe_allow_html=True,
+            )
             _pa_date_default = ss.get("pa_date", _pa_max_d)
             if isinstance(_pa_date_default, str):
                 try:
@@ -75,7 +84,10 @@ def render_sidebar(ss) -> dict:
                 )
         else:
             import calendar as _cal3
-            st.markdown("### Month")
+            st.markdown(
+                '<div class="sidebar-section-label">MONTH</div>',
+                unsafe_allow_html=True,
+            )
             _pa_avail_months = []
             _d = date(_pa_min_d.year, _pa_min_d.month, 1)
             _end_m = date(_pa_max_d.year, _pa_max_d.month, 1)
@@ -100,7 +112,10 @@ def render_sidebar(ss) -> dict:
             ss["pa_date"] = _pa_date_str
 
         # ── Hour Range  (display-only filter; mirrors analytics styling) ──
-        st.markdown("### Hour Range")
+        st.markdown(
+            '<div class="sidebar-section-label">HOUR RANGE</div>',
+            unsafe_allow_html=True,
+        )
 
         def _pa_fmt_h(h: int) -> str:
             hr12 = 12 if h % 12 == 0 else h % 12
