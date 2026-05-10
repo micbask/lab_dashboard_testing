@@ -168,7 +168,7 @@ _TAT_FACILITY_PREFIX = {
 # Stat columns reported per priority group inside `build_tat_table`'s
 # MultiIndex output. The order here is the order they appear in the
 # rendered table.
-_TAT_STAT_COLS = ["n", "Mean", "Min", "Max", "% <1h"]
+_TAT_STAT_COLS = ["n", "Mean", "% <1h"]
 
 
 @st.cache_data(show_spinner=False, ttl=300)
@@ -296,21 +296,21 @@ def build_tat_table(
     MultiIndex columns.
 
     Three groups are computed for each procedure:
-      • Routine  — rows where Collection Priority is 'RT' or 'TS'
-                   (TS = Time Study, treated as routine)
-      • Stat     — rows where Collection Priority == 'ST'
+      • Routine  — rows where Collection Priority == 'RT'
+      • Stat     — rows where Collection Priority is 'ST' or 'TS'
+                   (TS = Time Study, treated as stat / urgent)
       • Combined — every row for that procedure regardless of priority
 
-    Per group the function reports n, Mean, Min, Max, and % <1h
-    (percentage of samples with TAT_minutes < 60). Procedures that have
-    no rows in a given group get None for every stat column in that
-    group; Phase-2 rendering displays those as "—".
+    Per group the function reports n, Mean, and % <1h (percentage of
+    samples with TAT_minutes < 60). Procedures that have no rows in a
+    given group get None for every stat column in that group; rendering
+    displays those as "—".
 
     The returned DataFrame has one row per procedure in
     `selected_procedures` and a pandas MultiIndex column structure:
 
         Level 0:  ['Procedure',  'Routine', 'Stat', 'Combined']
-        Level 1:  ['Procedure', then 'n','Mean','Min','Max','% <1h' x 3]
+        Level 1:  ['Procedure', then 'n','Mean','% <1h' x 3]
 
     Rows are sorted by Combined n descending; procedures with no
     Combined samples sort to the bottom.
@@ -326,15 +326,13 @@ def build_tat_table(
         return pd.DataFrame(columns=columns)
 
     def _group_stats(group_df: pd.DataFrame) -> list:
-        """Return [n, Mean, Min, Max, % <1h] or 5 Nones for an empty group."""
+        """Return [n, Mean, % <1h] or 3 Nones for an empty group."""
         if group_df.empty:
-            return [None, None, None, None, None]
+            return [None, None, None]
         tats = group_df["TAT_minutes"].astype(float)
         return [
             int(len(tats)),
             float(tats.mean()),
-            float(tats.min()),
-            float(tats.max()),
             float((tats < 60).mean() * 100.0),
         ]
 
@@ -343,8 +341,8 @@ def build_tat_table(
     rows = []
     for proc in selected_procedures:
         proc_rows = sel[sel["Order Procedure"] == proc]
-        rt   = proc_rows[proc_rows["Collection Priority"].isin(["RT", "TS"])]
-        stat = proc_rows[proc_rows["Collection Priority"] == "ST"]
+        rt   = proc_rows[proc_rows["Collection Priority"] == "RT"]
+        stat = proc_rows[proc_rows["Collection Priority"].isin(["ST", "TS"])]
         comb = proc_rows
         rows.append(
             [proc] + _group_stats(rt) + _group_stats(stat) + _group_stats(comb)
