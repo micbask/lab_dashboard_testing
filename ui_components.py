@@ -539,21 +539,69 @@ def render_header(map_type: str, date_str: str) -> None:
     )
     _active_key = "nav_analytics" if _active == "analytics" else "nav_pre_analytics"
 
+    # Build the banner-scoped selector once for legibility.
+    _banner_sel = (
+        'div[data-testid="stHorizontalBlock"]'
+        ':has(.keck-header-title):has(.st-key-nav_analytics)'
+    )
+    _pill_sel = (
+        'div[data-testid="stHorizontalBlock"]'
+        ':has(.st-key-nav_analytics):not(:has(.keck-header-title))'
+    )
+
     st.markdown(f"""
     <style>
-      /* Outer maroon banner — also the positioning context for the date,
-         which is absolutely positioned at the bottom-right corner. */
-      div[data-testid="stHorizontalBlock"]:has(.keck-header-title):has(.st-key-nav_analytics) {{
+      /* ── Outer maroon banner ── positioning context for the date. */
+      {_banner_sel} {{
           position: relative !important;
           background: linear-gradient(135deg, #6F1828 0%, #521322 100%);
           padding: 0.85rem 1.8rem !important;
           border-radius: 10px !important;
           margin-bottom: 1.4rem !important;
           box-shadow: 0 2px 8px rgba(111,24,40,0.25);
+          align-items: stretch !important;
       }}
-      /* Inner pill container — nav buttons row, pinned to the right edge
-         of its column so the tab bar lives in the top-right corner. */
-      div[data-testid="stHorizontalBlock"]:has(.st-key-nav_analytics):not(:has(.keck-header-title)) {{
+      /* Force every wrapper between the banner and the date back to
+         static positioning so the date's `position: absolute` actually
+         anchors to the banner (Streamlit puts position: relative on a
+         number of intermediate stColumn / stVerticalBlock wrappers). */
+      {_banner_sel} [data-testid="stColumn"],
+      {_banner_sel} [data-testid="stVerticalBlock"],
+      {_banner_sel} [data-testid="stElementContainer"],
+      {_banner_sel} [data-testid="stMarkdownContainer"],
+      {_banner_sel} [data-testid="element-container"] {{
+          position: static !important;
+      }}
+
+      /* ── Title typography ── high-specificity to beat Streamlit's
+            default <h1> / <p> margins which otherwise space the
+            subtitle far below the title. */
+      html body {_banner_sel} .keck-header-title,
+      html body {_banner_sel} .keck-header-title * {{
+          line-height: 1.2 !important;
+      }}
+      html body {_banner_sel} .keck-header-title h1 {{
+          color: #ffffff !important;
+          font-size: 1.5rem !important;
+          font-weight: 700 !important;
+          letter-spacing: 0.2px !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          line-height: 1.2 !important;
+      }}
+      html body {_banner_sel} .keck-header-title p,
+      html body {_banner_sel} .keck-header-title p.subtitle {{
+          color: #EDC153 !important;
+          font-size: 0.87rem !important;
+          font-weight: 500 !important;
+          margin: 0.2rem 0 0 0 !important;
+          padding: 0 !important;
+          opacity: 0.95 !important;
+          line-height: 1.2 !important;
+      }}
+
+      /* ── Inner pill container ── pinned right inside its column. */
+      {_pill_sel} {{
           display: flex !important;
           width: fit-content !important;
           max-width: fit-content !important;
@@ -563,80 +611,87 @@ def render_header(map_type: str, date_str: str) -> None:
           padding: 3px !important;
           gap: 2px !important;
       }}
-      /* Columns inside the pill collapse to button width. */
-      div[data-testid="stHorizontalBlock"]:has(.st-key-nav_analytics):not(:has(.keck-header-title)) > div {{
+      {_pill_sel} > div {{
           flex: 0 0 auto !important;
           width: auto !important;
           min-width: 0 !important;
       }}
-      /* Nav buttons — extra-specific selector beats the global maroon
-         button rule (same specificity but later in the cascade isn't
-         enough when Streamlit re-applies inline styles). */
-      html body div[data-testid="stHorizontalBlock"]:has(.st-key-nav_analytics):not(:has(.keck-header-title)) .stButton > button,
-      html body .st-key-nav_analytics button,
-      html body .st-key-nav_pre_analytics button {{
+
+      /* ── Nav buttons ── target both the <button> and the inner <p>
+            (Streamlit puts the label inside a <p> in a markdown
+            container, which has its own font-size / color). */
+      html body {_pill_sel} button,
+      html body {_pill_sel} [data-testid="stBaseButton-secondary"],
+      html body {_pill_sel} .stButton > button {{
           background: transparent !important;
+          background-color: transparent !important;
           color: rgba(255,255,255,0.6) !important;
           border: none !important;
           border-radius: 5px !important;
           padding: 4px 14px !important;
-          font-weight: 700 !important;
-          font-size: 11px !important;
-          letter-spacing: 0.06em !important;
           box-shadow: none !important;
           min-width: 90px !important;
           min-height: 0 !important;
           height: auto !important;
-          line-height: 1.4 !important;
+          line-height: 1 !important;
           text-shadow: none !important;
           outline: none !important;
-          text-decoration: none !important;
       }}
-      /* Subtle hover on inactive only. */
-      html body .st-key-nav_analytics button:hover,
-      html body .st-key-nav_pre_analytics button:hover {{
+      html body {_pill_sel} button p,
+      html body {_pill_sel} button div {{
+          color: rgba(255,255,255,0.6) !important;
+          font-size: 11px !important;
+          font-weight: 700 !important;
+          letter-spacing: 0.06em !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          line-height: 1.4 !important;
+      }}
+
+      /* Hover on the whole pill, but only show effect on inactive. */
+      html body {_pill_sel} button:hover {{
           background: rgba(255,255,255,0.10) !important;
-          color: rgba(255,255,255,0.85) !important;
+          background-color: rgba(255,255,255,0.10) !important;
           border: none !important;
       }}
-      /* Kill focus ring. */
-      html body .st-key-nav_analytics button:focus,
-      html body .st-key-nav_analytics button:focus-visible,
-      html body .st-key-nav_pre_analytics button:focus,
-      html body .st-key-nav_pre_analytics button:focus-visible {{
+      html body {_pill_sel} button:hover p,
+      html body {_pill_sel} button:hover div {{
+          color: rgba(255,255,255,0.85) !important;
+      }}
+
+      /* Kill focus ring everywhere. */
+      html body {_pill_sel} button:focus,
+      html body {_pill_sel} button:focus-visible {{
           outline: none !important;
           box-shadow: none !important;
       }}
-      /* Active button — gold, white text. */
+
+      /* ── ACTIVE BUTTON ── gold pill, white bold text. Must come AFTER
+            the hover rule so the hover doesn't dim the active gold. */
+      html body {_pill_sel} .st-key-{_active_key} button,
+      html body {_pill_sel} .st-key-{_active_key} button:hover,
+      html body {_pill_sel} .st-key-{_active_key} button:focus,
       html body .st-key-{_active_key} button,
       html body .st-key-{_active_key} button:hover,
       html body .st-key-{_active_key} button:focus {{
           background: #F1AB1F !important;
-          color: white !important;
-          font-weight: 700 !important;
+          background-color: #F1AB1F !important;
+          color: #ffffff !important;
           border: none !important;
       }}
-      /* Title typography — matches main_test_2 production banner. */
-      .keck-header-title h1 {{
+      html body {_pill_sel} .st-key-{_active_key} button p,
+      html body {_pill_sel} .st-key-{_active_key} button div,
+      html body {_pill_sel} .st-key-{_active_key} button:hover p,
+      html body .st-key-{_active_key} button p,
+      html body .st-key-{_active_key} button div,
+      html body .st-key-{_active_key} button:hover p {{
           color: #ffffff !important;
-          font-size: 1.5rem !important;
           font-weight: 700 !important;
-          letter-spacing: 0.2px !important;
-          margin: 0 !important;
-          line-height: 1.15 !important;
       }}
-      .keck-header-title .subtitle {{
-          color: #EDC153 !important;
-          font-size: 0.87rem !important;
-          margin: 0.25rem 0 0 !important;
-          opacity: 0.95 !important;
-          font-weight: 500 !important;
-      }}
-      /* Date — absolutely positioned at the banner's bottom-right.
-         With banner padding 0.85rem, this lands the date on the same
-         horizontal line as the gold subtitle in the left column,
-         independent of Streamlit's vertical-block gap behavior. */
-      .keck-header-date {{
+
+      /* ── Date ── absolutely positioned at the banner's bottom-right
+            corner, on the same horizontal line as the gold subtitle. */
+      html body {_banner_sel} .keck-header-date {{
           position: absolute !important;
           right: 1.8rem !important;
           bottom: 0.85rem !important;
@@ -645,7 +700,9 @@ def render_header(map_type: str, date_str: str) -> None:
           font-weight: 500 !important;
           text-align: right !important;
           margin: 0 !important;
+          padding: 0 !important;
           line-height: 1 !important;
+          z-index: 5 !important;
       }}
     </style>
     """, unsafe_allow_html=True)
