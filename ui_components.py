@@ -140,6 +140,32 @@ html body section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] .
     font-size: 0.82rem !important;
     font-weight: 500 !important;
 }
+/* Manual section labels. Rendered via st.markdown('<div
+   class="sidebar-section-label">…</div>') from the analytics +
+   pre-analytics sidebars. Manual labels sidestep Streamlit's
+   high-specificity heading CSS so the subdued look stays consistent. */
+html body section[data-testid="stSidebar"] .sidebar-section-label,
+html body section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] .sidebar-section-label {
+    font-family: 'Inter', system-ui, sans-serif !important;
+    font-size: 11px !important;
+    font-weight: 500 !important;
+    letter-spacing: 0.08em !important;
+    text-transform: uppercase !important;
+    color: rgba(241, 171, 31, 0.65) !important;
+    margin-top: 20px !important;
+    margin-bottom: 8px !important;
+    line-height: 1.4 !important;
+    padding: 0 !important;
+}
+/* First label has no top margin so it sits flush under the sidebar
+   top padding. Each label is rendered in its own stElementContainer,
+   so :first-of-type on the class itself wouldn't disambiguate — key
+   off the first stElementContainer of the sidebar vertical block. */
+html body section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]
+    > [data-testid="stElementContainer"]:first-child
+    .sidebar-section-label {
+    margin-top: 0 !important;
+}
 [data-testid="stSidebar"] [data-testid="stCaptionContainer"],
 [data-testid="stSidebar"] small,
 [data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
@@ -208,6 +234,11 @@ html body [data-testid="stBaseButton-primary"]:disabled {
 /* ═══════════════════════════════════════════════════════
    SELECTBOXES / DROPDOWNS
    ═══════════════════════════════════════════════════════ */
+/* Default selectbox trigger (used in the main panel: TAT proc filter
+   pop-up, drill-down procedure/hour pickers, admin date-range editor
+   inside the Data Management expander). Maroon fill is preserved
+   here because these triggers sit on the WHITE main-area background;
+   sidebar selectboxes override this to a subtle dark fill below. */
 [data-testid="stSelectbox"] > div > div,
 [data-testid="stSelectbox"] [role="combobox"],
 [data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child {
@@ -229,18 +260,65 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     fill: #ffffff !important;
     color: #ffffff !important;
 }
-[role="listbox"] {
-    background-color: #1a1a1a !important;
-    border: 1px solid #3a3a3a !important;
-    border-radius: 5px !important;
+
+/* Sidebar selectbox trigger — subtle dark fill on dark sidebar. Used
+   by the Monthly month picker on both analytics + pre-analytics. */
+html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] > div > div,
+html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] [role="combobox"],
+html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child {
+    background: rgba(255, 255, 255, 0.05) !important;
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    color: #ffffff !important;
+    border: 1px solid rgba(255, 255, 255, 0.15) !important;
+    border-radius: 6px !important;
+    padding: 8px 12px !important;
 }
+html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child:focus-within,
+html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child[aria-expanded="true"] {
+    background: rgba(255, 255, 255, 0.05) !important;
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    border-color: #F1AB1F !important;
+}
+html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] svg {
+    fill: rgba(255, 255, 255, 0.7) !important;
+    color: rgba(255, 255, 255, 0.7) !important;
+}
+
+/* Dropdown panel — renders in a baseweb portal/popover so the
+   selectors are global. Gold border, dark fill, hover gold tint,
+   currently-selected item maroon @ 40% (visually distinct from hover). */
+[data-baseweb="popover"] [data-baseweb="menu"],
+[data-baseweb="popover"] [role="listbox"],
+[role="listbox"] {
+    background: #1a1a1a !important;
+    background-color: #1a1a1a !important;
+    border: 1px solid rgba(241, 171, 31, 0.3) !important;
+    border-radius: 8px !important;
+    max-height: 240px !important;
+    overflow-y: auto !important;
+    padding: 4px !important;
+}
+[data-baseweb="popover"] [data-baseweb="menu"] [role="option"],
+[data-baseweb="popover"] [role="listbox"] [role="option"],
 [role="option"] {
     color: #e8e8e8 !important;
-    background-color: #1a1a1a !important;
+    background: transparent !important;
+    background-color: transparent !important;
+    padding: 8px 12px !important;
+    border-radius: 4px !important;
 }
-[role="option"]:hover,
+[data-baseweb="popover"] [data-baseweb="menu"] [role="option"]:hover,
+[data-baseweb="popover"] [role="listbox"] [role="option"]:hover,
+[role="option"]:hover {
+    background: rgba(241, 171, 31, 0.15) !important;
+    background-color: rgba(241, 171, 31, 0.15) !important;
+    color: #ffffff !important;
+}
+[data-baseweb="popover"] [data-baseweb="menu"] [role="option"][aria-selected="true"],
+[data-baseweb="popover"] [role="listbox"] [role="option"][aria-selected="true"],
 [role="option"][aria-selected="true"] {
-    background-color: #6F1828 !important;
+    background: rgba(121, 10, 38, 0.4) !important;
+    background-color: rgba(121, 10, 38, 0.4) !important;
     color: #ffffff !important;
 }
 
@@ -302,68 +380,107 @@ html body section[data-testid="stSidebar"] [data-testid="stDateInput"] input:foc
 }
 
 /* ═══════════════════════════════════════════════════════
-   DATE PICKER POPUP
+   DATE PICKER POPUP  — dark theme to match the sidebar.
+   The calendar renders inside a baseweb portal/popover so the
+   selectors are global; only the dark theme is applied here.
    ═══════════════════════════════════════════════════════ */
-[data-baseweb="calendar"],
-[data-baseweb="calendarContainer"] {
-    background-color: #ffffff !important;
-    color: #0f172a !important;
+[data-baseweb="popover"] [data-baseweb="calendar"],
+[data-baseweb="calendar"] {
+    background: #1a1a1a !important;
+    background-color: #1a1a1a !important;
+    border: 1px solid rgba(241, 171, 31, 0.3) !important;
+    border-radius: 8px !important;
+    color: #ffffff !important;
+    padding: 8px !important;
 }
-[data-baseweb="calendar"] div,
-[data-baseweb="calendar"] span {
-    background-color: #ffffff !important;
-    color: #0f172a !important;
+[data-baseweb="popover"] [data-baseweb="calendar"] *,
+[data-baseweb="calendar"] * {
+    color: #ffffff !important;
+    background-color: transparent !important;
 }
+[data-baseweb="popover"] [data-baseweb="calendar"] button,
+[data-baseweb="calendar"] button {
+    color: #ffffff !important;
+    background-color: transparent !important;
+    border: none !important;
+}
+[data-baseweb="popover"] [data-baseweb="calendar"] button:hover,
+[data-baseweb="calendar"] button:hover {
+    background: rgba(241, 171, 31, 0.15) !important;
+    background-color: rgba(241, 171, 31, 0.15) !important;
+    color: #ffffff !important;
+}
+[data-baseweb="popover"] [data-baseweb="calendar"] svg,
+[data-baseweb="calendar"] svg {
+    fill: #ffffff !important;
+    color: #ffffff !important;
+}
+/* Month / year select inside the calendar header. */
+[data-baseweb="popover"] [data-baseweb="calendar"] [data-baseweb="select"],
+[data-baseweb="calendar"] [data-baseweb="select"] {
+    background: rgba(255, 255, 255, 0.05) !important;
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(255, 255, 255, 0.15) !important;
+    border-radius: 4px !important;
+}
+[data-baseweb="popover"] [data-baseweb="calendar"] [data-baseweb="select"] > div:first-child,
+[data-baseweb="popover"] [data-baseweb="calendar"] [data-baseweb="select"] [role="combobox"],
+[data-baseweb="popover"] [data-baseweb="calendar"] [data-baseweb="select"] [data-baseweb="input"],
 [data-baseweb="calendar"] [data-baseweb="select"] > div:first-child,
 [data-baseweb="calendar"] [data-baseweb="select"] [role="combobox"],
 [data-baseweb="calendar"] [data-baseweb="select"] [data-baseweb="input"] {
-    background-color: #f1f5f9 !important;
-    color: #0f172a !important;
-    border: 1px solid #cbd5e1 !important;
+    background: rgba(255, 255, 255, 0.05) !important;
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    color: #ffffff !important;
+    border: none !important;
     border-radius: 4px !important;
 }
+[data-baseweb="popover"] [data-baseweb="calendar"] [data-baseweb="select"] svg,
 [data-baseweb="calendar"] [data-baseweb="select"] svg {
-    fill: #0f172a !important;
-    color: #0f172a !important;
+    fill: #ffffff !important;
+    color: #ffffff !important;
 }
-[data-baseweb="calendar"] button {
-    color: #0f172a !important;
-    background-color: transparent !important;
-}
-[data-baseweb="calendar"] button:hover {
-    background-color: #f0f0f0 !important;
-}
-[data-baseweb="calendar"] svg {
-    fill: #0f172a !important;
-    color: #0f172a !important;
-}
+/* Weekday header letters above the date grid. */
+[data-baseweb="popover"] [data-baseweb="calendar"] [data-testid="calendar-day-label"],
+[data-baseweb="popover"] [data-baseweb="calendar"] abbr,
 [data-baseweb="calendar"] [data-testid="calendar-day-label"],
 [data-baseweb="calendar"] abbr {
-    color: #64748b !important;
-    background-color: #ffffff !important;
+    color: rgba(255, 255, 255, 0.55) !important;
+    background-color: transparent !important;
+    text-decoration: none !important;
 }
+[data-baseweb="popover"] [data-baseweb="calendar"] [role="gridcell"] button,
+[data-baseweb="popover"] [data-baseweb="calendar"] [data-testid="calendar-day"],
 [data-baseweb="calendar"] [role="gridcell"] button,
 [data-baseweb="calendar"] [data-testid="calendar-day"] {
-    color: #0f172a !important;
+    color: #ffffff !important;
     background-color: transparent !important;
 }
+/* Selected date — USC cardinal (#790A26). */
+[data-baseweb="popover"] [data-baseweb="calendar"] [aria-selected="true"] button,
+[data-baseweb="popover"] [data-baseweb="calendar"] [data-selected="true"],
+[data-baseweb="popover"] [data-baseweb="calendar"] [aria-selected="true"],
 [data-baseweb="calendar"] [aria-selected="true"] button,
 [data-baseweb="calendar"] [data-selected="true"] {
-    background-color: #6F1828 !important;
+    background: #790A26 !important;
+    background-color: #790A26 !important;
     color: #ffffff !important;
-    border-radius: 50% !important;
+    border-radius: 4px !important;
 }
-[data-baseweb="calendar"] [aria-selected="true"] div,
-[data-baseweb="calendar"] [aria-selected="true"] span {
+[data-baseweb="popover"] [data-baseweb="calendar"] [aria-selected="true"] *,
+[data-baseweb="calendar"] [aria-selected="true"] * {
     background-color: transparent !important;
     color: #ffffff !important;
 }
+/* Today (unselected) — gold outline ring. */
+[data-baseweb="popover"] [data-baseweb="calendar"] [data-today="true"] button,
 [data-baseweb="calendar"] [data-today="true"] button {
-    border: 2px solid #6F1828 !important;
-    border-radius: 50% !important;
+    border: 1px solid rgba(241, 171, 31, 0.6) !important;
+    border-radius: 4px !important;
 }
+[data-baseweb="popover"] [data-baseweb="calendar"] [aria-disabled="true"] button,
 [data-baseweb="calendar"] [aria-disabled="true"] button {
-    color: #cccccc !important;
+    color: rgba(255, 255, 255, 0.25) !important;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -392,40 +509,65 @@ html body section[data-testid="stSidebar"] [data-testid="stSlider"] div[class*="
 /* ═══════════════════════════════════════════════════════
    PREV / NEXT DATE NAV BUTTONS
    ═══════════════════════════════════════════════════════
-   Subtle outlined buttons (not primary CTAs). Targets the
-   keyed st.button wrappers analytics/dashboard.py emits as
-   nav_prev_date / nav_next_date — the .st-key-* class lives
-   on the widget-wrapping container.  Specificity must beat
-   the global `html body .stButton > button` rule and the
-   sidebar-button override directly above. */
+   Compact arrow-only icon buttons (← and →). 44px wide,
+   transparent fill, subtle white outline. Functionality
+   stays identical — only the visual treatment changes.
+   The widget-wrapping column gets a tight min-width too so
+   Streamlit's column gap roughly delivers the spec'd 8px
+   between the two buttons. */
+html body [data-testid="stSidebar"] .st-key-nav_prev_date,
+html body [data-testid="stSidebar"] .st-key-nav_next_date {
+    width: 44px !important;
+    min-width: 0 !important;
+}
 html body [data-testid="stSidebar"] .st-key-nav_prev_date button,
 html body [data-testid="stSidebar"] .st-key-nav_next_date button,
 html body [data-testid="stSidebar"] .st-key-nav_prev_date .stButton > button,
 html body [data-testid="stSidebar"] .st-key-nav_next_date .stButton > button {
     background: transparent !important;
     background-color: transparent !important;
-    color: #ffffff !important;
+    color: rgba(255, 255, 255, 0.7) !important;
     border: 1px solid rgba(255, 255, 255, 0.12) !important;
-    font-size: 12px !important;
+    font-size: 16px !important;
     font-weight: 500 !important;
-    padding: 6px 14px !important;
+    padding: 6px 0 !important;
     border-radius: 6px !important;
+    width: 44px !important;
+    min-width: 44px !important;
+    max-width: 44px !important;
+    text-align: center !important;
+    line-height: 1 !important;
     box-shadow: none !important;
     text-shadow: none !important;
     min-height: 0 !important;
+}
+/* The inner <p> Streamlit wraps the button label in inherits font-
+   size from its own emotion class — re-apply 16px there too so the
+   arrow glyph is the right size. */
+html body [data-testid="stSidebar"] .st-key-nav_prev_date button p,
+html body [data-testid="stSidebar"] .st-key-nav_next_date button p,
+html body [data-testid="stSidebar"] .st-key-nav_prev_date button div,
+html body [data-testid="stSidebar"] .st-key-nav_next_date button div {
+    font-size: 16px !important;
+    font-weight: 500 !important;
+    color: inherit !important;
+    line-height: 1 !important;
+    margin: 0 !important;
+    padding: 0 !important;
 }
 html body [data-testid="stSidebar"] .st-key-nav_prev_date button:hover,
 html body [data-testid="stSidebar"] .st-key-nav_next_date button:hover {
     background: rgba(255, 255, 255, 0.05) !important;
     background-color: rgba(255, 255, 255, 0.05) !important;
-    border-color: rgba(255, 255, 255, 0.18) !important;
+    color: #ffffff !important;
+    border-color: rgba(255, 255, 255, 0.2) !important;
 }
 html body [data-testid="stSidebar"] .st-key-nav_prev_date button:disabled,
 html body [data-testid="stSidebar"] .st-key-nav_next_date button:disabled {
     background: transparent !important;
     background-color: transparent !important;
     border-color: rgba(255, 255, 255, 0.06) !important;
-    color: rgba(255, 255, 255, 0.3) !important;
+    color: rgba(255, 255, 255, 0.25) !important;
     opacity: 0.6 !important;
 }
 
