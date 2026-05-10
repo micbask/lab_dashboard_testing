@@ -499,6 +499,94 @@ html body [data-testid="stSidebar"] .st-key-nav_next_date button:disabled {
 }
 
 /* ═══════════════════════════════════════════════════════
+   SIDEBAR RADIO BUTTONS → TEXT TAB STYLE
+   ═══════════════════════════════════════════════════════
+   Replace the filled-circle radio visual with a clean
+   underlined-text-tab look: unselected options render in
+   muted white, the selected option gets gold text + a 2 px
+   gold underline. Underlying widget (st.radio) is unchanged
+   so all selection logic / session state keeps working.
+   :has(input:checked) handles the selected-state detection
+   without any JS — supported in modern browsers (Chrome
+   105+, Firefox 121+, Safari 15.4+), which covers the
+   Streamlit Cloud target.
+   Only applies inside the sidebar; main-area radios (if any
+   ever appear) keep their default styling. */
+
+/* Hide the baseweb radio circle indicator. Streamlit wraps
+   each option's <input> in a div that holds the visual dot
+   — that's the first <div> child of the <label>. The label's
+   text is the second <div> child, which stays visible. */
+html body section[data-testid="stSidebar"] [data-testid="stRadio"]
+    div[role="radiogroup"] label > div:first-child {
+    display: none !important;
+}
+
+/* Horizontal tab row — st.radio(horizontal=True) already does
+   this, but we force display:flex / gap explicitly so vertical
+   radio groups also pick up the tab look, and the spec'd 24 px
+   gap is exact regardless of Streamlit's emotion-cache defaults. */
+html body section[data-testid="stSidebar"] [data-testid="stRadio"]
+    div[role="radiogroup"] {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+    gap: 24px !important;
+    align-items: flex-end !important;
+}
+
+/* Each <label> becomes the tab. Padding gives the underline
+   somewhere to sit below the text without crowding it. */
+html body section[data-testid="stSidebar"] [data-testid="stRadio"]
+    div[role="radiogroup"] label {
+    color: rgba(255, 255, 255, 0.5) !important;
+    font-weight: 500 !important;
+    font-size: 14px !important;
+    padding: 4px 0 8px 0 !important;
+    border-bottom: 2px solid transparent !important;
+    cursor: pointer !important;
+    margin: 0 !important;
+    background: transparent !important;
+    background-color: transparent !important;
+    transition: color 0.15s ease, border-color 0.15s ease !important;
+}
+
+/* Inner text wrapper — Streamlit nests the option label in a
+   <div> (sometimes containing a <p>). Force both to inherit
+   the label's colour/weight so the tab gold/white flips on the
+   text itself, not just the bottom border. */
+html body section[data-testid="stSidebar"] [data-testid="stRadio"]
+    div[role="radiogroup"] label > div,
+html body section[data-testid="stSidebar"] [data-testid="stRadio"]
+    div[role="radiogroup"] label p,
+html body section[data-testid="stSidebar"] [data-testid="stRadio"]
+    div[role="radiogroup"] label span {
+    color: inherit !important;
+    font-weight: inherit !important;
+    font-size: inherit !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: transparent !important;
+    background-color: transparent !important;
+}
+
+/* Hover (unselected only — the :not() guard keeps the selected
+   tab's gold from dimming on hover). */
+html body section[data-testid="stSidebar"] [data-testid="stRadio"]
+    div[role="radiogroup"] label:hover:not(:has(input:checked)) {
+    color: rgba(255, 255, 255, 0.8) !important;
+    border-bottom-color: transparent !important;
+}
+
+/* Selected tab — gold text, gold 2 px underline. */
+html body section[data-testid="stSidebar"] [data-testid="stRadio"]
+    div[role="radiogroup"] label:has(input:checked) {
+    color: #F1AB1F !important;
+    border-bottom-color: #F1AB1F !important;
+    font-weight: 500 !important;
+}
+
+/* ═══════════════════════════════════════════════════════
    TEXT INPUTS
    ═══════════════════════════════════════════════════════ */
 [data-testid="stTextInput"] input,
