@@ -32,6 +32,7 @@ from ui_components import (
 from analytics.data import (
     build_pivot, build_monthly_pivot, build_weekday_pivot,
     load_monthly_avg_for_comparison,
+    load_tat_data, get_top_procedures_by_volume, build_tat_table,
 )
 
 
@@ -251,8 +252,31 @@ def _apply_in_lab_basis(filtered_df: pd.DataFrame) -> pd.DataFrame:
 def render_sidebar(ss) -> dict:
     """Render analytics sidebar widgets. Returns params dict for render()."""
     with st.sidebar:
+        # Time Basis is rendered FIRST so its return value can conditionally
+        # drive the Map Type widget below. Reading from the radio's return
+        # value (rather than session state) means the Map Type swap takes
+        # effect on the same rerun the user changes Time Basis.
+        st.markdown("### Time Basis")
+        time_basis = st.radio(
+            "Time Basis", ["Completed", "In-Lab", "TAT"],
+            horizontal=True, label_visibility="collapsed",
+        )
+
         st.markdown("### Map Type")
-        map_type = st.selectbox("Map type", MAP_TYPES, label_visibility="collapsed")
+        if time_basis == "TAT":
+            # TAT view operates on a Patient-Location facility, not a
+            # bench-resource map. Use a separate session-state key so the
+            # bench Map Type selection isn't clobbered when the user
+            # toggles back to Completed/In-Lab.
+            map_type = st.selectbox(
+                "Map type", ["Keck", "Norris"],
+                label_visibility="collapsed",
+                key="analytics_tat_facility",
+            )
+        else:
+            map_type = st.selectbox(
+                "Map type", MAP_TYPES, label_visibility="collapsed",
+            )
 
         if ss.last_map_type != map_type:
             ss.pop("date_picker", None)
@@ -261,12 +285,6 @@ def render_sidebar(ss) -> dict:
         st.markdown("### View")
         view_mode = st.radio(
             "View", ["Daily", "Monthly"],
-            horizontal=True, label_visibility="collapsed",
-        )
-
-        st.markdown("### Time Basis")
-        time_basis = st.radio(
-            "Time Basis", ["Completed", "In-Lab"],
             horizontal=True, label_visibility="collapsed",
         )
 
@@ -479,8 +497,15 @@ def render_sidebar(ss) -> dict:
         _is_forecast_date = False
 
         if _data_exists:
-            _current_resources = tuple(sorted(ss.resource_assignments[map_type]))
-            _current_excludes = tuple(sorted(EXCLUDE_PROCS))
+            if time_basis == "TAT":
+                # TAT view doesn't filter by bench resources or
+                # exclude any procedures — clearing these lets the
+                # downstream loader return all rows in the date range.
+                _current_resources = ()
+                _current_excludes = ()
+            else:
+                _current_resources = tuple(sorted(ss.resource_assignments[map_type]))
+                _current_excludes = tuple(sorted(EXCLUDE_PROCS))
             _idx_hash = get_index_hash() if storage_is_configured() else ""
 
             if storage_is_configured():
@@ -491,17 +516,24 @@ def render_sidebar(ss) -> dict:
                 _max_d = _local_df["complete_date"].max()
 
             if view_mode == "Daily":
-                _fc_data = load_forecasts(map_type)
-                forecast_dates: list = []
-                _fc_max_d = _max_d
-                if _fc_data:
-                    _fc_start_d = _max_d + timedelta(days=1)
-                    _fc_end_d   = _fc_data["forecast_end"]
-                    forecast_dates = [
-                        _fc_start_d + timedelta(days=_i)
-                        for _i in range((_fc_end_d - _fc_start_d).days + 1)
-                    ]
-                    _fc_max_d = _fc_end_d
+                if time_basis == "TAT":
+                    # No forecasts for TAT — keep the date picker bounded
+                    # by the actual data range only.
+                    _fc_data = None
+                    forecast_dates: list = []
+                    _fc_max_d = _max_d
+                else:
+                    _fc_data = load_forecasts(map_type)
+                    forecast_dates = []
+                    _fc_max_d = _max_d
+                    if _fc_data:
+                        _fc_start_d = _max_d + timedelta(days=1)
+                        _fc_end_d   = _fc_data["forecast_end"]
+                        forecast_dates = [
+                            _fc_start_d + timedelta(days=_i)
+                            for _i in range((_fc_end_d - _fc_start_d).days + 1)
+                        ]
+                        _fc_max_d = _fc_end_d
 
                 if "_pending_date" in ss:
                     _pending = ss.pop("_pending_date")
@@ -547,32 +579,33 @@ def render_sidebar(ss) -> dict:
                         ss["_pending_date"] = selected_date + timedelta(days=1)
                         st.rerun()
 
-                if _fc_data:
-                    _fc_trained_on = _fc_data.get("last_data_date")
-                    if _fc_trained_on is not None and _fc_trained_on != _max_d:
-                        st.markdown(
-                            '<div style="background:#7a3800;color:#FFE0B2;padding:0.5rem 0.7rem;'
-                            'border-radius:6px;font-size:0.78rem;margin-top:0.3rem;">'
-                            "⚠ Forecast is out of date. Use the <strong>Refresh Forecast</strong> "
-                            "button in Data Management to retrain."
-                            "</div>",
-                            unsafe_allow_html=True,
-                        )
-                else:
-                    st.caption("No forecast available — use Refresh Forecast to generate one.")
+                if time_basis != "TAT":
+                    if _fc_data:
+                        _fc_trained_on = _fc_data.get("last_data_date")
+                        if _fc_trained_on is not None and _fc_trained_on != _max_d:
+                            st.markdown(
+                                '<div style="background:#7a3800;color:#FFE0B2;padding:0.5rem 0.7rem;'
+                                'border-radius:6px;font-size:0.78rem;margin-top:0.3rem;">'
+                                "⚠ Forecast is out of date. Use the <strong>Refresh Forecast</strong> "
+                                "button in Data Management to retrain."
+                                "</div>",
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.caption("No forecast available — use Refresh Forecast to generate one.")
 
-                st.markdown("---")
-                st.markdown("### Hour Range")
+                    st.markdown("---")
+                    st.markdown("### Hour Range")
 
-                def _fmt_h(h: int) -> str:
-                    hr12 = 12 if h % 12 == 0 else h % 12
-                    suf  = "AM" if h < 12 else "PM"
-                    return f"{hr12}:00 {suf}"
+                    def _fmt_h(h: int) -> str:
+                        hr12 = 12 if h % 12 == 0 else h % 12
+                        suf  = "AM" if h < 12 else "PM"
+                        return f"{hr12}:00 {suf}"
 
-                hour_range = st.slider(
-                    "Hours", 0, 23, (0, 23), label_visibility="collapsed"
-                )
-                st.caption(f"{_fmt_h(hour_range[0])} → {_fmt_h(hour_range[1])}")
+                    hour_range = st.slider(
+                        "Hours", 0, 23, (0, 23), label_visibility="collapsed"
+                    )
+                    st.caption(f"{_fmt_h(hour_range[0])} → {_fmt_h(hour_range[1])}")
 
             else:  # Monthly
                 _avail_months = []
@@ -603,35 +636,46 @@ def render_sidebar(ss) -> dict:
                 _sel_idx = _month_labels.index(_sel_month_label)
                 selected_year, selected_month = _avail_months[_sel_idx]
 
-            st.markdown("---")
-            with st.expander("Resource Allocation", expanded=False):
-                st.markdown(
-                    "Reassign instruments between maps. "
-                    "Each resource should appear in only one map."
-                )
-                new_assignments = {}
-                for mt in MAP_TYPES:
-                    new_assignments[mt] = st.multiselect(
-                        mt, options=ALL_RESOURCES,
-                        default=ss.resource_assignments.get(mt, []),
-                        key=f"res_{mt}",
+            if time_basis != "TAT":
+                st.markdown("---")
+                with st.expander("Resource Allocation", expanded=False):
+                    st.markdown(
+                        "Reassign instruments between maps. "
+                        "Each resource should appear in only one map."
                     )
-                _flat  = [r for rs in new_assignments.values() for r in rs]
-                _dupes = sorted({r for r in _flat if _flat.count(r) > 1})
-                if _dupes:
-                    st.warning(f"Duplicate assignments: {', '.join(_dupes)}")
+                    new_assignments = {}
+                    for mt in MAP_TYPES:
+                        new_assignments[mt] = st.multiselect(
+                            mt, options=ALL_RESOURCES,
+                            default=ss.resource_assignments.get(mt, []),
+                            key=f"res_{mt}",
+                        )
+                    _flat  = [r for rs in new_assignments.values() for r in rs]
+                    _dupes = sorted({r for r in _flat if _flat.count(r) > 1})
+                    if _dupes:
+                        st.warning(f"Duplicate assignments: {', '.join(_dupes)}")
 
-                _ra, _rb = st.columns(2)
-                with _ra:
-                    if st.button("Apply", width="stretch", type="primary"):
-                        ss.resource_assignments = new_assignments
-                        st.cache_data.clear()
-                        st.rerun()
-                with _rb:
-                    if st.button("Reset defaults", width="stretch"):
-                        ss.resource_assignments = deepcopy(DEFAULT_RESOURCES)
-                        st.cache_data.clear()
-                        st.rerun()
+                    _ra, _rb = st.columns(2)
+                    with _ra:
+                        if st.button("Apply", width="stretch", type="primary"):
+                            ss.resource_assignments = new_assignments
+                            st.cache_data.clear()
+                            st.rerun()
+                    with _rb:
+                        if st.button("Reset defaults", width="stretch"):
+                            ss.resource_assignments = deepcopy(DEFAULT_RESOURCES)
+                            st.cache_data.clear()
+                            st.rerun()
+
+    # TAT view needs a single canonical date string for downstream
+    # `load_tat_data` calls — 'YYYY-MM-DD' for Daily, 'YYYY-MM' for
+    # Monthly. Empty string when not on the TAT path.
+    _tat_date_str = ""
+    if time_basis == "TAT" and _data_exists:
+        if view_mode == "Daily":
+            _tat_date_str = selected_date.isoformat()
+        else:
+            _tat_date_str = f"{selected_year:04d}-{selected_month:02d}"
 
     return {
         "map_type": map_type,
@@ -651,7 +695,76 @@ def render_sidebar(ss) -> dict:
         "hour_range": hour_range,
         "fc_data": _fc_data,
         "is_forecast_date": _is_forecast_date,
+        # TAT-only fields; populated when time_basis == "TAT".
+        "tat_facility": map_type if time_basis == "TAT" else None,
+        "tat_date_str": _tat_date_str,
     }
+
+
+def _render_tat_debug(params: dict) -> None:
+    """Phase-1 TAT debug block.
+
+    Renders the banner header + a verification dump of the new TAT data
+    layer (load_tat_data → tat_df, top-10 procedures, build_tat_table
+    preview) in place of the volume heatmap. Phase 2 will replace this
+    with the polished TAT KPI and table view.
+    """
+    _facility = params.get("tat_facility") or params["map_type"]
+    _date_str = params.get("tat_date_str") or ""
+    _view     = params["view_mode"]
+
+    if _view == "Daily" and _date_str:
+        try:
+            _date_label = pd.Timestamp(_date_str).strftime("%B %d, %Y")
+        except Exception:
+            _date_label = _date_str
+    elif _view == "Monthly" and len(_date_str) >= 7:
+        try:
+            _yr, _mo = int(_date_str[:4]), int(_date_str[5:7])
+            _date_label = f"{_cal.month_name[_mo]} {_yr}"
+        except Exception:
+            _date_label = _date_str
+    else:
+        _date_label = _date_str or "—"
+
+    render_header(_facility, f"{_date_label}  ·  TAT")
+
+    st.markdown(
+        '<div class="section-heading">TAT Data Layer — Debug Output</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"**Facility:** {_facility} &nbsp;|&nbsp; "
+        f"**View:** {_view} &nbsp;|&nbsp; "
+        f"**Date:** {_date_str or '—'}"
+    )
+
+    if not _date_str:
+        st.warning("No date string supplied — cannot load TAT data.")
+        return
+
+    tat_df = load_tat_data(_date_str, _view, _facility)
+
+    _n_rows  = len(tat_df)
+    _n_procs = int(tat_df["Order Procedure"].nunique()) if _n_rows else 0
+
+    st.markdown(f"**Total filtered rows:** {_n_rows:,}")
+    st.markdown(f"**Unique procedures:** {_n_procs}")
+
+    top_10 = get_top_procedures_by_volume(tat_df, n=10)
+    st.markdown("**Top 10 procedures by volume:**")
+    if top_10:
+        st.markdown(
+            "\n".join(f"{i}. {p}" for i, p in enumerate(top_10, 1))
+        )
+    else:
+        st.caption("(no procedures — empty result set)")
+
+    st.markdown("**`tat_df.head(20)` preview:**")
+    st.dataframe(tat_df.head(20), width="stretch")
+
+    st.markdown("**`build_tat_table(tat_df, top_10)` preview:**")
+    st.dataframe(build_tat_table(tat_df, top_10), width="stretch")
 
 
 def render(params: dict, ss) -> None:
@@ -737,6 +850,14 @@ def render(params: dict, ss) -> None:
             "Streamlit secrets to start viewing lab productivity heatmaps."
         )
         st.stop()
+
+    # ── TAT view (Phase 1 debug only) ──────────────────────────────────────
+    # Replaces the volume heatmap with a temporary debug block so we can
+    # verify the data layer is loading the expected rows. Phase 2 will
+    # replace this with the polished KPI-and-table TAT view.
+    if time_basis == "TAT":
+        _render_tat_debug(params)
+        return
 
     # ── Daily view ─────────────────────────────────────────────────────────
     if view_mode == "Daily":
