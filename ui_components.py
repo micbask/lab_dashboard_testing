@@ -73,32 +73,65 @@ section.main {
     background-color: #1a1a1a !important;
     border-right: 1px solid #2e2e2e !important;
 }
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
+/* SIDEBAR SECTION LABELS — every section label is rendered as a
+   markdown h3 ("### Date" etc.). Streamlit's default theming gives
+   these a bold weight + saturated gold colour via emotion-cache
+   classes with high specificity, so override with `html body
+   section[data-testid="stSidebar"]` plus !important to beat them.
+   Includes h1/h2/h4/h5 + [data-testid="stHeading"] as fallbacks in
+   case the markdown render path changes in future Streamlit versions. */
+html body section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h1,
+html body section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h2,
+html body section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3,
+html body section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h4,
+html body section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h5,
+html body section[data-testid="stSidebar"] [data-testid="stHeading"] h1,
+html body section[data-testid="stSidebar"] [data-testid="stHeading"] h2,
+html body section[data-testid="stSidebar"] [data-testid="stHeading"] h3,
+html body section[data-testid="stSidebar"] [data-testid="stHeading"] h4,
+html body section[data-testid="stSidebar"] [data-testid="stHeading"] h5,
+html body section[data-testid="stSidebar"] h3 {
     color: rgba(241, 171, 31, 0.75) !important;
     font-size: 11px !important;
     font-weight: 500 !important;
     text-transform: uppercase !important;
     letter-spacing: 0.08em !important;
     margin-bottom: 6px !important;
-    margin-top: 24px !important;
+    margin-top: 16px !important;
+    line-height: 1.4 !important;
+    padding: 0 !important;
 }
 /* The first sidebar section label has no top margin so it sits flush
    under the sidebar's own top padding rather than picking up a double
-   gap. Targets the first stElementContainer in the sidebar's vertical
-   block — Streamlit puts each sidebar widget in its own container and
-   the section labels are always the first markdown blocks. */
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"]
+   gap. */
+html body section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]
+    > [data-testid="stElementContainer"]:first-child
+    [data-testid="stMarkdownContainer"] h1,
+html body section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]
+    > [data-testid="stElementContainer"]:first-child
+    [data-testid="stMarkdownContainer"] h2,
+html body section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]
     > [data-testid="stElementContainer"]:first-child
     [data-testid="stMarkdownContainer"] h3 {
     margin-top: 0 !important;
 }
 /* Small muted caption used for date ranges + hour-range readouts under
-   their respective inputs. 10 px / 40 % white, no extra spacing. */
-[data-testid="stSidebar"] .sidebar-meta-caption {
+   their respective inputs. 10 px / 40 % white, no extra spacing.
+   Higher specificity needed because Streamlit's
+   "[data-testid=stMarkdownContainer] p" rule otherwise wins and re-
+   applies 0.82rem / weight 500 / #e8e8e8 to the inner text. */
+html body section[data-testid="stSidebar"] .sidebar-meta-caption,
+html body section[data-testid="stSidebar"] .sidebar-meta-caption p,
+html body section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] .sidebar-meta-caption,
+html body section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] .sidebar-meta-caption p {
     font-size: 10px !important;
     color: rgba(255, 255, 255, 0.4) !important;
     margin-top: 6px !important;
-    line-height: 1.3 !important;
+    margin-bottom: 0 !important;
+    line-height: 1.4 !important;
+    font-weight: 400 !important;
+    letter-spacing: 0 !important;
+    text-transform: none !important;
     font-family: 'Inter', system-ui, sans-serif !important;
 }
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
@@ -228,16 +261,41 @@ html body [data-testid="stBaseButton-primary"]:disabled {
     color: #ffffff !important;
 }
 /* Sidebar date inputs get a much subtler treatment — no maroon fill,
-   subtle outline, gold focus ring. */
-html body [data-testid="stSidebar"] [data-testid="stDateInput"] input {
+   subtle outline, gold focus ring. The value text MUST be readable
+   white (#ffffff) — the global `[data-testid=stTextInput] input`
+   rule and baseweb's own colour rules otherwise dim the digits. */
+html body section[data-testid="stSidebar"] [data-testid="stDateInput"] input,
+html body section[data-testid="stSidebar"] [data-testid="stDateInput"] [data-baseweb="input"],
+html body section[data-testid="stSidebar"] [data-testid="stDateInput"] [data-baseweb="input"] > div,
+html body section[data-testid="stSidebar"] [data-testid="stDateInput"] [data-baseweb="input"] input {
     background: rgba(255, 255, 255, 0.05) !important;
     background-color: rgba(255, 255, 255, 0.05) !important;
     color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    caret-color: #ffffff !important;
     border: 1px solid rgba(255, 255, 255, 0.15) !important;
     border-radius: 6px !important;
     padding: 8px 12px !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    font-family: 'Inter', system-ui, sans-serif !important;
 }
-html body [data-testid="stSidebar"] [data-testid="stDateInput"] input:focus {
+/* Inner baseweb wrappers (which carry their own bg / border) need to
+   be transparent so the input's own bg+border above is what shows. */
+html body section[data-testid="stSidebar"] [data-testid="stDateInput"] [data-baseweb="input"],
+html body section[data-testid="stSidebar"] [data-testid="stDateInput"] [data-baseweb="input"] > div {
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+}
+/* Calendar icon inside the input — render light so it's visible on the
+   dark sidebar fill. */
+html body section[data-testid="stSidebar"] [data-testid="stDateInput"] svg {
+    fill: rgba(255, 255, 255, 0.7) !important;
+    color: rgba(255, 255, 255, 0.7) !important;
+}
+html body section[data-testid="stSidebar"] [data-testid="stDateInput"] input:focus {
     border-color: #F1AB1F !important;
     outline: none !important;
     box-shadow: 0 0 0 1px rgba(241, 171, 31, 0.35) !important;
@@ -312,14 +370,23 @@ html body [data-testid="stSidebar"] [data-testid="stDateInput"] input:focus {
    SIDEBAR SLIDER  — hide the redundant 0/23 min/max tick-bar
    labels above the track so the only readout is the
    .sidebar-meta-caption beneath ("12:00 AM → 11:00 PM").
+   The selected-value bubble on the thumb is kept (it appears
+   only on hover/drag); only the fixed min/max endpoint labels
+   are hidden.
    ═══════════════════════════════════════════════════════ */
-[data-testid="stSidebar"] [data-testid="stSliderTickBar"],
-[data-testid="stSidebar"] [data-testid="stSliderTickBarMin"],
-[data-testid="stSidebar"] [data-testid="stSliderTickBarMax"],
-[data-testid="stSidebar"] [data-testid="stTickBar"],
-[data-testid="stSidebar"] [data-testid="stTickBarMin"],
-[data-testid="stSidebar"] [data-testid="stTickBarMax"] {
+html body section[data-testid="stSidebar"] [data-testid="stSlider"] [data-testid="stSliderTickBar"],
+html body section[data-testid="stSidebar"] [data-testid="stSlider"] [data-testid="stSliderTickBarMin"],
+html body section[data-testid="stSidebar"] [data-testid="stSlider"] [data-testid="stSliderTickBarMax"],
+html body section[data-testid="stSidebar"] [data-testid="stSlider"] [data-testid="stTickBar"],
+html body section[data-testid="stSidebar"] [data-testid="stSlider"] [data-testid="stTickBarMin"],
+html body section[data-testid="stSidebar"] [data-testid="stSlider"] [data-testid="stTickBarMax"],
+html body section[data-testid="stSidebar"] [data-testid="stSlider"] div[class*="StyledTickBar"],
+html body section[data-testid="stSidebar"] [data-testid="stSlider"] div[class*="StyledTickBarItem"] {
     display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
 }
 
 /* ═══════════════════════════════════════════════════════
