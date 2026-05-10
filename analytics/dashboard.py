@@ -1,13 +1,12 @@
 import calendar as _cal
 from copy import deepcopy
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 import altair as alt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-import streamlit_shadcn_ui as ui
 
 from config import (
     DEFAULT_RESOURCES, VMAX, ALL_RESOURCES, MAP_TYPES,
@@ -63,33 +62,6 @@ BENCH_LABEL_TO_VALUE = {
     "Norris":    "Norris Core",
     "Specialty": "Norris Specialty",
 }
-
-
-def _coerce_to_date(val):
-    """Coerce a shadcn date_picker return value to a datetime.date.
-
-    The library passes its `value` arg straight through to JSON
-    marshalling with no type coercion of its own, so we feed it an ISO
-    string (the only JSON-safe option) and have to handle whatever the
-    JS side sends back: a datetime, a date, an ISO string (with or
-    without time / timezone), or None.
-    """
-    if val is None:
-        return None
-    if isinstance(val, datetime):
-        return val.date()
-    if isinstance(val, date):
-        return val
-    if isinstance(val, str):
-        try:
-            return datetime.fromisoformat(val.replace("Z", "+00:00")).date()
-        except (ValueError, TypeError):
-            pass
-        try:
-            return date.fromisoformat(val[:10])
-        except (ValueError, TypeError):
-            pass
-    return None
 
 
 def _build_analytics_heatmap(
@@ -324,15 +296,7 @@ def render_sidebar(ss) -> dict:
             map_type = BENCH_LABEL_TO_VALUE[_bench_short]
 
         if ss.last_map_type != map_type:
-            # Reset both the old st.date_input state (in case it lingers
-            # from a previous deploy) and the new shadcn picker state.
             ss.pop("date_picker", None)
-            ss.pop("analytics_date", None)
-            # Bump the shadcn picker's key version so it remounts with
-            # the new default on the next render.
-            ss["_analytics_date_version"] = (
-                ss.get("_analytics_date_version", 0) + 1
-            )
             ss.last_map_type = map_type
 
         # ── 2. Time Basis  (keyed; widget owns session_state) ──
@@ -455,75 +419,40 @@ def render_sidebar(ss) -> dict:
                         ]
                         _fc_max_d = _fc_end_d
 
-                # Canonical selected date — stored in session state under
-                # "analytics_date". The shadcn picker remembers its own
-                # internal state once mounted, so when Prev/Next mutates
-                # the date externally we bump "_analytics_date_version" to
-                # remount the picker with the new default. User picks via
-                # the shadcn UI flow directly into ss["analytics_date"]
-                # without any version bump (the component already shows
-                # the picked date).
+                # Prev/Next clicks write `_pending_date` and rerun;
+                # this block pulls the pending date into session_state
+                # *before* the date_input renders, so st.date_input
+                # picks it up as the new value on this render.
                 if "_pending_date" in ss:
                     _pending = ss.pop("_pending_date")
                     if _min_d <= _pending <= _fc_max_d:
-                        ss["analytics_date"] = _pending
-                        ss["_analytics_date_version"] = (
-                            ss.get("_analytics_date_version", 0) + 1
-                        )
+                        ss["date_picker"] = _pending
 
                 if (
-                    "analytics_date" not in ss
-                    or not isinstance(ss["analytics_date"], date)
-                    or ss["analytics_date"] < _min_d
-                    or ss["analytics_date"] > _fc_max_d
+                    "date_picker" not in ss
+                    or ss["date_picker"] < _min_d
+                    or ss["date_picker"] > _fc_max_d
                 ):
-                    ss["analytics_date"] = _max_d
-                    ss["_analytics_date_version"] = (
-                        ss.get("_analytics_date_version", 0) + 1
-                    )
+                    ss["date_picker"] = _max_d
 
                 st.markdown(
                     '<div class="sidebar-section-label">DATE</div>',
                     unsafe_allow_html=True,
                 )
 
-                # shadcn date picker — light-themed by design; we accept
-                # the library's native styling per the integration spec.
-                #
-                # The library passes `default_value` straight through to
-                # JSON marshalling with no type coercion (verified by
-                # reading streamlit_shadcn_ui/py_components/date_picker
-                # .py source, v0.1.19). Both `date` and `datetime` blow
-                # up the marshaller because neither is natively JSON-
-                # serializable. So we send an ISO date string and parse
-                # whatever the JS side sends back via _coerce_to_date.
-                #
-                # Also: the library uses init_session(default_value=...)
-                # to seed component state, which writes only once per
-                # session_state key. If a stale date object was stored
-                # under the old "analytics_date_picker_v*" key from a
-                # previous deploy, the library would keep reading that
-                # stale object and never pick up the new ISO string. We
-                # use a fresh "_dp_iso_v" prefix so the picker
-                # initialises clean slots.
-                _picker_key = (
-                    f"analytics_date_dp_iso_v"
-                    f"{ss.get('_analytics_date_version', 0)}"
+                # Native st.date_input — gives us min/max enforcement,
+                # single-click selection, and the built-in month / year
+                # dropdowns at the top of the calendar popup. Trigger
+                # styling (dark fill, white text) is in ui_components
+                # CSS; the popup uses Streamlit's default light theme.
+                picked_date = st.date_input(
+                    "Select date",
+                    min_value=_min_d,
+                    max_value=_fc_max_d,
+                    label_visibility="collapsed",
+                    key="date_picker",
                 )
-                _picked = ui.date_picker(
-                    key=_picker_key,
-                    mode="single",
-                    label="",
-                    default_value=ss["analytics_date"].isoformat(),
-                )
-                _picked_d = _coerce_to_date(_picked)
-                if (
-                    _picked_d is not None
-                    and _min_d <= _picked_d <= _fc_max_d
-                ):
-                    ss["analytics_date"] = _picked_d
-
-                selected_date = ss["analytics_date"]
+                selected_date = picked_date
                 _is_forecast_date = selected_date > _max_d
 
                 # Date-range metadata caption — sits BELOW the date input,
