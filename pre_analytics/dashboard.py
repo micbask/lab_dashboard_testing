@@ -46,8 +46,6 @@ def render_sidebar(ss) -> dict:
 
         if pa_view == "Daily":
             st.markdown("### Date")
-            if _pa_data_ok:
-                st.caption(f"{_pa_min_d} → {_pa_max_d}")
             _pa_date_default = ss.get("pa_date", _pa_max_d)
             if isinstance(_pa_date_default, str):
                 try:
@@ -66,6 +64,15 @@ def render_sidebar(ss) -> dict:
             )
             ss["pa_date"] = pa_date
             _pa_date_str = pa_date.isoformat()
+            # Date-range metadata caption — sits BELOW the date input,
+            # styled small + muted via .sidebar-meta-caption.
+            if _pa_data_ok:
+                st.markdown(
+                    f'<div class="sidebar-meta-caption">'
+                    f'{_pa_min_d} → {_pa_max_d}'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
         else:
             import calendar as _cal3
             st.markdown("### Month")
@@ -105,7 +112,12 @@ def render_sidebar(ss) -> dict:
             label_visibility="collapsed",
             key="pa_hour_range",
         )
-        st.caption(f"{_pa_fmt_h(pa_hour_range[0])} → {_pa_fmt_h(pa_hour_range[1])}")
+        st.markdown(
+            f'<div class="sidebar-meta-caption">'
+            f'{_pa_fmt_h(pa_hour_range[0])} → {_pa_fmt_h(pa_hour_range[1])}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
     return {
         "pa_location": pa_location,
