@@ -420,10 +420,6 @@ def render_sidebar(ss) -> dict:
                     ss["date_picker"] = _max_d
 
                 st.markdown("### Date")
-                _fc_note = (
-                    f"  +  forecast to **{_fc_max_d}**" if forecast_dates else ""
-                )
-                st.caption(f"{_min_d} → {_max_d}{_fc_note}")
 
                 picked_date = st.date_input(
                     "Select date",
@@ -435,11 +431,24 @@ def render_sidebar(ss) -> dict:
                 selected_date = picked_date
                 _is_forecast_date = selected_date > _max_d
 
+                # Date-range metadata caption — sits BELOW the date input,
+                # styled small + muted via .sidebar-meta-caption.
+                _fc_note = (
+                    f" + forecast to {_fc_max_d}" if forecast_dates else ""
+                )
+                st.markdown(
+                    f'<div class="sidebar-meta-caption">'
+                    f'{_min_d} → {_max_d}{_fc_note}'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
                 _nc1, _nc2 = st.columns(2)
                 with _nc1:
                     if st.button(
                         "◄ Prev", width="stretch",
                         disabled=(selected_date <= _min_d),
+                        key="nav_prev_date",
                     ):
                         ss["_pending_date"] = selected_date - timedelta(days=1)
                         st.rerun()
@@ -447,6 +456,7 @@ def render_sidebar(ss) -> dict:
                     if st.button(
                         "Next ►", width="stretch",
                         disabled=(selected_date >= _fc_max_d),
+                        key="nav_next_date",
                     ):
                         ss["_pending_date"] = selected_date + timedelta(days=1)
                         st.rerun()
@@ -467,7 +477,6 @@ def render_sidebar(ss) -> dict:
                         st.caption("No forecast available — use Refresh Forecast to generate one.")
 
                     # ── 5. Hour Range  (Completed / In-Lab only) ──
-                    st.markdown("---")
                     st.markdown("### Hour Range")
 
                     def _fmt_h(h: int) -> str:
@@ -478,7 +487,12 @@ def render_sidebar(ss) -> dict:
                     hour_range = st.slider(
                         "Hours", 0, 23, (0, 23), label_visibility="collapsed"
                     )
-                    st.caption(f"{_fmt_h(hour_range[0])} → {_fmt_h(hour_range[1])}")
+                    st.markdown(
+                        f'<div class="sidebar-meta-caption">'
+                        f'{_fmt_h(hour_range[0])} → {_fmt_h(hour_range[1])}'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
 
             else:  # Monthly
                 _avail_months = []
@@ -511,27 +525,31 @@ def render_sidebar(ss) -> dict:
 
             # Resource Allocation expander removed (FIX 2).
 
-        # ── 6. Data Source  (storage caption + status chip) ──
-        # ── 7. Data Management (admin-gated expander; admin tools) ──
+        # ── 6. Data Management (admin-gated expander; admin tools) ──
+        # The user-facing sidebar no longer surfaces storage metadata —
+        # the "DATA SOURCE" section heading, the "Storage: GitHub
+        # (partitioned)" caption, and the always-visible row-count chip
+        # are moved into the Data Management expander below so only
+        # admins who open it see the technical details.
         st.markdown("---")
         if storage_is_configured():
-            st.markdown("### Data Source")
-            st.caption("Storage: GitHub (partitioned)")
-
-            if _load_err is not None:
-                status_chip("Load error", level="error")
-                st.error(f"Could not read data index: {_load_err}")
-            elif _data_exists:
-                status_chip(
-                    f"{_data_summary['total_rows']:,} rows · "
-                    f"{_data_summary['min_date']} → {_data_summary['max_date']}",
-                    level="ok",
-                )
-            else:
-                status_chip("No data yet — upload below", level="warn")
-
-            st.markdown("---")
             with st.expander("Data Management", expanded=not _data_exists):
+                # Row count / date range / load-error chip — hoisted in
+                # from the old DATA SOURCE block. Renders at the top of
+                # the expander contents on every open.
+                if _load_err is not None:
+                    status_chip("Load error", level="error")
+                    st.error(f"Could not read data index: {_load_err}")
+                elif _data_exists:
+                    status_chip(
+                        f"{_data_summary['total_rows']:,} rows · "
+                        f"{_data_summary['min_date']} → {_data_summary['max_date']}",
+                        level="ok",
+                    )
+                else:
+                    status_chip("No data yet — upload below", level="warn")
+                st.caption("Storage: GitHub (partitioned)")
+                st.markdown("---")
 
                 admin_pw   = st.secrets.get("admin_password", None)
                 authorized = True
