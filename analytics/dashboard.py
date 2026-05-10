@@ -52,6 +52,18 @@ _ORANGES_HIGH = "#7f2704"
 _TOTAL_NEUTRAL = "#ececec"
 
 
+# Display labels for the Testing Bench radio (non-TAT path). The radio
+# shows short labels but the rest of the app — resource lookups,
+# forecast keys, banner subtitle, download filenames — keeps using the
+# full MAP_TYPES names ("Keck Core", "Norris Core", "Norris Specialty"),
+# so we convert via this dict before passing map_type downstream.
+BENCH_LABEL_TO_VALUE = {
+    "Keck":      "Keck Core",
+    "Norris":    "Norris Core",
+    "Specialty": "Norris Specialty",
+}
+
+
 def _build_analytics_heatmap(
     pivot: pd.DataFrame,
     *,
@@ -262,21 +274,31 @@ def render_sidebar(ss) -> dict:
             horizontal=True, label_visibility="collapsed",
         )
 
-        st.markdown("### Map Type")
         if time_basis == "TAT":
             # TAT view operates on a Patient-Location facility, not a
-            # bench-resource map. Use a separate session-state key so the
-            # bench Map Type selection isn't clobbered when the user
-            # toggles back to Completed/In-Lab.
+            # bench-resource map. Header keeps the original "Map Type"
+            # label; the widget remains a selectbox per the original
+            # behaviour, with a separate session-state key so the bench
+            # selection below isn't clobbered when the user toggles back
+            # to Completed/In-Lab.
+            st.markdown("### Map Type")
             map_type = st.selectbox(
                 "Map type", ["Keck", "Norris"],
                 label_visibility="collapsed",
                 key="analytics_tat_facility",
             )
         else:
-            map_type = st.selectbox(
-                "Map type", MAP_TYPES, label_visibility="collapsed",
+            # Completed / In-Lab: short-labelled radio matching the
+            # styling of the Time Basis radio above. The radio's return
+            # value drives the conversion to the full bench name on the
+            # same rerun, so the first click responds immediately.
+            st.markdown("### Testing Bench")
+            _bench_short = st.radio(
+                "Testing Bench",
+                list(BENCH_LABEL_TO_VALUE.keys()),
+                horizontal=True, label_visibility="collapsed",
             )
+            map_type = BENCH_LABEL_TO_VALUE[_bench_short]
 
         if ss.last_map_type != map_type:
             ss.pop("date_picker", None)
@@ -1045,7 +1067,11 @@ def _render_tat_view(params: dict) -> None:
 
 
 def render(params: dict, ss) -> None:
-    """Render analytics main panel (pending upload + heatmaps)."""
+    """Render analytics main panel (pending upload + heatmaps).
+
+    All early exits use `return` rather than `st.stop()` so app.py's
+    footer line is always reached on every dashboard view.
+    """
     map_type          = params["map_type"]
     view_mode         = params["view_mode"]
     time_basis        = params["time_basis"]
@@ -1117,7 +1143,9 @@ def render(params: dict, ss) -> None:
                 st.error(str(_proc_err))
                 ss.pop("pending_upload", None)
 
-        st.stop()
+        # Return (don't st.stop) so app.py's footer still renders at the
+        # bottom of the page even while upload-in-progress / errored.
+        return
 
     # ── No-data guard ──────────────────────────────────────────────────────
     if not _data_exists:
@@ -1126,7 +1154,7 @@ def render(params: dict, ss) -> None:
             "Welcome!  Upload a file or configure GitHub in your "
             "Streamlit secrets to start viewing lab productivity heatmaps."
         )
-        st.stop()
+        return
 
     # ── TAT view (Phase 2) ─────────────────────────────────────────────────
     # KPI strip + procedure filter + go.Table of priority-grouped stats +
@@ -1149,7 +1177,7 @@ def render(params: dict, ss) -> None:
                     f"No forecast data available for **{map_type}**.  "
                     "Open Data Management and click **Refresh Forecast** to generate predictions."
                 )
-                st.stop()
+                return
             pivot, hours = build_forecast_pivot(
                 _fc_panel_data, selected_date, hour_range, time_basis=time_basis
             )
@@ -1183,7 +1211,7 @@ def render(params: dict, ss) -> None:
                     filtered_df["hour"] = filtered_df["inlab_hour"].astype(int)
                 else:
                     st.warning("No 'Date/Time - In Lab' data available.")
-                    st.stop()
+                    return
 
             pivot, df_date_hour, df_date, hours = build_pivot(
                 filtered_df, selected_date, hour_range
@@ -1219,12 +1247,12 @@ def render(params: dict, ss) -> None:
                     f"No data found for **{map_type}** on **{date_str}** "
                     f"within the selected hour range.  Try widening the hour slider."
                 )
-            st.stop()
+            return
 
         _hour_cols = [c for c in pivot.columns if c != "Total"]
         if not _hour_cols or pivot.empty:
             st.info("No completed procedures found for this site on the selected date.")
-            st.stop()
+            return
 
         total_vol  = int(round(pivot["Total"].sum()))
         top_proc   = pivot["Total"].idxmax()
@@ -1515,7 +1543,7 @@ def render(params: dict, ss) -> None:
                 filtered_df["hour"] = filtered_df["inlab_hour"].astype(int)
             else:
                 st.warning("No 'Date/Time - In Lab' data available.")
-                st.stop()
+                return
 
         monthly_pivot, n_days, month_raw_df = build_monthly_pivot(
             filtered_df, selected_year, selected_month
@@ -1523,7 +1551,7 @@ def render(params: dict, ss) -> None:
 
         if monthly_pivot is None:
             st.warning(f"No data found for **{map_type}** in **{month_name_str}**.")
-            st.stop()
+            return
 
         _m_hour_cols   = [c for c in monthly_pivot.columns if c != "Total"]
         _m_total_vol   = int(round(monthly_pivot["Total"].sum() * n_days))
