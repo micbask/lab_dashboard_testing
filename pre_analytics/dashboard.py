@@ -242,7 +242,7 @@ def render(params: dict, ss) -> None:
             _fig = _pgo.Figure(data=_pgo.Heatmap(**_heatmap_kwargs))
             _fig.update_traces(hoverongaps=False)
 
-            _plot_h = max(250, len(_techs) * 35 + 80)
+            _plot_h = max(180, len(_techs) * 45 + 100)
             _fig.update_layout(
                 height=_plot_h,
                 margin=dict(l=10, r=10, t=10, b=10),

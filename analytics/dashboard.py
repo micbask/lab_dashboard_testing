@@ -6,7 +6,6 @@ import altair as alt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from plotly import colors as _pc
 import streamlit as st
 
 from config import (
@@ -52,42 +51,6 @@ _ORANGES_HIGH = "#7f2704"
 _TOTAL_NEUTRAL = "#ececec"
 
 
-def _composite_colorscale_with_neutral_plateau(
-    name: str, neutral: str,
-) -> list:
-    """Build a colorscale with the named gradient packed into the lower
-    half [0, 0.5] and a flat neutral colour filling the upper half
-    [0.5, 1].
-
-    Used to keep the Total column out of the heatmap gradient: render-z
-    for Total cells is clamped to a sentinel `2 * zmax_hours`, which
-    falls into the upper plateau and renders as `neutral`. Hour cells
-    keep their actual z values and map into the gradient half.
-    """
-    # `pc.sample_colorscale` doesn't always understand the `_r` suffix,
-    # so handle reversal manually: sample the base scale at mirrored
-    # positions, then re-pair with the original positions.
-    positions = [0.0, 0.25, 0.5, 0.75, 1.0]
-    if name.endswith("_r"):
-        base = name[:-2]
-        sample_pos = [1.0 - p for p in positions]
-        gradient_colors = _pc.sample_colorscale(base, sample_pos)
-    else:
-        gradient_colors = _pc.sample_colorscale(name, positions)
-
-    # Pack the gradient into [0, 0.5].
-    composite = [
-        [pos * 0.5, color]
-        for pos, color in zip(positions, gradient_colors)
-    ]
-    # Sharp transition: the previous append ends at [0.5, last_gradient];
-    # adding a same-position [0.5, neutral] stop creates a discontinuity
-    # so anything > zmax_hours snaps straight to the neutral plateau.
-    composite.append([0.5, neutral])
-    composite.append([1.0, neutral])
-    return composite
-
-
 def _build_analytics_heatmap(
     pivot: pd.DataFrame,
     *,
@@ -102,27 +65,28 @@ def _build_analytics_heatmap(
     locked axis ranges, transparent background, and a white hover tooltip
     matching the rest of the app.
 
-    A single `go.Heatmap` trace renders all 25 columns (24 hours + Total)
-    so the chart fills the full container width without the layout
-    quirks of a two-trace setup. The Total column is taken out of the
-    gradient by:
+    Two `go.Heatmap` traces share a single numeric x-axis so the chart
+    renders as one continuous heatmap:
 
-      1. Clamping Total cells in the rendered z to a sentinel value of
-         `2 * zmax_hours` (zmax_hours = 95th percentile of non-zero
-         hour cells).
-      2. Using a composite colorscale where the lower half is the
-         user's gradient and the upper half is a flat neutral grey, so
-         the sentinel maps to neutral.
+      • Hour columns (24 cells) — coloured with `colorscale`. `zmax`
+        is the 95th percentile of non-zero hour cells, so wide-range
+        full-day totals never get to compress the per-hour gradient.
+        Hour cells above zmax clip to the high gradient colour
+        (Plotly's default zmax behaviour).
+      • Total column (1 cell)   — rendered with a flat neutral grey
+        via a 2-stop single-colour colorscale, completely independent
+        of the hour gradient.
 
-    `text` is built from the ORIGINAL z so the integer in each Total
-    cell is the actual full-day sum, not the sentinel.
+    Numeric x-coords (0..23 for hours, 24 for Total) are used because
+    using categorical x labels for two side-by-side traces caused the
+    chart to render at ~half width. Tick labels are restored via
+    `tickvals`/`ticktext`.
 
-    `customdata` defaults to the original z so hovertemplates that need
-    to display a value should reference `%{customdata}` (or
-    `%{customdata:.1f}`) — referencing `%{z}` would expose the sentinel
-    on Total cells. Callers may override `customdata` with pre-formatted
-    strings (the daily-actual heatmap does this for the
-    "Today: X | Month avg: Y" comparison hover).
+    `customdata`, when supplied, must match the pivot's full shape
+    (n_rows × n_cols). Each cell value is paired with its column label
+    so hovertemplates can reference `%{customdata[0]}` (column label)
+    and `%{customdata[1]}` (cell value or pre-formatted string). When
+    `customdata` is None, the cell values default to the original z.
     """
     z_full = pivot.values.astype(float)
     y = pivot.index.tolist()
@@ -131,58 +95,106 @@ def _build_analytics_heatmap(
     if "Total" in cols:
         total_idx    = cols.index("Total")
         hour_indices = [i for i in range(len(cols)) if i != total_idx]
+        hour_cols    = [cols[i] for i in hour_indices]
         z_hours      = z_full[:, hour_indices]
+        z_total      = z_full[:, [total_idx]]
     else:
-        total_idx = None
-        z_hours   = z_full
+        total_idx    = None
+        hour_indices = list(range(len(cols)))
+        hour_cols    = cols
+        z_hours      = z_full
+        z_total      = None
 
-    # zmax keyed off hour cells only — Total cells are excluded.
+    # Default per-cell customdata value to the original z when caller
+    # didn't supply anything.
+    cell_values = z_full if customdata is None else customdata
+
+    # Pair each cell value with its column label. The numeric x-coords
+    # mean `%{x}` would show "0", "1", … so the hovertemplate has to
+    # pull the label out of customdata instead.
+    cd_hours = [
+        [[hour_cols[j], cell_values[i][hour_indices[j]]]
+         for j in range(len(hour_indices))]
+        for i in range(len(y))
+    ]
+    cd_total = None
+    if total_idx is not None:
+        cd_total = [
+            [["Total", cell_values[i][total_idx]]]
+            for i in range(len(y))
+        ]
+
+    # zmax keyed off hour cells only — the Total trace uses its own
+    # flat colorscale and isn't part of this gradient.
     _nz = z_hours[z_hours > 0]
     zmax_hours = float(np.percentile(_nz, 95)) if _nz.size else 1.0
     zmax_hours = max(zmax_hours, 1.0)
 
-    # Render-z: Total cells are clamped to a sentinel that lands on the
-    # neutral plateau (= 2 * zmax_hours, well above the gradient half).
-    z_render = z_full.copy()
-    if total_idx is not None:
-        z_render[:, total_idx] = zmax_hours * 2.0
-    zmax_render = zmax_hours * 2.0
-
-    composite = _composite_colorscale_with_neutral_plateau(
-        colorscale, _TOTAL_NEUTRAL,
-    )
-
-    # Text from the ORIGINAL values so Total cells display real totals.
-    text_vals = [
+    text_hours = [
         [str(int(round(v))) if v > 0 else "" for v in row]
-        for row in z_full
+        for row in z_hours
     ]
 
-    # Default customdata to the original z so hovertemplates can show
-    # the real value via `%{customdata}` (the rendered z holds the
-    # sentinel and would lie about Total cells).
-    if customdata is None:
-        customdata = z_full
+    # Numeric x positions: 0..len(hour_cols)-1 for hour cells, the next
+    # integer for the Total cell. Both traces sharing a single numeric
+    # x-axis lays the cells out as one continuous heatmap.
+    x_hours_coords = list(range(len(hour_cols)))
+    x_total_coord  = len(hour_cols)
 
-    _heatmap_kwargs = dict(
-        z=z_render,
-        x=cols,
-        y=y,
-        text=text_vals,
-        texttemplate="%{text}",
-        hoverinfo="text",
-        colorscale=composite,
-        zmin=0,
-        zmax=zmax_render,
-        xgap=1,
-        ygap=1,
-        showscale=False,
-        hovertemplate=hovertemplate,
-        customdata=customdata,
+    fig = go.Figure()
+    fig.add_trace(
+        go.Heatmap(
+            z=z_hours,
+            x=x_hours_coords,
+            y=y,
+            text=text_hours,
+            texttemplate="%{text}",
+            hoverinfo="text",
+            colorscale=colorscale,
+            zmin=0,
+            zmax=zmax_hours,
+            xgap=1,
+            ygap=1,
+            showscale=False,
+            hovertemplate=hovertemplate,
+            customdata=cd_hours,
+        )
     )
 
-    fig = go.Figure(data=go.Heatmap(**_heatmap_kwargs))
+    if z_total is not None:
+        text_total = [
+            [str(int(round(v))) if v > 0 else "" for v in row]
+            for row in z_total
+        ]
+        fig.add_trace(
+            go.Heatmap(
+                z=z_total,
+                x=[x_total_coord],
+                y=y,
+                text=text_total,
+                texttemplate="%{text}",
+                hoverinfo="text",
+                # Flat 2-stop colorscale: every Total cell renders as
+                # the neutral grey regardless of the underlying value.
+                colorscale=[[0.0, _TOTAL_NEUTRAL], [1.0, _TOTAL_NEUTRAL]],
+                zmin=0,
+                zmax=1,
+                xgap=1,
+                ygap=1,
+                showscale=False,
+                hovertemplate=hovertemplate,
+                customdata=cd_total,
+                textfont=dict(color="#1a1a1a", size=11),
+            )
+        )
+
     fig.update_traces(hoverongaps=False)
+
+    tick_vals = list(x_hours_coords)
+    tick_text = list(hour_cols)
+    if z_total is not None:
+        tick_vals.append(x_total_coord)
+        tick_text.append("Total")
 
     # Procedure names are long — automargin gives the y-axis whatever it
     # needs to lay them out without clipping.
@@ -194,6 +206,9 @@ def _build_analytics_heatmap(
         plot_bgcolor="rgba(0,0,0,0)",
         dragmode=False,
         xaxis=dict(
+            tickmode="array",
+            tickvals=tick_vals,
+            ticktext=tick_text,
             tickfont=dict(size=10), side="bottom", fixedrange=True,
         ),
         yaxis=dict(
@@ -883,8 +898,8 @@ def render(params: dict, ss) -> None:
                 pivot,
                 colorscale="Oranges",
                 hovertemplate=(
-                    "<b>%{y} @ %{x}</b><br>"
-                    "Forecast: %{customdata:.1f}<extra></extra>"
+                    "<b>%{y} @ %{customdata[0]}</b><br>"
+                    "Forecast: %{customdata[1]:.1f}<extra></extra>"
                 ),
             )
         else:
@@ -941,7 +956,8 @@ def render(params: dict, ss) -> None:
                 pivot,
                 colorscale="Viridis_r",
                 hovertemplate=(
-                    "<b>%{y} @ %{x}</b><br>%{customdata}<extra></extra>"
+                    "<b>%{y} @ %{customdata[0]}</b><br>"
+                    "%{customdata[1]}<extra></extra>"
                 ),
                 customdata=_customdata,
             )
@@ -1163,7 +1179,8 @@ def render(params: dict, ss) -> None:
             monthly_pivot,
             colorscale="Viridis_r",
             hovertemplate=(
-                "<b>%{y} @ %{x}</b><br>Avg per day: %{customdata:.1f}<extra></extra>"
+                "<b>%{y} @ %{customdata[0]}</b><br>"
+                "Avg per day: %{customdata[1]:.1f}<extra></extra>"
             ),
         )
         st.plotly_chart(
