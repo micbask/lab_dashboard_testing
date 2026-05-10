@@ -558,7 +558,7 @@ def render_header(map_type: str, date_str: str) -> None:
           max-width: fit-content !important;
           margin-left: auto !important;
           background: rgba(0,0,0,0.25) !important;
-          border-radius: 8px !important;
+          border-radius: 7px !important;
           padding: 3px !important;
           gap: 2px !important;
       }}
@@ -580,7 +580,7 @@ def render_header(map_type: str, date_str: str) -> None:
           font-size: 11px !important;
           letter-spacing: 0.06em !important;
           box-shadow: none !important;
-          min-width: 75px !important;
+          min-width: 90px !important;
           min-height: 0 !important;
           line-height: 1.4 !important;
           text-shadow: none !important;
@@ -627,18 +627,21 @@ def render_header(map_type: str, date_str: str) -> None:
           opacity: 0.95 !important;
           font-weight: 500 !important;
       }}
-      /* Date — sits flush right just below the tab bar. */
+      /* Date — second row on the right, aligned horizontally with the
+         gold subtitle on the left. The small margin-top compensates
+         for the pill being a touch taller than the title h1 so the
+         baselines of the date and subtitle land on the same line. */
       .keck-header-date {{
           color: rgba(255,255,255,0.85) !important;
-          font-size: 0.85rem !important;
+          font-size: 0.87rem !important;
           font-weight: 500 !important;
           text-align: right !important;
-          margin-top: 0.4rem !important;
+          margin-top: 0.1rem !important;
       }}
     </style>
     """, unsafe_allow_html=True)
 
-    cols = st.columns([0.72, 0.28], vertical_alignment="center")
+    cols = st.columns([0.72, 0.28], vertical_alignment="top")
     with cols[0]:
         st.markdown(
             f'''<div class="keck-header-title">
