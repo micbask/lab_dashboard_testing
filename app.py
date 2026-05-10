@@ -110,50 +110,60 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
     _login_slot = st.empty()
     _auth_now = False
     with _login_slot.container():
+        # Hide Streamlit's "Press Enter to submit" hint inside the login
+        # form (it overlaps the password show/hide eye icon) and the
+        # "Press Enter to apply" InputInstructions chip.
+        st.markdown(
+            """
+            <style>
+              #login-overlay [data-testid="InputInstructions"],
+              #login-overlay div[data-testid="stFormSubmitButton"] + div,
+              #login-overlay [data-testid="stFormHint"] {
+                  display: none !important;
+              }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
         st.markdown('<div id="login-overlay">', unsafe_allow_html=True)
         st.markdown('<div style="height: 15vh; min-height: 48px;"></div>',
                     unsafe_allow_html=True)
         _, col, _ = st.columns([1, 0.9, 1])
         with col:
-            st.markdown("""
+            # Banner matches the in-app banner: same maroon gradient,
+            # padding, border-radius, shadow, and gold subtitle styling.
+            # CLINICAL LAB pill removed; title now reads
+            # "Laboratory Productivity Dashboard"; subtitle
+            # "Analytics · Pre-Analytics" advertises both views.
+            st.markdown(
+                """
                 <div style="
-                    background: linear-gradient(150deg, #6F1828 0%, #521322 60%, #3d0e19 100%);
-                    padding: 2rem 2.4rem 1.8rem 2.4rem;
-                    border-radius: 12px 12px 0 0;
+                    background: linear-gradient(135deg, #6F1828 0%, #521322 100%);
+                    padding: 1.2rem 1.8rem;
+                    border-radius: 10px 10px 0 0;
                     text-align: center;
-                    box-shadow: none;
+                    box-shadow: 0 2px 8px rgba(111,24,40,0.25);
                 ">
-                    <div style="
-                        display: inline-block;
-                        background: rgba(237,193,83,0.18);
-                        border: 1px solid rgba(237,193,83,0.4);
-                        color: #EDC153;
-                        font-family: 'Inter', system-ui, sans-serif;
-                        font-size: 0.62rem;
-                        font-weight: 700;
-                        letter-spacing: 0.18em;
-                        text-transform: uppercase;
-                        padding: 3px 12px;
-                        border-radius: 20px;
-                        margin-bottom: 1rem;
-                    ">CLINICAL LAB</div>
-                    <div style="
+                    <h1 style="
                         color: #ffffff;
                         font-family: 'Inter', system-ui, sans-serif;
-                        font-size: 1.45rem;
+                        font-size: 1.5rem;
                         font-weight: 700;
-                        letter-spacing: 0.01em;
-                        margin: 0 0 0.3rem 0;
-                        line-height: 1.2;
-                    ">Productivity Dashboard</div>
-                    <div style="
-                        color: rgba(237,193,83,0.85);
-                        font-family: 'Inter', system-ui, sans-serif;
-                        font-size: 0.82rem;
-                        font-weight: 400;
-                        letter-spacing: 0.01em;
+                        letter-spacing: 0.2px;
                         margin: 0;
-                    ">Analytics</div>
+                        padding: 0;
+                        line-height: 1.2;
+                    ">Laboratory Productivity Dashboard</h1>
+                    <p style="
+                        color: #EDC153;
+                        font-family: 'Inter', system-ui, sans-serif;
+                        font-size: 0.87rem;
+                        font-weight: 500;
+                        margin: 0.2rem 0 0 0;
+                        padding: 0;
+                        opacity: 0.95;
+                        line-height: 1.2;
+                    ">Analytics &nbsp;·&nbsp; Pre-Analytics</p>
                 </div>
                 <div style="
                     background: #ffffff;
@@ -169,11 +179,15 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                         margin: 0 0 1.2rem 0;
                         font-family: 'Inter', system-ui, sans-serif;
                     ">Enter your access password to continue.</p>
-            """, unsafe_allow_html=True)
+                """,
+                unsafe_allow_html=True,
+            )
             with st.form("login_form", enter_to_submit=True):
-                password = st.text_input("Password", type="password",
-                                         label_visibility="collapsed",
-                                         placeholder="Password")
+                password = st.text_input(
+                    "Password", type="password",
+                    label_visibility="collapsed",
+                    placeholder="Password",
+                )
                 submitted = st.form_submit_button("Sign In", width="stretch")
                 if submitted:
                     if password == st.secrets.get("app_password", ""):
@@ -181,12 +195,19 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                         _auth_now = True
                     else:
                         st.error("Incorrect password. Please try again.")
-            st.markdown("""
+            st.markdown(
+                f"""
                 </div>
-                <div style="text-align:center; margin-top: 1.2rem; color: #94a3b8; font-size: 0.7rem; font-family: 'Inter', system-ui, sans-serif;">
-                    Laboratory &nbsp;·&nbsp; Dashboard
+                <div style="text-align: center; font-size: 12px;
+                            color: rgba(0, 0, 0, 0.4);
+                            padding: 32px 0 16px 0;
+                            font-family: 'Inter', system-ui, sans-serif;">
+                    © {datetime.now().year} Laboratory Productivity Dashboard.
+                    All rights reserved.
                 </div>
-            """, unsafe_allow_html=True)
+                """,
+                unsafe_allow_html=True,
+            )
         st.markdown('</div>', unsafe_allow_html=True)
     if _auth_now:
         _login_slot.empty()  # instantly clear the overlay before rerun
