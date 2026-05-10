@@ -3,7 +3,9 @@ from copy import deepcopy
 from datetime import date, timedelta
 
 import altair as alt
+import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from config import (
@@ -24,10 +26,131 @@ from forecasting import (
 from parsing import parse_single_file, deduplicate_and_merge, clean_procedure_names
 from ui_components import (
     metric_card, render_header, status_chip,
-    style_pivot, style_monthly_pivot, style_forecast_pivot,
+    style_monthly_pivot,
     build_png, build_monthly_png, build_weekday_png,
 )
-from analytics.data import build_pivot, build_monthly_pivot, build_weekday_pivot
+from analytics.data import (
+    build_pivot, build_monthly_pivot, build_weekday_pivot,
+    load_monthly_avg_for_comparison,
+)
+
+
+# Viridis / Oranges endpoint hex codes for the small legend swatches that
+# accompany each Plotly heatmap. Picked off Plotly's built-in colorscales
+# so the swatch matches the actual gradient rendered in the chart.
+_VIRIDIS_LOW  = "#440154"
+_VIRIDIS_HIGH = "#fde725"
+_ORANGES_LOW  = "#fff5eb"
+_ORANGES_HIGH = "#7f2704"
+
+
+def _build_analytics_heatmap(
+    pivot: pd.DataFrame,
+    *,
+    colorscale: str,
+    hovertemplate: str,
+    customdata=None,
+) -> go.Figure:
+    """Render the analytics dashboard heatmap as a Plotly figure.
+
+    Mirrors the pre_analytics conventions: integer text labels in cells,
+    `xgap/ygap=1`, no colorbar (`showscale=False`), `dragmode=False`,
+    locked axis ranges, transparent background, and a white hover tooltip
+    matching the rest of the app.
+
+    `zmax` is computed as the 95th percentile of non-zero hour cells —
+    excluding the `Total` column so the wide-range full-day totals don't
+    compress the per-hour color range. Falls back to 1.0 if every hour
+    cell is zero.
+    """
+    z = pivot.values.astype(float)
+    y = pivot.index.tolist()
+    x = pivot.columns.tolist()
+
+    # Exclude the Total column from zmax computation so the per-hour cells
+    # use the full colour range.
+    _hour_idx = [i for i, c in enumerate(x) if c != "Total"]
+    if _hour_idx:
+        _hv = z[:, _hour_idx]
+        _nz = _hv[_hv > 0]
+        zmax = float(np.percentile(_nz, 95)) if _nz.size else 1.0
+    else:
+        zmax = 1.0
+    zmax = max(zmax, 1.0)
+
+    text_vals = [
+        [str(int(round(v))) if v > 0 else "" for v in row]
+        for row in z
+    ]
+
+    _heatmap_kwargs = dict(
+        z=z,
+        x=x,
+        y=y,
+        text=text_vals,
+        texttemplate="%{text}",
+        hoverinfo="text",
+        colorscale=colorscale,
+        zmin=0,
+        zmax=zmax,
+        xgap=1,
+        ygap=1,
+        showscale=False,
+        hovertemplate=hovertemplate,
+    )
+    if customdata is not None:
+        _heatmap_kwargs["customdata"] = customdata
+
+    fig = go.Figure(data=go.Heatmap(**_heatmap_kwargs))
+    fig.update_traces(hoverongaps=False)
+
+    # Procedure names are long — automargin gives the y-axis whatever it
+    # needs to lay them out without clipping.
+    plot_h = max(320, len(y) * 28 + 100)
+    fig.update_layout(
+        height=plot_h,
+        margin=dict(l=10, r=10, t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        dragmode=False,
+        xaxis=dict(
+            tickfont=dict(size=10), side="bottom", fixedrange=True,
+        ),
+        yaxis=dict(
+            tickfont=dict(size=10), autorange="reversed",
+            fixedrange=True, automargin=True,
+        ),
+        hoverlabel=dict(
+            bgcolor="white",
+            bordercolor="#6F1828",
+            font=dict(
+                size=12,
+                family="Inter, system-ui, sans-serif",
+                color="#1a1a1a",
+            ),
+            align="left",
+        ),
+    )
+    return fig
+
+
+def _apply_in_lab_basis(filtered_df: pd.DataFrame) -> pd.DataFrame:
+    """Re-map `complete_date` / `hour` to the In-Lab columns.
+
+    Returns the rows that have In-Lab timestamps with `complete_date` /
+    `hour` overwritten to the In-Lab values, so downstream pivots key off
+    In-Lab time. Returns an empty DataFrame if no In-Lab data is present.
+    """
+    if (
+        filtered_df is None or filtered_df.empty
+        or "inlab_date" not in filtered_df.columns
+        or not filtered_df["inlab_date"].notna().any()
+    ):
+        return pd.DataFrame()
+    out = filtered_df[filtered_df["inlab_date"].notna()].copy()
+    out["complete_date"] = out["inlab_date"]
+    out["hour"] = out["inlab_hour"].astype(int)
+    return out
 
 
 def render_sidebar(ss) -> dict:
@@ -654,29 +777,103 @@ def render(params: dict, ss) -> None:
         if _is_forecast_view:
             st.markdown(
                 f'<div class="heatmap-legend">'
-                f'Colour scale: &nbsp;<strong style="color:#FFE0B2;">■</strong> low &nbsp;→&nbsp; '
-                f'<strong style="color:#E65100;">■</strong> high (≥ {VMAX[map_type]} / hour). &nbsp;'
-                f'<strong>Total</strong> column = predicted daily sum per procedure.'
+                f'Colour scale: &nbsp;'
+                f'<strong style="color:{_ORANGES_LOW};">■</strong> low &nbsp;→&nbsp; '
+                f'<strong style="color:{_ORANGES_HIGH};">■</strong> high. &nbsp;'
+                f'Forecast values for {date_str}.'
                 f'</div>',
                 unsafe_allow_html=True,
             )
         else:
             st.markdown(
                 f'<div class="heatmap-legend">'
-                f'Colour scale: &nbsp;<strong style="color:#f5e642;">■</strong> low &nbsp;→&nbsp; '
-                f'<strong style="color:#3b0f70;">■</strong> high (≥ {VMAX[map_type]} / hour). &nbsp;'
+                f'Colour scale: &nbsp;'
+                f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
+                f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high. &nbsp;'
                 f'<strong>Total</strong> column = full-day sum per procedure.'
                 f'</div>',
                 unsafe_allow_html=True,
             )
 
-        _table_h = min(80 + 35 * len(pivot), 900)
+        # ── Plotly heatmap (replaces the prior st.dataframe HTML table) ─────
         if _is_forecast_view:
-            st.dataframe(style_forecast_pivot(pivot, VMAX[map_type]),
-                         width="stretch", height=_table_h)
+            _fig = _build_analytics_heatmap(
+                pivot,
+                colorscale="Oranges",
+                hovertemplate=(
+                    "<b>%{y} @ %{x}</b><br>"
+                    "Forecast: %{z:.1f}<extra></extra>"
+                ),
+            )
         else:
-            st.dataframe(style_pivot(pivot, VMAX[map_type]),
-                         width="stretch", height=_table_h)
+            # Build a procedure × hour avg-per-day pivot for the SAME month
+            # (and time basis) so the hover tooltip can compare today's
+            # count against the month average for that cell.
+            _month_df = pd.DataFrame()
+            try:
+                if storage_is_configured():
+                    _m_start = date(selected_date.year, selected_date.month, 1)
+                    _m_end   = date(
+                        selected_date.year, selected_date.month,
+                        _cal.monthrange(selected_date.year, selected_date.month)[1],
+                    )
+                    _month_df = load_filtered_data(
+                        start_date=_m_start,
+                        end_date=_m_end,
+                        resources=_current_resources,
+                        exclude_procs=_current_excludes,
+                        _index_hash=_idx_hash,
+                    )
+                else:
+                    _month_df = _local_df
+                if time_basis == "In-Lab":
+                    _month_df = _apply_in_lab_basis(_month_df)
+            except Exception:
+                _month_df = pd.DataFrame()
+            _monthly_avg = load_monthly_avg_for_comparison(
+                _month_df, selected_date, pivot.index.tolist(),
+            )
+
+            _customdata = []
+            for _proc in pivot.index:
+                _row = []
+                for _col in pivot.columns:
+                    _val = int(round(pivot.loc[_proc, _col]))
+                    if _col == "Total":
+                        _row.append(f"Day total: {_val}")
+                    else:
+                        _hour_int = LABEL_TO_HOUR.get(_col)
+                        if (
+                            _hour_int is not None
+                            and not _monthly_avg.empty
+                            and _proc in _monthly_avg.index
+                            and _hour_int in _monthly_avg.columns
+                        ):
+                            _avg = float(_monthly_avg.loc[_proc, _hour_int])
+                            _row.append(f"Today: {_val} | Month avg: {_avg:.1f}")
+                        else:
+                            _row.append(f"Today: {_val}")
+                _customdata.append(_row)
+
+            _fig = _build_analytics_heatmap(
+                pivot,
+                colorscale="Viridis",
+                hovertemplate=(
+                    "<b>%{y} @ %{x}</b><br>%{customdata}<extra></extra>"
+                ),
+                customdata=_customdata,
+            )
+
+        st.plotly_chart(
+            _fig,
+            use_container_width=True,
+            key="analytics_daily_heatmap",
+            config={
+                "staticPlot": False,
+                "scrollZoom": False,
+                "displayModeBar": False,
+            },
+        )
 
         _file_prefix = map_type.replace(" ", "_")
         _date_tag    = pd.Timestamp(selected_date).strftime("%Y-%m-%d")
@@ -871,17 +1068,30 @@ def render(params: dict, ss) -> None:
         st.markdown(
             f'<div class="heatmap-legend">'
             f'Values = avg completed volume per day in hour. '
-            f'Colour scale: &nbsp;<strong style="color:#f5e642;">■</strong> low &nbsp;→&nbsp; '
-            f'<strong style="color:#3b0f70;">■</strong> high (≥ {VMAX[map_type]}). &nbsp;'
+            f'Colour scale: &nbsp;'
+            f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
+            f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high. &nbsp;'
             f'<strong>Total</strong> column = avg daily total per procedure.'
             f'</div>',
             unsafe_allow_html=True,
         )
 
-        _m_table_h = min(80 + 35 * len(monthly_pivot), 900)
-        st.dataframe(
-            style_monthly_pivot(monthly_pivot, VMAX[map_type]),
-            width="stretch", height=_m_table_h,
+        _m_fig = _build_analytics_heatmap(
+            monthly_pivot,
+            colorscale="Viridis",
+            hovertemplate=(
+                "<b>%{y} @ %{x}</b><br>Avg per day: %{z:.1f}<extra></extra>"
+            ),
+        )
+        st.plotly_chart(
+            _m_fig,
+            use_container_width=True,
+            key="analytics_monthly_heatmap",
+            config={
+                "staticPlot": False,
+                "scrollZoom": False,
+                "displayModeBar": False,
+            },
         )
 
         _m_file_prefix = map_type.replace(" ", "_")
