@@ -1,6 +1,6 @@
 import calendar as _cal
 from copy import deepcopy
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import altair as alt
 import numpy as np
@@ -462,18 +462,26 @@ def render_sidebar(ss) -> dict:
 
                 # shadcn date picker — light-themed by design; we accept
                 # the library's native styling per the integration spec.
-                # Returns datetime.datetime (or None); convert to date so
-                # the rest of the pipeline (which expects date objects)
-                # keeps working unchanged.
+                # The library only stringifies values that are datetime
+                # instances (isinstance check on datetime, NOT date) —
+                # passing a date object falls through unchanged and
+                # then fails JSON marshalling on the way into the JS
+                # component. Convert to datetime first.  Returns
+                # datetime.datetime (or None); we convert the return
+                # back to date so the downstream pipeline (which uses
+                # date everywhere) keeps working unchanged.
                 _picker_key = (
                     f"analytics_date_picker_v"
                     f"{ss.get('_analytics_date_version', 0)}"
+                )
+                _default_dt = datetime.combine(
+                    ss["analytics_date"], datetime.min.time()
                 )
                 _picked = ui.date_picker(
                     key=_picker_key,
                     mode="single",
                     label="",
-                    default_value=ss["analytics_date"],
+                    default_value=_default_dt,
                 )
                 if _picked is not None:
                     _picked_d = (
