@@ -296,14 +296,15 @@ def build_tat_table(
     MultiIndex columns.
 
     Three groups are computed for each procedure:
-      • Routine  — rows where Collection Priority == 'RT'
+      • Routine  — rows where Collection Priority is 'RT' or 'TS'
+                   (TS = Time Study, treated as routine)
       • Stat     — rows where Collection Priority == 'ST'
       • Combined — every row for that procedure regardless of priority
 
     Per group the function reports n, Mean, Min, Max, and % <1h
     (percentage of samples with TAT_minutes < 60). Procedures that have
     no rows in a given group get None for every stat column in that
-    group; Phase-2 rendering will display those as "—".
+    group; Phase-2 rendering displays those as "—".
 
     The returned DataFrame has one row per procedure in
     `selected_procedures` and a pandas MultiIndex column structure:
@@ -342,7 +343,7 @@ def build_tat_table(
     rows = []
     for proc in selected_procedures:
         proc_rows = sel[sel["Order Procedure"] == proc]
-        rt   = proc_rows[proc_rows["Collection Priority"] == "RT"]
+        rt   = proc_rows[proc_rows["Collection Priority"].isin(["RT", "TS"])]
         stat = proc_rows[proc_rows["Collection Priority"] == "ST"]
         comb = proc_rows
         rows.append(
