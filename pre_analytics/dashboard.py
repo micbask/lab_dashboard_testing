@@ -92,18 +92,35 @@ def render_sidebar(ss) -> dict:
             _pa_date_str = f"{_pa_sel_year:04d}-{_pa_sel_month:02d}"
             ss["pa_date"] = _pa_date_str
 
+        # ── Hour Range  (display-only filter; mirrors analytics styling) ──
+        st.markdown("### Hour Range")
+
+        def _pa_fmt_h(h: int) -> str:
+            hr12 = 12 if h % 12 == 0 else h % 12
+            suf  = "AM" if h < 12 else "PM"
+            return f"{hr12}:00 {suf}"
+
+        pa_hour_range = st.slider(
+            "Hours", 0, 23, (0, 23),
+            label_visibility="collapsed",
+            key="pa_hour_range",
+        )
+        st.caption(f"{_pa_fmt_h(pa_hour_range[0])} → {_pa_fmt_h(pa_hour_range[1])}")
+
     return {
         "pa_location": pa_location,
         "pa_view": pa_view,
         "pa_date_str": _pa_date_str,
+        "pa_hour_range": pa_hour_range,
     }
 
 
 def render(params: dict, ss) -> None:
     """Render pre-analytics main panel."""
-    pa_location = params["pa_location"]
-    pa_view     = params["pa_view"]
-    _pa_ds      = params["pa_date_str"]
+    pa_location  = params["pa_location"]
+    pa_view      = params["pa_view"]
+    _pa_ds       = params["pa_date_str"]
+    pa_h_start, pa_h_end = params.get("pa_hour_range", (0, 23))
 
     try:
         import plotly.graph_objects as _pgo
@@ -120,10 +137,16 @@ def render(params: dict, ss) -> None:
 
         _draw_df, _draw_debug = load_draw_data(_pa_ds, pa_view)
 
-        _loc_df = (
-            _draw_df[_draw_df["location"] == pa_location]
-            if not _draw_df.empty else _draw_df
-        )
+        # KPI cards reflect the selected hour range: filter both by
+        # location and by hour ∈ [pa_h_start, pa_h_end].
+        if not _draw_df.empty:
+            _loc_df = _draw_df[
+                (_draw_df["location"] == pa_location)
+                & (_draw_df["hour"] >= pa_h_start)
+                & (_draw_df["hour"] <= pa_h_end)
+            ]
+        else:
+            _loc_df = _draw_df
         _pa_total_draws   = len(_loc_df)
         _pa_total_samples = int(_loc_df["samples"].sum()) if not _loc_df.empty else 0
         _pa_active_techs  = int(_loc_df["display_name"].nunique()) if not _loc_df.empty else 0
@@ -156,10 +179,16 @@ def render(params: dict, ss) -> None:
             "HC3":    [None],
         }
 
-        def _render_pa_heatmap(draw_df, location, shift, view, heatmap_key):
+        def _render_pa_heatmap(draw_df, location, shift, view, heatmap_key,
+                               hour_range):
+            _h_start, _h_end = hour_range
+            _hours_subset = list(range(_h_start, _h_end + 1))
+
+            # Build the full 0..23 pivot then slice to the selected hours.
             _pivot = build_draw_pivot(draw_df, location, shift, view)
+            _pivot = _pivot[_hours_subset]
             _techs = _pivot.index.tolist()
-            _x     = _PA_HOUR_LABELS
+            _x     = [HOUR_LABELS[h] for h in _hours_subset]
 
             _z_arr   = _pivot.values.astype(float)
             _flat    = [v for row in _z_arr for v in row if v > 0]
@@ -232,7 +261,7 @@ def render(params: dict, ss) -> None:
                         _details[(_tech, int(_hour))] = "<br>".join(_lines)
 
                 _heatmap_kwargs["customdata"] = [
-                    [_details.get((_tech, _h), None) for _h in range(24)]
+                    [_details.get((_tech, _h), None) for _h in _hours_subset]
                     for _tech in _techs
                 ]
                 _heatmap_kwargs["hovertemplate"] = (
@@ -302,7 +331,10 @@ def render(params: dict, ss) -> None:
             if pa_location != "HC3" and _pa_shift is not None:
                 st.subheader(f"{pa_location} — {_pa_shift}")
             _hkey = f"heatmap_{pa_location}_{_pa_shift or 'all'}"
-            _render_pa_heatmap(_draw_df, pa_location, _pa_shift, pa_view, _hkey)
+            _render_pa_heatmap(
+                _draw_df, pa_location, _pa_shift, pa_view, _hkey,
+                (pa_h_start, pa_h_end),
+            )
 
     except Exception as e:
         st.exception(e)
