@@ -157,12 +157,15 @@ def load_monthly_avg_for_comparison(
 # TAT DATA LAYER (Phase 1)
 # ════════════════════════════════════════════════════════════════════════════
 
-# Patient-Location prefixes that pick out each USC facility from the raw
-# data. Keck inpatient/clinic locations all start with "USC"; Norris
-# Cancer Center locations all start with "NCI".
+# Accession-number prefixes that identify each facility. The TAT view
+# filters on "Accession Nbr - Formatted" (more accurate than the older
+# Patient-Location prefix because every sample carries an accession
+# number, including outpatient cases where Patient Location can be
+# blank or non-USC/non-NCI). Keck accessions start with "267"; Norris
+# accessions start with "330".
 _TAT_FACILITY_PREFIX = {
-    "Keck":   "USC",
-    "Norris": "NCI",
+    "Keck":   "267",
+    "Norris": "330",
 }
 
 # Stat columns reported per priority group inside `build_tat_table`'s
@@ -185,8 +188,8 @@ def load_tat_data(
     view : str
         'Daily' or 'Monthly'.
     facility : str
-        'Keck' (Patient Location startswith 'USC') or
-        'Norris' (Patient Location startswith 'NCI').
+        'Keck'   (Accession Nbr - Formatted starts with '267') or
+        'Norris' (Accession Nbr - Formatted starts with '330').
 
     Returns a DataFrame with columns
         ['Order Procedure', 'Collection Priority', 'TAT_minutes']
@@ -197,7 +200,8 @@ def load_tat_data(
     Uses the same partition-aware loader (`load_filtered_data`) as the
     existing volume heatmaps; the resource and procedure-exclusion filters
     are bypassed by passing empty tuples, then the facility filter is
-    applied on Patient Location after the partition load.
+    applied on `Accession Nbr - Formatted` (267 = Keck, 330 = Norris)
+    after the partition load.
     """
     if view == "Daily":
         target_date = date.fromisoformat(date_str)
@@ -226,7 +230,7 @@ def load_tat_data(
         return _empty
 
     needed = [
-        "Order Procedure", "Collection Priority", "Patient Location",
+        "Order Procedure", "Collection Priority", "Accession Nbr - Formatted",
         "Date/Time - Complete", "Date/Time - Drawn",
     ]
     keep = [c for c in needed if c in df.columns]
@@ -251,10 +255,13 @@ def load_tat_data(
         & (cmpl.dt.date <= end_d)
     ]
 
+    # Accession-prefix facility filter. Cast to str first because the
+    # parquet column can come back as int / pandas StringDtype / object
+    # depending on how the source file was parsed.
     prefix = _TAT_FACILITY_PREFIX.get(facility, "")
-    if prefix and "Patient Location" in df.columns:
-        loc = df["Patient Location"].fillna("").astype(str)
-        df = df[loc.str.startswith(prefix)]
+    if prefix and "Accession Nbr - Formatted" in df.columns:
+        acc = df["Accession Nbr - Formatted"].astype(str)
+        df = df[acc.str.startswith(prefix, na=False)]
 
     df = df[df["Date/Time - Drawn"].notna()]
     if df.empty:
