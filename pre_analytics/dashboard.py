@@ -187,7 +187,7 @@ def render(params: dict, ss) -> None:
                 zmax=_vmax_pa,
                 xgap=1,
                 ygap=1,
-                colorbar=dict(title="Draws/hour", thickness=12, len=0.9),
+                showscale=False,
             )
 
             if view == "Monthly":
@@ -278,6 +278,25 @@ def render(params: dict, ss) -> None:
                     "displayModeBar": False,
                 },
             )
+
+        # Shared section header + colourscale legend, rendered ONCE above
+        # all the per-shift heatmaps (matches the analytics dashboard's
+        # "Completed Volume by Procedure & Hour" header / legend pair).
+        # The YlOrBr swatch colours are the actual low/high stops of the
+        # Plotly built-in colorscale used on the heatmaps below.
+        st.markdown(
+            '<div class="section-heading">Draws by Tech &amp; Hour</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="heatmap-legend">'
+            'Colour scale: &nbsp;'
+            '<strong style="color:#fff7bc;">■</strong> low &nbsp;→&nbsp; '
+            '<strong style="color:#8c2d04;">■</strong> high. &nbsp;'
+            'Higher values indicate more draws per hour.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
         for _pa_shift in _PA_SHIFT_ORDER.get(pa_location, [None]):
             if pa_location != "HC3" and _pa_shift is not None:
