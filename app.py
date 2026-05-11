@@ -14,6 +14,7 @@ import streamlit as st
 
 from config import DEFAULT_RESOURCES
 from ui_components import inject_css, setup_mpl_font
+from cloud_chrome_overlay import inject_overlay_covers
 import analytics.dashboard as _analytics
 import pre_analytics.dashboard as _pre_analytics
 
@@ -93,6 +94,7 @@ st.markdown(
 )
 
 inject_css()
+inject_overlay_covers()
 setup_mpl_font()
 
 
