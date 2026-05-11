@@ -455,29 +455,31 @@ def render_sidebar(ss) -> dict:
                 selected_date = picked_date
                 _is_forecast_date = selected_date > _max_d
 
-                # Date-range metadata caption — sits BELOW the date input,
-                # styled small + muted via .sidebar-meta-caption.
-                _fc_note = (
-                    f" + forecast to {_fc_max_d}" if forecast_dates else ""
-                )
+                # Date-range metadata caption — sits BELOW the date
+                # input, styled small + muted via .sidebar-meta-caption.
+                # Shows the FULL selectable window, which is what the
+                # date_input min/max enforces — the forecast extension
+                # (if any) is folded into _fc_max_d already, so no need
+                # to surface the "+ forecast to ..." implementation
+                # detail to the user.
                 st.markdown(
                     f'<div class="sidebar-meta-caption">'
-                    f'{_min_d} → {_max_d}{_fc_note}'
+                    f'{_min_d} → {_fc_max_d}'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
 
-                # Compact arrow-only Prev/Next buttons. Layout uses
-                # st.columns([1, 1, 6]) so the two 44px buttons sit at
-                # the left edge with the rest of the row blank — keeps
-                # the column-gap close to the spec'd 8px without raw
-                # HTML wrappers (which would break st.button).
-                _nc1, _nc2, _nc_spacer = st.columns([1, 1, 6])
+                # Prev / Next nav buttons. Equal-width columns with a
+                # medium (16 px) gap so the two buttons are visually
+                # balanced regardless of sidebar width. Each button
+                # stretches to fill its column (width="stretch").
+                _nc1, _nc2 = st.columns([1, 1], gap="medium")
                 with _nc1:
                     if st.button(
                         "←",
                         disabled=(selected_date <= _min_d),
                         key="nav_prev_date",
+                        width="stretch",
                     ):
                         ss["_pending_date"] = selected_date - timedelta(days=1)
                         st.rerun()
@@ -486,6 +488,7 @@ def render_sidebar(ss) -> dict:
                         "→",
                         disabled=(selected_date >= _fc_max_d),
                         key="nav_next_date",
+                        width="stretch",
                     ):
                         ss["_pending_date"] = selected_date + timedelta(days=1)
                         st.rerun()
