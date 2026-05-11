@@ -83,6 +83,7 @@ section[data-testid="stSidebar"] {
     width: 320px !important;
     min-width: 320px !important;
     max-width: 320px !important;
+    position: relative !important;
 }
 section[data-testid="stSidebar"] > div:first-child {
     width: 320px !important;
@@ -90,6 +91,7 @@ section[data-testid="stSidebar"] > div:first-child {
 section[data-testid="stSidebar"] [data-testid="stSidebarResizer"],
 section[data-testid="stSidebar"] div[role="separator"] {
     display: none !important;
+    pointer-events: none !important;
 }
 /* Force the cursor to default everywhere on the sidebar — Streamlit
    sets cursor: col-resize / ew-resize on the right-edge resizer
@@ -99,13 +101,40 @@ section[data-testid="stSidebar"] div[role="separator"] {
    plausible carrier so the right edge feels static. */
 section[data-testid="stSidebar"],
 section[data-testid="stSidebar"]::before,
-section[data-testid="stSidebar"]::after,
 section[data-testid="stSidebar"] > div,
 section[data-testid="stSidebar"] [data-testid="stSidebarResizer"],
 section[data-testid="stSidebar"] [data-testid="stSidebarResizer"]::before,
 section[data-testid="stSidebar"] [data-testid="stSidebarResizer"]::after,
 section[data-testid="stSidebar"] div[role="separator"] {
     cursor: default !important;
+}
+/* Invisible right-edge overlay — final defense against the col-resize
+   cursor. The previous round of fixes targeted every named resizer
+   element we could find (stSidebarResizer, div[role=separator], the
+   section itself + its pseudo-elements) but the cursor still leaked
+   through, which means in this Streamlit version the cursor is being
+   applied to an element we can't enumerate (possibly a sibling outside
+   the section, possibly via inline style set by Streamlit's JS, or via
+   a pseudo-element on a wrapper we don't know the selector for).
+   This overlay sidesteps all that: it's an empty ::after pseudo-element
+   anchored to the sidebar's right edge, extending 6 px outside and
+   6 px inside the edge, with `cursor: default !important`,
+   `pointer-events: auto`, and a high z-index. Any cursor-bearing
+   element underneath is covered by this strip; hovering at the right
+   edge hits the overlay instead and the cursor stays as the default
+   arrow. The strip is fully transparent so it's visually a no-op. */
+section[data-testid="stSidebar"]::after {
+    content: '' !important;
+    display: block !important;
+    position: absolute !important;
+    top: 0 !important;
+    right: -6px !important;
+    width: 12px !important;
+    height: 100% !important;
+    background: transparent !important;
+    cursor: default !important;
+    pointer-events: auto !important;
+    z-index: 99999 !important;
 }
 /* SIDEBAR SECTION LABELS — every section label is rendered as a
    markdown h3 ("### Date" etc.). Streamlit's default theming gives
@@ -296,12 +325,23 @@ html body [data-testid="stBaseButton-primary"]:disabled {
 }
 
 /* Sidebar selectbox trigger — subtle dark fill on dark sidebar. Used
-   by the Monthly month picker on both analytics + pre-analytics. */
+   by the Monthly month picker on both analytics + pre-analytics.
+   Background is a SOLID dark color (not an `rgba(...)` overlay).
+   When the theme's `secondaryBackgroundColor` was dark, the previous
+   `rgba(255, 255, 255, 0.05)` overlay rendered as ~#232323 (sidebar
+   bg showing through 5 % white). After that theme value was reverted
+   to the Streamlit-default light `#f0f2f6` to fix the calendar
+   header, baseweb's Select control started using the new LIGHT color
+   for its internal trigger background — the transparent overlay
+   exposed it, leaving white text invisible on a near-white surface.
+   A solid `#262626` keeps the trigger dark independent of any theme
+   value, so the white text stays readable regardless of future
+   theme changes. */
 html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] > div > div,
 html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] [role="combobox"],
 html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child {
-    background: rgba(255, 255, 255, 0.05) !important;
-    background-color: rgba(255, 255, 255, 0.05) !important;
+    background: #262626 !important;
+    background-color: #262626 !important;
     color: #ffffff !important;
     border: 1px solid rgba(255, 255, 255, 0.15) !important;
     border-radius: 6px !important;
@@ -309,8 +349,8 @@ html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-bas
 }
 html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child:focus-within,
 html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child[aria-expanded="true"] {
-    background: rgba(255, 255, 255, 0.05) !important;
-    background-color: rgba(255, 255, 255, 0.05) !important;
+    background: #262626 !important;
+    background-color: #262626 !important;
     border-color: #F1AB1F !important;
 }
 html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] svg {
