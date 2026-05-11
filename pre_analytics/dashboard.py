@@ -199,16 +199,16 @@ def render(params: dict, ss) -> None:
 
         _kc1, _kc2, _kc3, _kc4 = st.columns(4)
         with _kc1:
-            st.markdown(metric_card("Total Draws", f"{_pa_total_draws:,}", accent=True),
+            st.markdown(metric_card("Total draws", f"{_pa_total_draws:,}", accent=True),
                         unsafe_allow_html=True)
         with _kc2:
-            st.markdown(metric_card("Total Samples", f"{_pa_total_samples:,}"),
+            st.markdown(metric_card("Total samples", f"{_pa_total_samples:,}"),
                         unsafe_allow_html=True)
         with _kc3:
-            st.markdown(metric_card("Active Techs", str(_pa_active_techs)),
+            st.markdown(metric_card("Active techs", str(_pa_active_techs)),
                         unsafe_allow_html=True)
         with _kc4:
-            st.markdown(metric_card("Peak Hour", _pa_peak_hour), unsafe_allow_html=True)
+            st.markdown(metric_card("Peak hour", _pa_peak_hour), unsafe_allow_html=True)
 
         st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
 
@@ -355,7 +355,7 @@ def render(params: dict, ss) -> None:
         # The YlOrBr swatch colours are the actual low/high stops of the
         # Plotly built-in colorscale used on the heatmaps below.
         st.markdown(
-            '<div class="section-heading">Draws by Tech &amp; Hour</div>',
+            '<div class="section-heading">Draws by tech &amp; hour</div>',
             unsafe_allow_html=True,
         )
         st.markdown(
