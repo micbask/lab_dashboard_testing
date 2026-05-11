@@ -67,11 +67,29 @@ section.main {
 }
 
 /* ═══════════════════════════════════════════════════════
-   SIDEBAR — dark background, light text
-   ═══════════════════════════════════════════════════════ */
-[data-testid="stSidebar"] {
+   SIDEBAR — dark background, light text, locked to 320 px
+   ═══════════════════════════════════════════════════════
+   Width is fixed so the user can't drag-resize the sidebar.
+   320 px gives enough room for the section labels and the
+   date input on a single line without wrapping. The resize
+   handle (split into [data-testid=stSidebarResizer] in some
+   Streamlit versions and a bare role="separator" in others)
+   is hidden via both selectors so the right edge has no
+   visible drag affordance. */
+[data-testid="stSidebar"],
+section[data-testid="stSidebar"] {
     background-color: #1a1a1a !important;
     border-right: 1px solid #2e2e2e !important;
+    width: 320px !important;
+    min-width: 320px !important;
+    max-width: 320px !important;
+}
+section[data-testid="stSidebar"] > div:first-child {
+    width: 320px !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarResizer"],
+section[data-testid="stSidebar"] div[role="separator"] {
+    display: none !important;
 }
 /* SIDEBAR SECTION LABELS — every section label is rendered as a
    markdown h3 ("### Date" etc.). Streamlit's default theming gives
@@ -284,43 +302,15 @@ html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] svg {
     color: rgba(255, 255, 255, 0.7) !important;
 }
 
-/* Dropdown panel — renders in a baseweb portal/popover so the
-   selectors are global. Gold border, dark fill, hover gold tint,
-   currently-selected item maroon @ 40% (visually distinct from hover). */
-[data-baseweb="popover"] [data-baseweb="menu"],
-[data-baseweb="popover"] [role="listbox"],
-[role="listbox"] {
-    background: #1a1a1a !important;
-    background-color: #1a1a1a !important;
-    border: 1px solid rgba(241, 171, 31, 0.3) !important;
-    border-radius: 8px !important;
-    max-height: 240px !important;
-    overflow-y: auto !important;
-    padding: 4px !important;
-}
-[data-baseweb="popover"] [data-baseweb="menu"] [role="option"],
-[data-baseweb="popover"] [role="listbox"] [role="option"],
-[role="option"] {
-    color: #e8e8e8 !important;
-    background: transparent !important;
-    background-color: transparent !important;
-    padding: 8px 12px !important;
-    border-radius: 4px !important;
-}
-[data-baseweb="popover"] [data-baseweb="menu"] [role="option"]:hover,
-[data-baseweb="popover"] [role="listbox"] [role="option"]:hover,
-[role="option"]:hover {
-    background: rgba(241, 171, 31, 0.15) !important;
-    background-color: rgba(241, 171, 31, 0.15) !important;
-    color: #ffffff !important;
-}
-[data-baseweb="popover"] [data-baseweb="menu"] [role="option"][aria-selected="true"],
-[data-baseweb="popover"] [role="listbox"] [role="option"][aria-selected="true"],
-[role="option"][aria-selected="true"] {
-    background: rgba(121, 10, 38, 0.4) !important;
-    background-color: rgba(121, 10, 38, 0.4) !important;
-    color: #ffffff !important;
-}
+/* NOTE: previously we styled [data-baseweb="popover"] / [role="listbox"]
+   / [role="option"] to dark-theme the selectbox dropdown panel. That
+   global rule also matched the month / year selectors inside the
+   st.date_input calendar popup, which painted the calendar header
+   bar dark + the header text dark = an invisible "May 2026" label.
+   The rule has been removed; selectbox dropdowns and the calendar
+   popup now use Streamlit's default light styling.  The sidebar
+   selectbox TRIGGER above keeps its dark fill — only the open-state
+   dropdown panel reverts to default. */
 
 /* ═══════════════════════════════════════════════════════
    DATE INPUT
@@ -416,17 +406,13 @@ html body section[data-testid="stSidebar"] [data-testid="stSlider"] div[class*="
 /* ═══════════════════════════════════════════════════════
    PREV / NEXT DATE NAV BUTTONS
    ═══════════════════════════════════════════════════════
-   Compact arrow-only icon buttons (← and →). 44px wide,
-   transparent fill, subtle white outline. Functionality
-   stays identical — only the visual treatment changes.
-   The widget-wrapping column gets a tight min-width too so
-   Streamlit's column gap roughly delivers the spec'd 8px
-   between the two buttons. */
-html body [data-testid="stSidebar"] .st-key-nav_prev_date,
-html body [data-testid="stSidebar"] .st-key-nav_next_date {
-    width: 44px !important;
-    min-width: 0 !important;
-}
+   Arrow-only icon buttons (← and →) that fill their
+   parent st.column. Each column is half-sidebar-width so
+   on the locked 320 px sidebar the buttons are roughly
+   ~140 px wide and visually balanced; the column gap
+   ("medium" = 16 px) is the spacing between them.
+   Transparent fill + subtle white outline; functionality
+   stays identical. */
 html body [data-testid="stSidebar"] .st-key-nav_prev_date button,
 html body [data-testid="stSidebar"] .st-key-nav_next_date button,
 html body [data-testid="stSidebar"] .st-key-nav_prev_date .stButton > button,
@@ -439,9 +425,6 @@ html body [data-testid="stSidebar"] .st-key-nav_next_date .stButton > button {
     font-weight: 500 !important;
     padding: 6px 0 !important;
     border-radius: 6px !important;
-    width: 44px !important;
-    min-width: 44px !important;
-    max-width: 44px !important;
     text-align: center !important;
     line-height: 1 !important;
     box-shadow: none !important;
