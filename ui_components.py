@@ -75,6 +75,23 @@ section.main {
     max-width: 1480px !important;
 }
 
+/* Safety net for the full-bleed banner + cardinal stripe — these
+   elements use `width: calc(100vw - 320 px)` and negative margins
+   to overflow their parent container. If any wrapper has
+   `overflow-x: hidden` (Streamlit sometimes sets this on stMain or
+   block-container in newer versions), the bar gets clipped at the
+   parent's bounds and the visual full-bleed fails. Force every
+   plausible wrapper between stMain and the bar to allow horizontal
+   overflow. */
+[data-testid="stMain"],
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"] > div,
+[data-testid="stMain"] .block-container,
+[data-testid="stMain"] [data-testid="stVerticalBlock"],
+[data-testid="stMain"] [data-testid="stMainBlockContainer"] {
+    overflow-x: visible !important;
+}
+
 /* ═══════════════════════════════════════════════════════
    SIDEBAR — dark background, light text, locked to 320 px
    ═══════════════════════════════════════════════════════
@@ -921,10 +938,16 @@ hr {
 .app-header-stripe {
     height: 2px !important;
     background: #790A26 !important;
+    /* Same full-bleed-minus-sidebar geometry as the bar above:
+       explicit width = stMain (100vw - 320 px sidebar), shifted
+       left via calc margin so the left edge sits at the sidebar's
+       right edge. Stripe + bar share identical horizontal extent. */
+    width: calc(100vw - 320px) !important;
+    max-width: calc(100vw - 320px) !important;
     margin-top: 0 !important;
     margin-bottom: 16px !important;
     margin-left: calc(50% - 50vw + 160px) !important;
-    margin-right: calc(50% - 50vw + 160px) !important;
+    margin-right: 0 !important;
     padding: 0 !important;
     border: none !important;
     position: relative !important;
@@ -1090,33 +1113,34 @@ def render_header(map_type: str, date_str: str) -> None:
           position: relative !important;
           background: #1a1a1a !important;
           padding: 20px 24px !important;
-          /* FULL-BLEED MINUS SIDEBAR — extend the bar from the
-             sidebar's right edge to the viewport's right edge,
-             regardless of block-container's max-width: 1480 px
-             constraint.
+          /* FULL-BLEED MINUS SIDEBAR — pin the bar to span exactly
+             from the sidebar's right edge to the viewport's right
+             edge, regardless of block-container's max-width: 1480 px,
+             any wrapper padding, or Streamlit's `overflow-x` quirks.
 
-             The formula `margin-x = 50% - 50vw + 160 px` is the
-             standard CSS full-bleed trick adapted to skip the
-             sidebar:
-               • 50%      = parent (block-container) center
-               • 50vw     = viewport center
-               • + 160 px = half of the locked 320 px sidebar
-             When the parent is centered inside stMain (which itself
-             spans 100vw - 320 px), this pulls the bar's box out to
-             stMain's edges. On viewports narrower than 1480 px the
-             formula collapses to 0 (block-container already fills
-             stMain naturally), so the bar matches stMain in both
-             cases.
+             Three properties working together:
+               1. `width: calc(100vw - 320px)` — explicit width =
+                  viewport minus sidebar = stMain's full content
+                  area. No reliance on parent box sizing.
+               2. `margin-left: calc(50% - 50vw + 160px)` — shifts
+                  the bar's box from its natural position (parent
+                  content edge, somewhere inside block-container)
+                  back to the sidebar's right edge in viewport
+                  coords. Math: 50%=parent center, 50vw=viewport
+                  center, +160=half sidebar; negative when needed.
+               3. `margin-right: 0` — width controls the right edge
+                  now, so margin-right doesn't need to participate.
 
-             The previous `box-shadow: -100vw 0 0` trick was a no-op
-             — the shadow is the same shape/size as the element with
-             no spread, so it just painted a duplicate of the bar
-             1920 px off-screen. Replaced here with real width via
-             negative margins. */
+             Parent containers are forced to `overflow-x: visible`
+             (in _GLOBAL_CSS below) so the bar's overflow isn't
+             clipped. The previous box-shadow trick was a no-op —
+             see commit history for diagnosis. */
           margin-top: -1.8rem !important;
           margin-bottom: 0 !important;
           margin-left: calc(50% - 50vw + 160px) !important;
-          margin-right: calc(50% - 50vw + 160px) !important;
+          margin-right: 0 !important;
+          width: calc(100vw - 320px) !important;
+          max-width: calc(100vw - 320px) !important;
           align-items: center !important;
           gap: 16px !important;
           border-radius: 0 !important;
