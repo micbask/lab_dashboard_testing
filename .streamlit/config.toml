@@ -1,3 +1,16 @@
+[client]
+# Hide the "Deploy" button + the rerun / clear-cache developer options
+# from the top-right toolbar. Documented in
+# https://docs.streamlit.io/develop/api-reference/configuration/config.toml
+# under [client] toolbarMode. Valid values: "auto" | "developer" |
+# "viewer" | "minimal". "viewer" hides the developer options for
+# everyone (including the app owner when logged in to Streamlit Cloud)
+# — this is the approach Streamlit PR #14337 (released in 1.55)
+# documented as the supported way to hide the Deploy button without
+# CSS hacks. The CSS in ui_components.py also display:none's the
+# entire [data-testid="stHeader"] as a belt-and-suspenders.
+toolbarMode = "viewer"
+
 [theme]
 base = "light"
 primaryColor = "#6F1828"
