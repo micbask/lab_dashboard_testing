@@ -61,7 +61,7 @@ section.main {
     background-color: #f4f4f4 !important;
 }
 .block-container {
-    padding-top: 1.8rem !important;
+    padding-top: 0 !important;
     padding-bottom: 2rem !important;
     /* Explicit horizontal padding so the inner content (KPI cards,
        heatmap, section headings) sits 24 px from block-container's
@@ -69,10 +69,22 @@ section.main {
        full-bleed calc() margins (see render_header / .app-header-stripe
        below) and do NOT depend on this padding to align — they extend
        past block-container's max-width: 1480 px to reach stMain's
-       full content area. */
+       full content area.
+       padding-top: 0 (was 1.8rem) — paired with stHeader hidden, this
+       eliminates the residual empty strip at the top of the page so
+       the dark banner is the first thing in the content area. */
     padding-left: 24px !important;
     padding-right: 24px !important;
     max-width: 1480px !important;
+}
+/* Streamlit 1.38+ wraps block-container in a `.stMainBlockContainer`
+   element with its own padding-top. Hide stHeader doesn't shrink
+   this — community-confirmed (discuss.streamlit.io threads on
+   "remove top whitespace after hiding stHeader", 2024-2026) the fix
+   is to override .stMainBlockContainer padding directly. */
+.stMainBlockContainer,
+[data-testid="stMainBlockContainer"] {
+    padding-top: 0 !important;
 }
 
 /* Safety net for the full-bleed banner + cardinal stripe — these
@@ -141,13 +153,34 @@ header[data-testid="stHeader"],
     height: 0 !important;
     min-height: 0 !important;
 }
-/* Hosted-with-Streamlit footer badge on public Community Cloud apps.
-   The class name has a generated hash suffix (e.g.
-   .viewerBadge_link__1S137) so use attribute-prefix selectors. */
-.viewerBadge_container__1QSob,
-.viewerBadge_link__1S137,
+/* Bottom-right Community Cloud overlays:
+     • Viewer / hosted-with-Streamlit badge — visible to all viewers
+       on public apps. CSS class has a generated hash suffix (e.g.
+       `.viewerBadge_link__1S137`); use attribute-prefix selectors.
+     • "Manage app" red button — visible ONLY to the authenticated
+       app owner when viewing their own deployed app. Regular public
+       viewers don't see it (Streamlit Cloud renders it conditionally
+       based on owner authentication). Still worth hiding for the
+       owner's own preview. Exact testid isn't published in current
+       docs; community threads (2024-2026) suggest it lives under
+       class-prefix matches like `[class*="ManageApp"]` and possibly
+       `[data-testid*="manage"]`.
+     • Owner avatar — small profile circle that appears next to /
+       above the Manage app button, same owner-only visibility rule.
+   All selectors below use attribute-prefix `[class*="..."]` matching
+   so they catch the various hashed CSS module class names Streamlit
+   uses across versions. `footer` element catches the legacy "Made
+   with Streamlit" branding. */
 [class*="viewerBadge_container"],
 [class*="viewerBadge_link"],
+[class*="viewerBadge"],
+[class*="ManageApp"],
+[class*="manage-app"],
+[data-testid*="manage-app"],
+[data-testid="manage-app-button"],
+[data-testid="stActionButton"],
+[class*="HostMenu"],
+[class*="hostMenu"],
 footer {
     display: none !important;
     visibility: hidden !important;
@@ -1197,12 +1230,12 @@ def render_header(map_type: str, date_str: str) -> None:
              clipped. The previous box-shadow trick was a no-op —
              see commit history for diagnosis.
 
-             `margin-top: -1.8rem` offsets block-container's
-             padding-top so the bar's top edge lands at the very
-             top of stMain. With [data-testid="stHeader"] hidden
-             (display: none in _GLOBAL_CSS), nothing renders above
-             the bar — it IS the first thing on the page. */
-          margin-top: -1.8rem !important;
+             `margin-top: 0` because .block-container AND
+             .stMainBlockContainer both have padding-top: 0 (set
+             in _GLOBAL_CSS), AND [data-testid="stHeader"] is hidden
+             (display: none), so the bar naturally sits at the top
+             of stMain — no negative-margin offset needed. */
+          margin-top: 0 !important;
           margin-bottom: 0 !important;
           margin-left: calc(50% - 50vw + 160px) !important;
           margin-right: 0 !important;
