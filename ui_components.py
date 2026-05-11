@@ -63,6 +63,14 @@ section.main {
 .block-container {
     padding-top: 1.8rem !important;
     padding-bottom: 2rem !important;
+    /* Explicit horizontal padding (overrides Streamlit's variable
+       default — typically 1rem to 5rem depending on viewport) so the
+       header bar's negative-margin offset is a known constant.
+       The bar uses `margin-left/right: -24px` to extend out to
+       block-container's outer edge; matching internal `padding: 16px
+       24px` puts the title flush with the KPI cards / heatmap below. */
+    padding-left: 24px !important;
+    padding-right: 24px !important;
     max-width: 1480px !important;
 }
 
@@ -825,6 +833,13 @@ hr {
     border-radius: 8px;
     padding: 14px;
     margin-bottom: 0;
+    /* Equal-height enforcement — `min-height: 110 px` is the floor for
+       every card in a row regardless of content. Combined with the
+       :has() flex-stretch on the parent stHorizontalBlock (defined
+       further up), short-value cards (numbers, "9 AM") match the
+       tallest sibling — typically the Top procedure card, whose
+       value can wrap to 2 lines via .metric-card-long below. */
+    min-height: 110px;
     height: 100%;
     box-sizing: border-box;
     box-shadow: none;
@@ -867,11 +882,18 @@ hr {
     color: #1a1a1a;
     font-size: 16px;
     font-weight: 500;
-    border-bottom: none;
-    padding: 0;
+    /* Gold underline restored — subtle 1 px / 50 % USC gold so it
+       reads as a quiet rhythm element rather than a hard rule.
+       padding-bottom = 8 px so the line sits 8 px below the heading
+       text; margin-bottom = 16 px so the line is 16 px above the
+       legend; margin-top = 12 px combines with the metrics-divider's
+       12 px margin above to reach the spec'd 24 px gap from the KPI
+       cards row. */
+    border-bottom: 1px solid rgba(241, 171, 31, 0.5);
+    padding: 0 0 8px 0;
     letter-spacing: 0;
     text-transform: none;
-    margin: 24px 0 12px;
+    margin: 12px 0 16px 0;
 }
 .heatmap-legend {
     background: rgba(0, 0, 0, 0.02);
@@ -881,7 +903,8 @@ hr {
     padding: 8px 12px;
     font-size: 12px;
     color: rgba(0, 0, 0, 0.6);
-    margin-bottom: 12px;
+    margin-top: 0;
+    margin-bottom: 12px;  /* 12 px gap to the heatmap below */
 }
 /* ═══════════════════════════════════════════════════════
    APP HEADER STRIPE — 2 px cardinal band that sits directly
@@ -895,19 +918,26 @@ hr {
 .app-header-stripe {
     height: 2px !important;
     background: #790A26 !important;
-    /* Margins match the dark header bar above (same -20px sides
-       so the stripe abuts the dark bar exactly). The 24 px bottom
-       margin separates the stripe from the first content block
-       (typically a KPI row or section heading). */
-    margin: 0 -20px 24px -20px !important;
+    /* Margins match the dark header bar above — same -24px sides so
+       the stripe runs edge-to-edge with the bar across block-container's
+       full width, AND matches block-container's explicit 24px
+       horizontal padding for an exact alignment. The 16 px bottom
+       margin is the spec'd gap between the stripe and the first
+       content block (KPI card row). */
+    margin: 0 -24px 16px -24px !important;
     padding: 0 !important;
     border: none !important;
     box-shadow: -100vw 0 0 #790A26, 100vw 0 0 #790A26 !important;
     position: relative !important;
 }
 .metrics-divider {
+    /* Subtle horizontal line between the KPI card row and the
+       section heading below. Combined with the 12 px on each side,
+       the total gap from KPI cards to the section heading text is
+       ~24 px (matches the spec'd vertical-rhythm value). */
     border: none;
-    margin: 0;
+    border-top: 1px solid rgba(0, 0, 0, 0.06);
+    margin: 12px 0;
     height: 0;
 }
 .status-chip {
@@ -1063,15 +1093,18 @@ def render_header(map_type: str, date_str: str) -> None:
       {_banner_sel} {{
           position: relative !important;
           background: #1a1a1a !important;
-          padding: 14px 20px !important;
+          padding: 16px 24px !important;
           /* Negative horizontal margin EQUALS internal horizontal
-             padding so the inner content (title + nav pill) aligns
-             flush with the block-container content edge below — KPI
-             cards, section headings, etc. all sit at the same x. The
-             negative top margin offsets block-container's own 1.8rem
-             top padding so the dark band starts at the very top of
-             the content area. */
-          margin: -1.8rem -20px 0 -20px !important;
+             padding AND matches block-container's explicit 24 px
+             horizontal padding (set in _GLOBAL_CSS). Result: the bar
+             extends out to block-container's outer edge AND its
+             internal content (title + nav pill) sits flush with the
+             block-container content edge below — KPI cards, section
+             headings, the heatmap all share the same left/right edges.
+             Negative top margin offsets block-container's 1.8rem top
+             padding so the dark band starts at the very top of the
+             content area. */
+          margin: -1.8rem -24px 0 -24px !important;
           box-shadow: -100vw 0 0 #1a1a1a, 100vw 0 0 #1a1a1a !important;
           align-items: center !important;
           gap: 16px !important;
@@ -1090,7 +1123,7 @@ def render_header(map_type: str, date_str: str) -> None:
       /* ── Title + subtitle typography. */
       html body {_banner_sel} .app-header-title {{
           color: #ffffff !important;
-          font-size: 14px !important;
+          font-size: 17px !important;
           font-weight: 500 !important;
           letter-spacing: -0.01em !important;
           line-height: 1.2 !important;
@@ -1098,8 +1131,8 @@ def render_header(map_type: str, date_str: str) -> None:
           padding: 0 !important;
       }}
       html body {_banner_sel} .app-header-subtitle {{
-          color: rgba(255, 255, 255, 0.45) !important;
-          font-size: 11px !important;
+          color: rgba(255, 255, 255, 0.6) !important;
+          font-size: 12px !important;
           font-weight: 400 !important;
           letter-spacing: 0 !important;
           line-height: 1.3 !important;
