@@ -63,12 +63,13 @@ section.main {
 .block-container {
     padding-top: 1.8rem !important;
     padding-bottom: 2rem !important;
-    /* Explicit horizontal padding (overrides Streamlit's variable
-       default — typically 1rem to 5rem depending on viewport) so the
-       header bar's negative-margin offset is a known constant.
-       The bar uses `margin-left/right: -24px` to extend out to
-       block-container's outer edge; matching internal `padding: 16px
-       24px` puts the title flush with the KPI cards / heatmap below. */
+    /* Explicit horizontal padding so the inner content (KPI cards,
+       heatmap, section headings) sits 24 px from block-container's
+       outer edge. The header bar + cardinal stripe use their own
+       full-bleed calc() margins (see render_header / .app-header-stripe
+       below) and do NOT depend on this padding to align — they extend
+       past block-container's max-width: 1480 px to reach stMain's
+       full content area. */
     padding-left: 24px !important;
     padding-right: 24px !important;
     max-width: 1480px !important;
@@ -909,25 +910,23 @@ hr {
 /* ═══════════════════════════════════════════════════════
    APP HEADER STRIPE — 2 px cardinal band that sits directly
    between the dark header bar and the light content area.
-   The negative margins + box-shadow trick spans the stripe
-   across the full viewport regardless of block-container
-   padding, so the cardinal line reads as one continuous
-   horizontal accent across the page (the only place USC's
-   cardinal appears as a background colour in the new design).
+   Uses the same full-bleed-minus-sidebar margin formula as
+   the bar above (50% - 50vw + 160 px on each side), so the
+   stripe runs edge-to-edge with the bar across the full
+   content area regardless of block-container's max-width
+   1480 px constraint. The cardinal stripe is the only place
+   USC's cardinal appears as a background colour in the new
+   design.
    ═══════════════════════════════════════════════════════ */
 .app-header-stripe {
     height: 2px !important;
     background: #790A26 !important;
-    /* Margins match the dark header bar above — same -24px sides so
-       the stripe runs edge-to-edge with the bar across block-container's
-       full width, AND matches block-container's explicit 24px
-       horizontal padding for an exact alignment. The 16 px bottom
-       margin is the spec'd gap between the stripe and the first
-       content block (KPI card row). */
-    margin: 0 -24px 16px -24px !important;
+    margin-top: 0 !important;
+    margin-bottom: 16px !important;
+    margin-left: calc(50% - 50vw + 160px) !important;
+    margin-right: calc(50% - 50vw + 160px) !important;
     padding: 0 !important;
     border: none !important;
-    box-shadow: -100vw 0 0 #790A26, 100vw 0 0 #790A26 !important;
     position: relative !important;
 }
 .metrics-divider {
@@ -1034,8 +1033,8 @@ def render_header(map_type: str, date_str: str) -> None:
     visually extends the sidebar's dark chrome across the top of the
     content area. Layout:
 
-      • Left   : "Laboratory productivity dashboard" (14 px / 500)
-                 + subtitle reading "{bench/location} · {date}" (11 px /
+      • Left   : "Laboratory productivity dashboard" (17 px / 500)
+                 + subtitle reading "{bench/location} · {date}" (12 px /
                  muted white). Subtitle updates reactively with the
                  sidebar selections passed in via map_type + date_str.
       • Right  : Analytics / Pre-Analytics toggle pill — real
@@ -1045,8 +1044,12 @@ def render_header(map_type: str, date_str: str) -> None:
 
     Followed by a 2 px cardinal stripe (#790A26) — the only background
     use of USC's cardinal in the new design. It anchors the brand at
-    the chrome/content boundary and spans the full viewport via the
-    box-shadow extension trick.
+    the chrome/content boundary.
+
+    Both the bar and the stripe use a full-bleed-minus-sidebar margin
+    formula (`50% - 50vw + 160 px` on each side) so they extend past
+    block-container's max-width 1480 px to reach stMain's full content
+    area (sidebar's right edge → viewport's right edge).
     """
     _active = st.session_state.get(
         "_nav_dashboard",
@@ -1056,18 +1059,13 @@ def render_header(map_type: str, date_str: str) -> None:
 
     # Subtitle: "{bench/location} · {date}".
     #   • Analytics passes the full bench name as map_type — "Keck Core",
-    #     "Norris Core", "Norris Specialty". Lower-case everything after
-    #     the first word so it reads as sentence case: "Keck core",
-    #     "Norris core", "Norris specialty".
+    #     "Norris Core", "Norris Specialty". These are proper USC
+    #     department names; keep Title Case so "Core"/"Specialty" stay
+    #     capitalized in the subtitle.
     #   • Pre-analytics passes the short location ("Keck", "Norris",
-    #     "HC3") which is already correctly cased.
-    if _active == "analytics":
-        _w = map_type.split()
-        _bench = (
-            " ".join([_w[0]] + [s.lower() for s in _w[1:]]) if _w else map_type
-        )
-    else:
-        _bench = map_type
+    #     "HC3") which is also already correctly cased.
+    # In both cases map_type passes through unchanged.
+    _bench = map_type
     _subtitle = f"{_bench} · {date_str}"
 
     # Banner-scoped selectors — `:has()` lets us target the specific
@@ -1085,27 +1083,40 @@ def render_header(map_type: str, date_str: str) -> None:
     st.markdown(f"""
     <style>
       /* ── Header bar — dark band that visually extends the sidebar's
-            chrome across the top of the content area. The box-shadow
-            paints the same dark fill out to the viewport edges so the
-            band abuts the sidebar's right edge regardless of the
-            block-container's horizontal padding. Negative margins pull
-            the bar out of the block-container's top + side padding. */
+            chrome across the top of the content area. Full-bleed via
+            calc() margins so it spans past block-container's max-width
+            1480 px to stMain's edges (sidebar right → viewport right). */
       {_banner_sel} {{
           position: relative !important;
           background: #1a1a1a !important;
-          padding: 16px 24px !important;
-          /* Negative horizontal margin EQUALS internal horizontal
-             padding AND matches block-container's explicit 24 px
-             horizontal padding (set in _GLOBAL_CSS). Result: the bar
-             extends out to block-container's outer edge AND its
-             internal content (title + nav pill) sits flush with the
-             block-container content edge below — KPI cards, section
-             headings, the heatmap all share the same left/right edges.
-             Negative top margin offsets block-container's 1.8rem top
-             padding so the dark band starts at the very top of the
-             content area. */
-          margin: -1.8rem -24px 0 -24px !important;
-          box-shadow: -100vw 0 0 #1a1a1a, 100vw 0 0 #1a1a1a !important;
+          padding: 20px 24px !important;
+          /* FULL-BLEED MINUS SIDEBAR — extend the bar from the
+             sidebar's right edge to the viewport's right edge,
+             regardless of block-container's max-width: 1480 px
+             constraint.
+
+             The formula `margin-x = 50% - 50vw + 160 px` is the
+             standard CSS full-bleed trick adapted to skip the
+             sidebar:
+               • 50%      = parent (block-container) center
+               • 50vw     = viewport center
+               • + 160 px = half of the locked 320 px sidebar
+             When the parent is centered inside stMain (which itself
+             spans 100vw - 320 px), this pulls the bar's box out to
+             stMain's edges. On viewports narrower than 1480 px the
+             formula collapses to 0 (block-container already fills
+             stMain naturally), so the bar matches stMain in both
+             cases.
+
+             The previous `box-shadow: -100vw 0 0` trick was a no-op
+             — the shadow is the same shape/size as the element with
+             no spread, so it just painted a duplicate of the bar
+             1920 px off-screen. Replaced here with real width via
+             negative margins. */
+          margin-top: -1.8rem !important;
+          margin-bottom: 0 !important;
+          margin-left: calc(50% - 50vw + 160px) !important;
+          margin-right: calc(50% - 50vw + 160px) !important;
           align-items: center !important;
           gap: 16px !important;
           border-radius: 0 !important;
