@@ -93,6 +93,67 @@ section.main {
 }
 
 /* ═══════════════════════════════════════════════════════
+   STREAMLIT CHROME — hide everything above the app banner
+   ═══════════════════════════════════════════════════════
+   The top of a Streamlit app on Community Cloud renders three
+   layers we don't want:
+
+     1. [data-testid="stDecoration"] — 4 px coloured gradient bar
+        at the very top of the viewport. Hiding it removes the
+        red/cyan stripe.
+     2. [data-testid="stHeader"] — the entire top header strip.
+        Contains the Streamlit Cloud owner toolbar (Share / Star /
+        Edit / GitHub icons on a public app viewed by its owner),
+        the Deploy button, the running-man status widget, and the
+        three-dot hamburger menu. Hiding it removes ALL of these
+        in one rule, since they're all children of stHeader.
+     3. Footer ("Made with Streamlit") — small enough we keep it,
+        but no harm in hiding consistently.
+
+   `display: none !important` collapses the height to 0 (vs.
+   `visibility: hidden` which leaves the empty space). With the
+   header collapsed, the dark banner naturally rises to the top
+   of the viewport — visual equivalent of "the banner IS the
+   first thing on the page".
+
+   Selectors verified against current (2024-2026) Streamlit forum
+   threads on the topic; the post-1.38 selectors `stAppDeployButton`
+   and `stAppHeader` are added as fallbacks for newer versions
+   that may have renamed the testids.
+
+   Note that `client.toolbarMode = "viewer"` in .streamlit/config.toml
+   provides the documented config-level path for hiding the Deploy
+   button (Streamlit PR #14337 → 1.55). The CSS below ensures
+   complete suppression even on older Streamlit versions or if the
+   config option doesn't catch every chrome element. */
+[data-testid="stHeader"],
+[data-testid="stAppHeader"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+[data-testid="stToolbar"],
+[data-testid="stMainMenu"],
+[data-testid="stDeployButton"],
+[data-testid="stAppDeployButton"],
+header[data-testid="stHeader"],
+#MainMenu {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    min-height: 0 !important;
+}
+/* Hosted-with-Streamlit footer badge on public Community Cloud apps.
+   The class name has a generated hash suffix (e.g.
+   .viewerBadge_link__1S137) so use attribute-prefix selectors. */
+.viewerBadge_container__1QSob,
+.viewerBadge_link__1S137,
+[class*="viewerBadge_container"],
+[class*="viewerBadge_link"],
+footer {
+    display: none !important;
+    visibility: hidden !important;
+}
+
+/* ═══════════════════════════════════════════════════════
    SIDEBAR — dark background, light text, locked to 320 px
    ═══════════════════════════════════════════════════════
    Width is fixed so the user can't drag-resize the sidebar.
@@ -1134,7 +1195,13 @@ def render_header(map_type: str, date_str: str) -> None:
              Parent containers are forced to `overflow-x: visible`
              (in _GLOBAL_CSS below) so the bar's overflow isn't
              clipped. The previous box-shadow trick was a no-op —
-             see commit history for diagnosis. */
+             see commit history for diagnosis.
+
+             `margin-top: -1.8rem` offsets block-container's
+             padding-top so the bar's top edge lands at the very
+             top of stMain. With [data-testid="stHeader"] hidden
+             (display: none in _GLOBAL_CSS), nothing renders above
+             the bar — it IS the first thing on the page. */
           margin-top: -1.8rem !important;
           margin-bottom: 0 !important;
           margin-left: calc(50% - 50vw + 160px) !important;
