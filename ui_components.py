@@ -678,27 +678,70 @@ html body section[data-testid="stSidebar"] [data-testid="stRadio"]
 }
 
 /* ═══════════════════════════════════════════════════════
-   METRIC CARDS
+   METRIC CARDS (st.metric — used in admin tools)
    ═══════════════════════════════════════════════════════ */
 [data-testid="metric-container"] {
     background: #ffffff !important;
-    border: 1px solid #e2e8f0 !important;
-    border-top: 3px solid #6F1828 !important;
+    border: 0.5px solid rgba(0, 0, 0, 0.08) !important;
     border-radius: 8px !important;
-    padding: 1rem 1.25rem !important;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.07) !important;
+    padding: 14px !important;
+    box-shadow: none !important;
 }
 [data-testid="metric-container"] label {
-    font-size: 0.68rem !important;
-    font-weight: 700 !important;
-    letter-spacing: 0.08em !important;
-    text-transform: uppercase !important;
-    color: #64748b !important;
+    font-size: 11px !important;
+    font-weight: 500 !important;
+    letter-spacing: 0 !important;
+    text-transform: none !important;
+    color: rgba(0, 0, 0, 0.55) !important;
 }
 [data-testid="metric-container"] [data-testid="stMetricValue"] {
-    font-size: 1.55rem !important;
-    font-weight: 700 !important;
-    color: #0f172a !important;
+    font-size: 22px !important;
+    font-weight: 500 !important;
+    color: #1a1a1a !important;
+}
+
+/* ═══════════════════════════════════════════════════════
+   KPI CARD ROW (custom .metric-card HTML emitted by
+   `metric_card()` in ui_components — used by every dashboard
+   to render the 4–5 KPI cards above each heatmap)
+   ═══════════════════════════════════════════════════════
+   All five cards in a row must be equal-height. Streamlit's
+   st.columns layout doesn't equalize child heights by
+   default — the :has() block below stretches the column +
+   inner stVerticalBlock so the .metric-card inside each
+   column fills 100 % of the tallest sibling's height. The
+   long-value variant (auto-applied by metric_card when the
+   value is a procedure name) shrinks just the .value font
+   so it can wrap without making the card taller than its
+   short-value siblings. */
+[data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] .metric-card) {
+    align-items: stretch !important;
+    gap: 8px !important;
+}
+[data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] .metric-card)
+    > [data-testid="stColumn"] {
+    display: flex !important;
+    flex-direction: column !important;
+}
+[data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] .metric-card)
+    > [data-testid="stColumn"] > [data-testid="stVerticalBlock"] {
+    flex: 1 !important;
+    width: 100% !important;
+    height: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+}
+[data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] .metric-card)
+    > [data-testid="stColumn"] > [data-testid="stVerticalBlock"]
+    > [data-testid="stElementContainer"] {
+    flex: 1 !important;
+    height: 100% !important;
+}
+[data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] .metric-card)
+    > [data-testid="stColumn"] [data-testid="stMarkdownContainer"] {
+    flex: 1 !important;
+    width: 100% !important;
+    height: 100% !important;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -778,52 +821,94 @@ hr {
 }
 .metric-card {
     background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-top: 4px solid #6F1828;
+    border: 0.5px solid rgba(0, 0, 0, 0.08);
     border-radius: 8px;
-    padding: 1rem 1.1rem;
-    margin-bottom: 0.5rem;
+    padding: 14px;
+    margin-bottom: 0;
     height: 100%;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    box-sizing: border-box;
+    box-shadow: none;
+    display: flex;
+    flex-direction: column;
 }
-.metric-card.accent { border-top-color: #EDC153; }
+/* `.accent` legacy class is intentionally a no-op now — all cards
+   share the same neutral fill in the new design. */
+.metric-card.accent {
+    border-top-color: rgba(0, 0, 0, 0.08);
+}
 .metric-card .label {
-    color: #64748b;
-    font-size: 0.7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.6px;
-    margin-bottom: 0.3rem;
+    color: rgba(0, 0, 0, 0.55);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+    margin-bottom: 0;
 }
 .metric-card .value {
-    color: #6F1828;
-    font-size: 1.5rem;
-    font-weight: 700;
-    line-height: 1.1;
+    color: #1a1a1a;
+    font-size: 22px;
+    font-weight: 500;
+    line-height: 1;
+    margin-top: 10px;
     word-break: break-word;
 }
+/* Long values (procedure names) shrink to 14 px so they wrap
+   without making the card taller than its short-value peers. */
+.metric-card.metric-card-long .value {
+    font-size: 14px;
+    line-height: 1.2;
+}
 .metric-card .sub {
-    color: #64748b;
-    font-size: 0.72rem;
-    margin-top: 0.25rem;
+    color: rgba(0, 0, 0, 0.45);
+    font-size: 11px;
+    margin-top: 8px;
 }
 .section-heading {
-    color: #6F1828;
-    font-size: 1.05rem;
-    font-weight: 700;
-    border-bottom: 2px solid #EDC153;
-    padding-bottom: 0.3rem;
-    margin: 1rem 0 0.8rem;
+    color: #1a1a1a;
+    font-size: 16px;
+    font-weight: 500;
+    border-bottom: none;
+    padding: 0;
+    letter-spacing: 0;
+    text-transform: none;
+    margin: 24px 0 12px;
 }
 .heatmap-legend {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-left: 3px solid #EDC153;
+    background: rgba(0, 0, 0, 0.02);
+    border: 0.5px solid rgba(0, 0, 0, 0.06);
+    border-left: 0.5px solid rgba(0, 0, 0, 0.06);
     border-radius: 6px;
-    padding: 0.5rem 0.85rem;
-    font-size: 0.78rem;
-    color: #64748b;
-    margin-bottom: 0.7rem;
+    padding: 8px 12px;
+    font-size: 12px;
+    color: rgba(0, 0, 0, 0.6);
+    margin-bottom: 12px;
+}
+/* ═══════════════════════════════════════════════════════
+   APP HEADER STRIPE — 2 px cardinal band that sits directly
+   between the dark header bar and the light content area.
+   The negative margins + box-shadow trick spans the stripe
+   across the full viewport regardless of block-container
+   padding, so the cardinal line reads as one continuous
+   horizontal accent across the page (the only place USC's
+   cardinal appears as a background colour in the new design).
+   ═══════════════════════════════════════════════════════ */
+.app-header-stripe {
+    height: 2px !important;
+    background: #790A26 !important;
+    /* Margins match the dark header bar above (same -20px sides
+       so the stripe abuts the dark bar exactly). The 24 px bottom
+       margin separates the stripe from the first content block
+       (typically a KPI row or section heading). */
+    margin: 0 -20px 24px -20px !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: -100vw 0 0 #790A26, 100vw 0 0 #790A26 !important;
+    position: relative !important;
+}
+.metrics-divider {
+    border: none;
+    margin: 0;
+    height: 0;
 }
 .status-chip {
     display: inline-block;
@@ -837,11 +922,6 @@ hr {
 }
 .status-chip.warn  { background: #FEF9C3; color: #854D0E; }
 .status-chip.error { background: #FEE2E2; color: #991B1B; }
-.metrics-divider {
-    border: none;
-    border-top: 1px solid #e2e8f0;
-    margin: 0.9rem 0 1.1rem;
-}
 .refresh-btn button {
     background-color: #6F1828 !important;
     color: #ffffff !important;
@@ -875,12 +955,41 @@ div[data-testid="stDataFrame"] {
 # UI HELPER FUNCTIONS
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _is_long_kpi_value(v: str) -> bool:
+    """Heuristic: does a KPI value need the smaller-font card style?
+
+    Short values (numbers, "9 AM"/"6 PM" hour labels, percentages,
+    short tags) keep the 22 px / weight-500 main-value treatment.
+    Long values (procedure names like "Magnesium Plasma/Serum",
+    "Comprehensive Metabolic Panel…") get 14 px / line-height 1.2
+    so they wrap gracefully without breaking row-height alignment.
+    """
+    s = (v or "").strip()
+    if len(s) <= 6:
+        return False
+    if " AM" in s.upper() or " PM" in s.upper():
+        return False
+    if all(c.isdigit() or c in ".,%-+:" for c in s):
+        return False
+    return True
+
+
 def metric_card(label: str, value: str, sub: str = "", accent: bool = False) -> str:
-    """Return an HTML string for a styled metric card."""
-    cls = "metric-card accent" if accent else "metric-card"
+    """Return HTML for a KPI metric card.
+
+    Uniform style for every card — `accent` is kept as a no-op
+    parameter for backwards compatibility with existing call sites
+    that pass `accent=True`; the new design has no per-card accent
+    treatment (all cards share the same neutral white fill + thin
+    border, no coloured top stripe). Long values are auto-detected
+    via `_is_long_kpi_value` and rendered at a smaller font so cards
+    in the same row stay equal-height.
+    """
+    _ = accent  # backwards compat — no-op in the new design
+    long_cls = " metric-card-long" if _is_long_kpi_value(str(value)) else ""
     sub_html = f'<div class="sub">{sub}</div>' if sub else ""
     return (
-        f'<div class="{cls}">'
+        f'<div class="metric-card{long_cls}">'
         f'<div class="label">{label}</div>'
         f'<div class="value">{value}</div>'
         f'{sub_html}'
@@ -889,16 +998,25 @@ def metric_card(label: str, value: str, sub: str = "", accent: bool = False) -> 
 
 
 def render_header(map_type: str, date_str: str) -> None:
-    """Render the Keck Medicine banner.
+    """Render the thin dark app header bar + cardinal stripe.
 
-    Layout: title block on the left (h1 "Laboratory Productivity
-    Dashboard" + gold subtitle, matching main_test_2 typography);
-    a small st.button-based segmented-control tab bar pinned to the
-    top-right with the date below it. Banner is slimmer than the
-    earlier version (tighter vertical padding + smaller buttons).
+    Replaces the prior maroon banner with a quieter design that
+    visually extends the sidebar's dark chrome across the top of the
+    content area. Layout:
 
-    Nav clicks write st.query_params and call st.rerun(), so the URL
-    and active dashboard stay in sync without any anchor-tag reload.
+      • Left   : "Laboratory productivity dashboard" (14 px / 500)
+                 + subtitle reading "{bench/location} · {date}" (11 px /
+                 muted white). Subtitle updates reactively with the
+                 sidebar selections passed in via map_type + date_str.
+      • Right  : Analytics / Pre-Analytics toggle pill — real
+                 st.button widgets so the existing query_params
+                 mechanism keeps switching dashboards. CSS scoped via
+                 `:has()` styles them as the gold-on-dark pill.
+
+    Followed by a 2 px cardinal stripe (#790A26) — the only background
+    use of USC's cardinal in the new design. It anchors the brand at
+    the chrome/content boundary and spans the full viewport via the
+    box-shadow extension trick.
     """
     _active = st.session_state.get(
         "_nav_dashboard",
@@ -906,81 +1024,100 @@ def render_header(map_type: str, date_str: str) -> None:
     )
     _active_key = "nav_analytics" if _active == "analytics" else "nav_pre_analytics"
 
-    # Build the banner-scoped selector once for legibility.
+    # Subtitle: "{bench/location} · {date}".
+    #   • Analytics passes the full bench name as map_type — "Keck Core",
+    #     "Norris Core", "Norris Specialty". Lower-case everything after
+    #     the first word so it reads as sentence case: "Keck core",
+    #     "Norris core", "Norris specialty".
+    #   • Pre-analytics passes the short location ("Keck", "Norris",
+    #     "HC3") which is already correctly cased.
+    if _active == "analytics":
+        _w = map_type.split()
+        _bench = (
+            " ".join([_w[0]] + [s.lower() for s in _w[1:]]) if _w else map_type
+        )
+    else:
+        _bench = map_type
+    _subtitle = f"{_bench} · {date_str}"
+
+    # Banner-scoped selectors — `:has()` lets us target the specific
+    # horizontal block holding the title + nav buttons without affecting
+    # any other stHorizontalBlock on the page.
     _banner_sel = (
         'div[data-testid="stHorizontalBlock"]'
-        ':has(.keck-header-title):has(.st-key-nav_analytics)'
+        ':has(.app-header-title):has(.st-key-nav_analytics)'
     )
     _pill_sel = (
         'div[data-testid="stHorizontalBlock"]'
-        ':has(.st-key-nav_analytics):not(:has(.keck-header-title))'
+        ':has(.st-key-nav_analytics):not(:has(.app-header-title))'
     )
 
     st.markdown(f"""
     <style>
-      /* ── Outer maroon banner ── positioning context for the date.
-            Vertical padding bumped from 0.85rem → 1.2rem to add a
-            visible gap between the nav pill (pinned to the top via
-            normal flow) and the date (pinned 0.85rem from the bottom
-            via absolute positioning). */
+      /* ── Header bar — dark band that visually extends the sidebar's
+            chrome across the top of the content area. The box-shadow
+            paints the same dark fill out to the viewport edges so the
+            band abuts the sidebar's right edge regardless of the
+            block-container's horizontal padding. Negative margins pull
+            the bar out of the block-container's top + side padding. */
       {_banner_sel} {{
           position: relative !important;
-          background: linear-gradient(135deg, #6F1828 0%, #521322 100%);
-          padding: 1.2rem 1.8rem !important;
-          border-radius: 10px !important;
-          margin-bottom: 1.4rem !important;
-          box-shadow: 0 2px 8px rgba(111,24,40,0.25);
-          align-items: stretch !important;
+          background: #1a1a1a !important;
+          padding: 14px 20px !important;
+          /* Negative horizontal margin EQUALS internal horizontal
+             padding so the inner content (title + nav pill) aligns
+             flush with the block-container content edge below — KPI
+             cards, section headings, etc. all sit at the same x. The
+             negative top margin offsets block-container's own 1.8rem
+             top padding so the dark band starts at the very top of
+             the content area. */
+          margin: -1.8rem -20px 0 -20px !important;
+          box-shadow: -100vw 0 0 #1a1a1a, 100vw 0 0 #1a1a1a !important;
+          align-items: center !important;
+          gap: 16px !important;
+          border-radius: 0 !important;
+          box-sizing: border-box !important;
       }}
-      /* Force every wrapper between the banner and the date back to
-         static positioning so the date's `position: absolute` actually
-         anchors to the banner (Streamlit puts position: relative on a
-         number of intermediate stColumn / stVerticalBlock wrappers). */
+      /* Force every wrapper inside the banner back to static positioning
+         so the bar's own positioning context governs absolute children. */
       {_banner_sel} [data-testid="stColumn"],
       {_banner_sel} [data-testid="stVerticalBlock"],
       {_banner_sel} [data-testid="stElementContainer"],
-      {_banner_sel} [data-testid="stMarkdownContainer"],
-      {_banner_sel} [data-testid="element-container"] {{
+      {_banner_sel} [data-testid="stMarkdownContainer"] {{
           position: static !important;
       }}
 
-      /* ── Title typography ── high-specificity to beat Streamlit's
-            default <h1> / <p> margins which otherwise space the
-            subtitle far below the title. */
-      html body {_banner_sel} .keck-header-title,
-      html body {_banner_sel} .keck-header-title * {{
-          line-height: 1.2 !important;
-      }}
-      html body {_banner_sel} .keck-header-title h1 {{
+      /* ── Title + subtitle typography. */
+      html body {_banner_sel} .app-header-title {{
           color: #ffffff !important;
-          font-size: 1.5rem !important;
-          font-weight: 700 !important;
-          letter-spacing: 0.2px !important;
+          font-size: 14px !important;
+          font-weight: 500 !important;
+          letter-spacing: -0.01em !important;
+          line-height: 1.2 !important;
           margin: 0 !important;
           padding: 0 !important;
-          line-height: 1.2 !important;
       }}
-      html body {_banner_sel} .keck-header-title p,
-      html body {_banner_sel} .keck-header-title p.subtitle {{
-          color: #EDC153 !important;
-          font-size: 0.87rem !important;
-          font-weight: 500 !important;
-          margin: 0.2rem 0 0 0 !important;
+      html body {_banner_sel} .app-header-subtitle {{
+          color: rgba(255, 255, 255, 0.45) !important;
+          font-size: 11px !important;
+          font-weight: 400 !important;
+          letter-spacing: 0 !important;
+          line-height: 1.3 !important;
+          margin: 3px 0 0 0 !important;
           padding: 0 !important;
-          opacity: 0.95 !important;
-          line-height: 1.2 !important;
       }}
 
-      /* ── Inner pill container ── pinned right inside its column. */
+      /* ── Toggle pill — wraps the two nav buttons on the right of the
+            bar. Subtle white-on-dark fill, rounded 6 px, 2 px inner pad. */
       {_pill_sel} {{
           display: flex !important;
           width: fit-content !important;
           max-width: fit-content !important;
           margin-left: auto !important;
-          background: rgba(0,0,0,0.25) !important;
-          border-radius: 7px !important;
-          padding: 3px !important;
-          gap: 2px !important;
+          background: rgba(255, 255, 255, 0.06) !important;
+          border-radius: 6px !important;
+          padding: 2px !important;
+          gap: 0 !important;
       }}
       {_pill_sel} > div {{
           flex: 0 0 auto !important;
@@ -988,57 +1125,50 @@ def render_header(map_type: str, date_str: str) -> None:
           min-width: 0 !important;
       }}
 
-      /* ── Nav buttons ── target both the <button> and the inner <p>
-            (Streamlit puts the label inside a <p> in a markdown
-            container, which has its own font-size / color). */
+      /* ── Inactive nav button — transparent, muted white text. */
       html body {_pill_sel} button,
       html body {_pill_sel} [data-testid="stBaseButton-secondary"],
       html body {_pill_sel} .stButton > button {{
           background: transparent !important;
           background-color: transparent !important;
-          color: rgba(255,255,255,0.6) !important;
+          color: rgba(255, 255, 255, 0.55) !important;
           border: none !important;
-          border-radius: 5px !important;
-          padding: 4px 14px !important;
-          box-shadow: none !important;
-          min-width: 90px !important;
+          border-radius: 4px !important;
+          padding: 5px 12px !important;
+          font-size: 12px !important;
+          font-weight: 500 !important;
+          line-height: 1.2 !important;
+          min-width: 0 !important;
           min-height: 0 !important;
           height: auto !important;
-          line-height: 1 !important;
+          box-shadow: none !important;
           text-shadow: none !important;
           outline: none !important;
+          transition: color 0.15s ease, background 0.15s ease !important;
       }}
       html body {_pill_sel} button p,
       html body {_pill_sel} button div {{
-          color: rgba(255,255,255,0.6) !important;
-          font-size: 11px !important;
-          font-weight: 700 !important;
-          letter-spacing: 0.06em !important;
+          color: inherit !important;
+          font-size: 12px !important;
+          font-weight: 500 !important;
+          letter-spacing: 0 !important;
+          line-height: 1.2 !important;
           margin: 0 !important;
           padding: 0 !important;
-          line-height: 1.4 !important;
       }}
-
-      /* Hover on the whole pill, but only show effect on inactive. */
       html body {_pill_sel} button:hover {{
-          background: rgba(255,255,255,0.10) !important;
-          background-color: rgba(255,255,255,0.10) !important;
-          border: none !important;
+          color: rgba(255, 255, 255, 0.85) !important;
+          background: rgba(255, 255, 255, 0.04) !important;
+          background-color: rgba(255, 255, 255, 0.04) !important;
       }}
-      html body {_pill_sel} button:hover p,
-      html body {_pill_sel} button:hover div {{
-          color: rgba(255,255,255,0.85) !important;
-      }}
-
-      /* Kill focus ring everywhere. */
       html body {_pill_sel} button:focus,
       html body {_pill_sel} button:focus-visible {{
           outline: none !important;
           box-shadow: none !important;
       }}
 
-      /* ── ACTIVE BUTTON ── gold pill, white bold text. Must come AFTER
-            the hover rule so the hover doesn't dim the active gold. */
+      /* ── Active nav button — gold pill with dark text. Must come AFTER
+            the hover rule above so hover doesn't dim the active gold. */
       html body {_pill_sel} .st-key-{_active_key} button,
       html body {_pill_sel} .st-key-{_active_key} button:hover,
       html body {_pill_sel} .st-key-{_active_key} button:focus,
@@ -1047,68 +1177,45 @@ def render_header(map_type: str, date_str: str) -> None:
       html body .st-key-{_active_key} button:focus {{
           background: #F1AB1F !important;
           background-color: #F1AB1F !important;
-          color: #ffffff !important;
-          border: none !important;
+          color: #171717 !important;
       }}
       html body {_pill_sel} .st-key-{_active_key} button p,
       html body {_pill_sel} .st-key-{_active_key} button div,
-      html body {_pill_sel} .st-key-{_active_key} button:hover p,
       html body .st-key-{_active_key} button p,
-      html body .st-key-{_active_key} button div,
-      html body .st-key-{_active_key} button:hover p {{
-          color: #ffffff !important;
-          font-weight: 700 !important;
-      }}
-
-      /* ── Date ── absolutely positioned at the banner's bottom-right
-            corner, on the same horizontal line as the gold subtitle. */
-      html body {_banner_sel} .keck-header-date {{
-          position: absolute !important;
-          right: 1.8rem !important;
-          bottom: 0.85rem !important;
-          color: rgba(255,255,255,0.85) !important;
-          font-size: 0.87rem !important;
+      html body .st-key-{_active_key} button div {{
+          color: #171717 !important;
           font-weight: 500 !important;
-          text-align: right !important;
-          margin: 0 !important;
-          padding: 0 !important;
-          line-height: 1 !important;
-          z-index: 5 !important;
       }}
     </style>
     """, unsafe_allow_html=True)
 
-    cols = st.columns([0.72, 0.28], vertical_alignment="top")
+    cols = st.columns([0.65, 0.35], vertical_alignment="center")
     with cols[0]:
-        # Prefix the subtitle with the active-dashboard name so the
-        # banner reads "Analytics · Keck Core" / "Pre-Analytics · Keck"
-        # / etc. — matches the new login-page subtitle pattern.
-        _prefix = (
-            "Pre-Analytics" if _active == "pre_analytics" else "Analytics"
-        )
         st.markdown(
-            f'''<div class="keck-header-title">
-                  <h1>Laboratory Productivity Dashboard</h1>
-                  <p class="subtitle">{_prefix} · {map_type}</p>
-                </div>''',
+            f'<div class="app-header-title">Laboratory productivity dashboard</div>'
+            f'<div class="app-header-subtitle">{_subtitle}</div>',
             unsafe_allow_html=True,
         )
     with cols[1]:
         nav_cols = st.columns([1, 1])
         with nav_cols[0]:
-            if st.button("ANALYTICS", key="nav_analytics",
+            if st.button("Analytics", key="nav_analytics",
                          use_container_width=True):
                 st.query_params["dashboard"] = "analytics"
                 st.rerun()
         with nav_cols[1]:
-            if st.button("PRE-ANALYTICS", key="nav_pre_analytics",
+            if st.button("Pre-Analytics", key="nav_pre_analytics",
                          use_container_width=True):
                 st.query_params["dashboard"] = "pre_analytics"
                 st.rerun()
-        st.markdown(
-            f'<div class="keck-header-date">{date_str}</div>',
-            unsafe_allow_html=True,
-        )
+
+    # Cardinal stripe between the dark header and the content area.
+    # The .app-header-stripe class lives in _GLOBAL_CSS; here we just
+    # emit the element.
+    st.markdown(
+        '<div class="app-header-stripe"></div>',
+        unsafe_allow_html=True,
+    )
 
 
 def status_chip(text: str, level: str = "ok") -> None:
