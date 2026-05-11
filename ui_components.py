@@ -51,18 +51,55 @@ _GLOBAL_CSS = """
 <style>
 /* ═══════════════════════════════════════════════════════
    BASE — background & font
-   ═══════════════════════════════════════════════════════ */
-html, body,
+   ═══════════════════════════════════════════════════════
+   Two-tier background strategy:
+
+     • Outer wrappers (html, body, stApp, stAppViewContainer) =
+       #1a1a1a (dark, matches the banner). This makes ANY residual
+       empty strip above the banner — created by Streamlit's
+       stAppViewContainer `top: 3.75rem` offset (hard-coded for
+       where stHeader used to be, persists even when stHeader is
+       display:none) — visually merge with the banner.
+     • Inner content area (stMain, stMainBlockContainer,
+       block-container) = #f4f4f4 (light). This is where the KPI
+       cards / heatmap / etc. live. They render on a light surface
+       as before; only the area ABOVE the content turns dark.
+
+   The banner itself is dark and full-bleeds across stMain; with
+   the outer wrapper now also dark, the visible result is "the
+   banner is the first thing on the page" — the gap blends in
+   instead of appearing as a separate strip. */
+html, body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+    background-color: #1a1a1a !important;
+}
 [data-testid="stAppViewContainer"],
 [data-testid="stApp"],
-.stApp,
+.stApp {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+    background-color: #1a1a1a !important;
+}
+/* Inner content area — light background where the KPI cards,
+   heatmap, section headings live. */
+[data-testid="stMain"],
+[data-testid="stMainBlockContainer"],
+.stMainBlockContainer,
 section.main {
     font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
     background-color: #f4f4f4 !important;
 }
+/* Try also collapsing the residual `top` offset Streamlit applies
+   to stAppViewContainer to make room for the (now hidden) header.
+   Belt-and-suspenders alongside the dark-bg merge above. */
+[data-testid="stAppViewContainer"] {
+    top: 0 !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+}
 .block-container {
     padding-top: 0 !important;
     padding-bottom: 2rem !important;
+    background-color: #f4f4f4 !important;
     /* Explicit horizontal padding so the inner content (KPI cards,
        heatmap, section headings) sits 24 px from block-container's
        outer edge. The header bar + cardinal stripe use their own
@@ -72,7 +109,9 @@ section.main {
        full content area.
        padding-top: 0 (was 1.8rem) — paired with stHeader hidden, this
        eliminates the residual empty strip at the top of the page so
-       the dark banner is the first thing in the content area. */
+       the dark banner is the first thing in the content area.
+       background-color explicitly light so block-container doesn't
+       inherit the dark outer-wrapper background by accident. */
     padding-left: 24px !important;
     padding-right: 24px !important;
     max-width: 1480px !important;
@@ -153,34 +192,64 @@ header[data-testid="stHeader"],
     height: 0 !important;
     min-height: 0 !important;
 }
-/* Bottom-right Community Cloud overlays:
-     • Viewer / hosted-with-Streamlit badge — visible to all viewers
-       on public apps. CSS class has a generated hash suffix (e.g.
-       `.viewerBadge_link__1S137`); use attribute-prefix selectors.
-     • "Manage app" red button — visible ONLY to the authenticated
-       app owner when viewing their own deployed app. Regular public
-       viewers don't see it (Streamlit Cloud renders it conditionally
-       based on owner authentication). Still worth hiding for the
-       owner's own preview. Exact testid isn't published in current
-       docs; community threads (2024-2026) suggest it lives under
-       class-prefix matches like `[class*="ManageApp"]` and possibly
-       `[data-testid*="manage"]`.
-     • Owner avatar — small profile circle that appears next to /
-       above the Manage app button, same owner-only visibility rule.
-   All selectors below use attribute-prefix `[class*="..."]` matching
-   so they catch the various hashed CSS module class names Streamlit
-   uses across versions. `footer` element catches the legacy "Made
-   with Streamlit" branding. */
-[class*="viewerBadge_container"],
-[class*="viewerBadge_link"],
+/* Bottom-right Community Cloud overlays — VIEWER-VISIBLE badges:
+     • Streamlit logo / "Hosted with Streamlit" badge (red square)
+       — visible to ALL viewers on public Cloud apps, links to
+       streamlit.io.
+     • Deployer avatar (small profile circle) — sometimes appears
+       above the badge, may be the deployer's GitHub avatar.
+     • Manage app button — owner-only, but caught by the same
+       selectors below.
+
+   The exact CSS class names are hashed per build (e.g.
+   `.viewerBadge_link__1S137`) so attribute-prefix matching is the
+   only stable approach. Layered selectors below catch by class
+   prefix, link href, image src, AND data-testid — whichever the
+   current Streamlit version uses. */
+/* Class-name prefix matching (legacy + current hash patterns) */
 [class*="viewerBadge"],
+[class*="ViewerBadge"],
+[class*="badge"][class*="Streamlit"],
+[class*="streamlit-badge"],
+[class*="streamlit_badge"],
 [class*="ManageApp"],
 [class*="manage-app"],
+[class*="HostMenu"],
+[class*="hostMenu"],
+[class*="cloudBadge"],
+[class*="StreamlitBadge"] {
+    display: none !important;
+    visibility: hidden !important;
+}
+/* Link-target matching — catches any `<a href="…streamlit.io">` or
+   `…streamlit.app` link, which is how the Cloud badge points back
+   to Streamlit's site. */
+a[href*="streamlit.io"],
+a[href*="streamlit.app"],
+a[href*="share.streamlit.app"] {
+    display: none !important;
+    visibility: hidden !important;
+}
+/* Image-source matching — catches Streamlit logo images and any
+   GitHub-avatar images that Cloud uses for the deployer profile
+   circle in the floating overlay. */
+img[src*="streamlit.io"],
+img[src*="streamlit-mark"],
+img[alt*="Streamlit" i],
+img[src*="avatars.githubusercontent.com"] {
+    display: none !important;
+    visibility: hidden !important;
+}
+/* Data-testid matching for various button/menu variants */
 [data-testid*="manage-app"],
 [data-testid="manage-app-button"],
 [data-testid="stActionButton"],
-[class*="HostMenu"],
-[class*="hostMenu"],
+[data-testid*="ViewerBadge"],
+[data-testid*="HostMenu"] {
+    display: none !important;
+    visibility: hidden !important;
+}
+/* Legacy footer element */
 footer {
     display: none !important;
     visibility: hidden !important;
