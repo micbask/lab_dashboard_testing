@@ -91,6 +91,22 @@ section[data-testid="stSidebar"] [data-testid="stSidebarResizer"],
 section[data-testid="stSidebar"] div[role="separator"] {
     display: none !important;
 }
+/* Force the cursor to default everywhere on the sidebar — Streamlit
+   sets cursor: col-resize / ew-resize on the right-edge resizer
+   element (and on its ::before / ::after pseudo-elements in some
+   versions) which still triggers the double-arrow cursor on hover
+   even when the resizer itself is display:none. We override on every
+   plausible carrier so the right edge feels static. */
+section[data-testid="stSidebar"],
+section[data-testid="stSidebar"]::before,
+section[data-testid="stSidebar"]::after,
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarResizer"],
+section[data-testid="stSidebar"] [data-testid="stSidebarResizer"]::before,
+section[data-testid="stSidebar"] [data-testid="stSidebarResizer"]::after,
+section[data-testid="stSidebar"] div[role="separator"] {
+    cursor: default !important;
+}
 /* SIDEBAR SECTION LABELS — every section label is rendered as a
    markdown h3 ("### Date" etc.). Streamlit's default theming gives
    these a bold weight + saturated gold colour via emotion-cache
@@ -403,6 +419,31 @@ html body section[data-testid="stSidebar"] [data-testid="stSlider"] div[class*="
     padding: 0 !important;
 }
 
+/* SIDEBAR SLIDER — recolor active track + thumbs to USC gold
+   (#F1AB1F). The inactive portion of the track stays gray
+   (baseweb default). Two targets:
+     1. role="slider"  — the draggable thumb circles. Always
+        targetable by ARIA role across baseweb versions.
+     2. > div > div > div > div  — the well-known "active fill"
+        depth used in every Streamlit slider color-override
+        snippet in the wild. Streamlit nests the active highlight
+        bar four divs deep inside [data-testid="stSlider"]. */
+html body section[data-testid="stSidebar"] [data-testid="stSlider"] [role="slider"] {
+    background: #F1AB1F !important;
+    background-color: #F1AB1F !important;
+    border-color: #F1AB1F !important;
+    box-shadow: 0 0 0 1px #F1AB1F !important;
+}
+html body section[data-testid="stSidebar"] [data-testid="stSlider"] > div > div > div > div {
+    background: #F1AB1F !important;
+    background-color: #F1AB1F !important;
+}
+/* Thumb-value bubble (appears on hover/drag) — recolor its text
+   to gold so the floating "12" / "23" label matches the track. */
+html body section[data-testid="stSidebar"] [data-testid="stSlider"] [data-testid="stThumbValue"] {
+    color: #F1AB1F !important;
+}
+
 /* ═══════════════════════════════════════════════════════
    PREV / NEXT DATE NAV BUTTONS
    ═══════════════════════════════════════════════════════
@@ -413,6 +454,15 @@ html body section[data-testid="stSidebar"] [data-testid="stSlider"] div[class*="
    ("medium" = 16 px) is the spacing between them.
    Transparent fill + subtle white outline; functionality
    stays identical. */
+
+/* 16 px breathing room between the date-range caption above and
+   the Prev/Next button row. The :has() selector targets the row
+   that contains either nav button, so the gap appears regardless
+   of which dashboard renders the row. */
+html body section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:has(.st-key-nav_prev_date),
+html body section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:has(.st-key-nav_next_date) {
+    margin-top: 16px !important;
+}
 html body [data-testid="stSidebar"] .st-key-nav_prev_date button,
 html body [data-testid="stSidebar"] .st-key-nav_next_date button,
 html body [data-testid="stSidebar"] .st-key-nav_prev_date .stButton > button,
