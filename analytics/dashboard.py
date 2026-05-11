@@ -804,7 +804,7 @@ def _render_tat_view(params: dict) -> None:
     else:
         _date_label = _date_str or "—"
 
-    render_header(_facility, f"{_date_label}  ·  TAT")
+    render_header(_facility, f"{_date_label} · TAT")
 
     if not _date_str:
         st.warning("No date string supplied — cannot load TAT data.")
@@ -835,24 +835,24 @@ def _render_tat_view(params: dict) -> None:
     _k1, _k2, _k3, _k4 = st.columns(4)
     with _k1:
         st.markdown(
-            metric_card("Total Samples", f"{_total_samples:,}", accent=True),
+            metric_card("Total samples", f"{_total_samples:,}", accent=True),
             unsafe_allow_html=True,
         )
     with _k2:
         st.markdown(
-            metric_card("Avg TAT — Routine", format_tat(_routine_mean),
+            metric_card("Avg TAT — routine", format_tat(_routine_mean),
                         sub="RT samples"),
             unsafe_allow_html=True,
         )
     with _k3:
         st.markdown(
-            metric_card("Avg TAT — Stat", format_tat(_stat_mean),
+            metric_card("Avg TAT — stat", format_tat(_stat_mean),
                         sub="ST + TS samples"),
             unsafe_allow_html=True,
         )
     with _k4:
         st.markdown(
-            metric_card("% Under 1 Hour — Combined", format_pct(_combined_under),
+            metric_card("% under 1 hour — combined", format_pct(_combined_under),
                         sub="all priorities"),
             unsafe_allow_html=True,
         )
@@ -889,7 +889,7 @@ def _render_tat_view(params: dict) -> None:
 
     # ── TAT table (Plotly go.Table) ────────────────────────────────────────
     st.markdown(
-        '<div class="section-heading">Turnaround Time by Procedure</div>',
+        '<div class="section-heading">Turnaround time by procedure</div>',
         unsafe_allow_html=True,
     )
 
@@ -997,7 +997,7 @@ def _render_tat_view(params: dict) -> None:
 
     # ── Mean-TAT bar chart ─────────────────────────────────────────────────
     st.markdown(
-        '<div class="section-heading">Mean TAT by Procedure</div>',
+        '<div class="section-heading">Mean TAT by procedure</div>',
         unsafe_allow_html=True,
     )
 
@@ -1247,7 +1247,7 @@ def render(params: dict, ss) -> None:
             )
 
         date_str = pd.Timestamp(selected_date).strftime("%B %d, %Y")
-        render_header(map_type, date_str + ("  ·  Forecast" if _is_forecast_view else ""))
+        render_header(map_type, date_str + (" · forecast" if _is_forecast_view else ""))
 
         if _is_forecast_view:
             st.markdown(
@@ -1288,7 +1288,7 @@ def render(params: dict, ss) -> None:
         peak_hour  = pivot[_hour_cols].sum().idxmax()
         num_procs  = len(pivot)
         avg_per_hr = round(total_vol / max(len(_hour_cols), 1), 1)
-        _vol_label = "Forecast Volume" if _is_forecast_view else "Total Volume"
+        _vol_label = "Forecast volume" if _is_forecast_view else "Total volume"
 
         _m1, _m2, _m3, _m4, _m5 = st.columns(5)
         with _m1:
@@ -1296,11 +1296,11 @@ def render(params: dict, ss) -> None:
                         unsafe_allow_html=True)
         with _m2:
             _tp_disp = top_proc[:28] + "…" if len(top_proc) > 28 else top_proc
-            st.markdown(metric_card("Top Procedure", _tp_disp,
+            st.markdown(metric_card("Top procedure", _tp_disp,
                         sub=f"{int(round(pivot.loc[top_proc, 'Total'])):,} total"),
                         unsafe_allow_html=True)
         with _m3:
-            st.markdown(metric_card("Peak Hour", peak_hour,
+            st.markdown(metric_card("Peak hour", peak_hour,
                         sub=f"{int(round(pivot[_hour_cols].sum()[peak_hour]))} "
                             f"{'predicted' if _is_forecast_view else 'completions'}"),
                         unsafe_allow_html=True)
@@ -1308,18 +1308,18 @@ def render(params: dict, ss) -> None:
             st.markdown(metric_card("Procedures", str(num_procs), sub="shown (top 30)"),
                         unsafe_allow_html=True)
         with _m5:
-            st.markdown(metric_card("Avg / Hour", str(avg_per_hr),
+            st.markdown(metric_card("Avg / hour", str(avg_per_hr),
                         sub=f"across {len(_hour_cols)} hours"),
                         unsafe_allow_html=True)
 
         st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
 
         if _is_forecast_view:
-            _heading_label = "Forecast Volume by Procedure &amp; Hour"
+            _heading_label = "Forecast volume by procedure &amp; hour"
         elif time_basis == "In-Lab":
-            _heading_label = "In-Lab Volume by Procedure &amp; Hour"
+            _heading_label = "In-lab volume by procedure &amp; hour"
         else:
-            _heading_label = "Completed Volume by Procedure &amp; Hour"
+            _heading_label = "Completed volume by procedure &amp; hour"
         st.markdown(f'<div class="section-heading">{_heading_label}</div>',
                     unsafe_allow_html=True)
 
@@ -1592,28 +1592,28 @@ def render(params: dict, ss) -> None:
 
         _mm1, _mm2, _mm3, _mm4, _mm5 = st.columns(5)
         with _mm1:
-            st.markdown(metric_card("Total Volume", f"{_m_total_vol:,}", accent=True),
+            st.markdown(metric_card("Total volume", f"{_m_total_vol:,}", accent=True),
                         unsafe_allow_html=True)
         with _mm2:
             _mtp_disp = _m_top_proc[:28] + "…" if len(_m_top_proc) > 28 else _m_top_proc
-            st.markdown(metric_card("Top Procedure", _mtp_disp,
+            st.markdown(metric_card("Top procedure", _mtp_disp,
                         sub=f"highest volume in {month_name_str}"),
                         unsafe_allow_html=True)
         with _mm3:
-            st.markdown(metric_card("Peak Hour", _m_peak_disp,
+            st.markdown(metric_card("Peak hour", _m_peak_disp,
                         sub="highest avg volume"), unsafe_allow_html=True)
         with _mm4:
-            st.markdown(metric_card("Procedures Shown", str(_m_n_procs),
+            st.markdown(metric_card("Procedures shown", str(_m_n_procs),
                         sub="top 30 by month volume"), unsafe_allow_html=True)
         with _mm5:
-            st.markdown(metric_card("Avg / Day", f"{_m_avg_per_day:,}",
+            st.markdown(metric_card("Avg / day", f"{_m_avg_per_day:,}",
                         sub=f"over {n_days} days"), unsafe_allow_html=True)
 
         st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
 
         st.markdown(
             f'<div class="section-heading">'
-            f'{map_type} - Monthly Average | {month_name_str} | N = {n_days} days'
+            f'{map_type} — monthly average · {month_name_str} · N = {n_days} days'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -1704,7 +1704,7 @@ def render(params: dict, ss) -> None:
                 with _wc1:
                     st.markdown(
                         metric_card(
-                            "Busiest Day",
+                            "Busiest day",
                             _wd_busiest_day.split("  ")[0],
                             sub=f"avg {int(round(weekday_pivot.loc[_wd_busiest_day, 'Total']))} vol / day",
                         ),
@@ -1712,14 +1712,14 @@ def render(params: dict, ss) -> None:
                     )
                 with _wc2:
                     st.markdown(
-                        metric_card("Peak Hour", _wd_peak_disp,
+                        metric_card("Peak hour", _wd_peak_disp,
                                     sub="highest avg volume across weekdays"),
                         unsafe_allow_html=True,
                     )
                 with _wc3:
                     st.markdown(
                         metric_card(
-                            "Lightest Day",
+                            "Lightest day",
                             _wd_lightest_day.split("  ")[0],
                             sub=f"avg {int(round(weekday_pivot.loc[_wd_lightest_day, 'Total']))} vol / day",
                         ),
@@ -1728,7 +1728,7 @@ def render(params: dict, ss) -> None:
 
                 st.markdown(
                     f'<div class="section-heading">'
-                    f'{map_type} - Weekday Pattern | {month_name_str}'
+                    f'{map_type} — weekday pattern · {month_name_str}'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
