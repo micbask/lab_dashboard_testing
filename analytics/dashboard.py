@@ -1208,7 +1208,8 @@ def render(params: dict, ss) -> None:
                 )
                 return
             pivot, hours = build_forecast_pivot(
-                _fc_panel_data, selected_date, hour_range, time_basis=time_basis
+                _fc_panel_data, selected_date, hour_range, time_basis=time_basis,
+                top_n=st.session_state.get("analytics_top_n", 10),
             )
             df_date_hour = None
             df_date      = pd.DataFrame()
@@ -1243,7 +1244,8 @@ def render(params: dict, ss) -> None:
                     return
 
             pivot, df_date_hour, df_date, hours = build_pivot(
-                filtered_df, selected_date, hour_range
+                filtered_df, selected_date, hour_range,
+                top_n=st.session_state.get("analytics_top_n", 10),
             )
 
         date_str = pd.Timestamp(selected_date).strftime("%B %d, %Y")
@@ -1290,13 +1292,15 @@ def render(params: dict, ss) -> None:
         avg_per_hr = round(total_vol / max(len(_hour_cols), 1), 1)
         _vol_label = "Forecast volume" if _is_forecast_view else "Total volume"
 
-        _m1, _m2, _m3, _m4, _m5 = st.columns(5)
+        _m1, _m2, _m3, _m4 = st.columns(4)
         with _m1:
             st.markdown(metric_card(_vol_label, f"{total_vol:,}", accent=True),
                         unsafe_allow_html=True)
         with _m2:
-            _tp_disp = top_proc[:28] + "…" if len(top_proc) > 28 else top_proc
-            st.markdown(metric_card("Top procedure", _tp_disp,
+            # Full procedure name (no truncation) — the metric_card auto-applies
+            # .metric-card-long for long values, which wraps to 2 lines via the
+            # CSS in ui_components.py (.metric-card-long .value).
+            st.markdown(metric_card("Top procedure", top_proc,
                         sub=f"{int(round(pivot.loc[top_proc, 'Total'])):,} total"),
                         unsafe_allow_html=True)
         with _m3:
@@ -1305,9 +1309,6 @@ def render(params: dict, ss) -> None:
                             f"{'predicted' if _is_forecast_view else 'completions'}"),
                         unsafe_allow_html=True)
         with _m4:
-            st.markdown(metric_card("Procedures", str(num_procs), sub="shown (top 30)"),
-                        unsafe_allow_html=True)
-        with _m5:
             st.markdown(metric_card("Avg / hour", str(avg_per_hr),
                         sub=f"across {len(_hour_cols)} hours"),
                         unsafe_allow_html=True)
@@ -1323,27 +1324,45 @@ def render(params: dict, ss) -> None:
         st.markdown(f'<div class="section-heading">{_heading_label}</div>',
                     unsafe_allow_html=True)
 
-        if _is_forecast_view:
-            st.markdown(
-                f'<div class="heatmap-legend">'
-                f'Colour scale: &nbsp;'
-                f'<strong style="color:{_ORANGES_LOW};">■</strong> low &nbsp;→&nbsp; '
-                f'<strong style="color:{_ORANGES_HIGH};">■</strong> high '
-                f'(hour columns only). &nbsp;'
-                f'<strong>Total</strong> column = forecasted full-day sum per procedure.'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                f'<div class="heatmap-legend">'
-                f'Colour scale: &nbsp;'
-                f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
-                f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
-                f'(hour columns only). &nbsp;'
-                f'<strong>Total</strong> column = full-day sum per procedure.'
-                f'</div>',
-                unsafe_allow_html=True,
+        # Legend on the left + "Show top N" segmented control on the right.
+        # The control is rendered AFTER render_header() and inside each
+        # view branch (Daily + Monthly) using the shared session_state key
+        # `analytics_top_n` so the selection persists across view switches.
+        # The control is OUTSIDE the TAT early-return so it never appears
+        # on the TAT view. Default = 10 procedures. Pre-Analytics has its
+        # own structurally-separate render path; this widget never appears
+        # there.
+        _leg_col, _topn_col = st.columns([0.7, 0.3], vertical_alignment="center")
+        with _leg_col:
+            if _is_forecast_view:
+                st.markdown(
+                    f'<div class="heatmap-legend">'
+                    f'Colour scale: &nbsp;'
+                    f'<strong style="color:{_ORANGES_LOW};">■</strong> low &nbsp;→&nbsp; '
+                    f'<strong style="color:{_ORANGES_HIGH};">■</strong> high '
+                    f'(hour columns only). &nbsp;'
+                    f'<strong>Total</strong> column = forecasted full-day sum per procedure.'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f'<div class="heatmap-legend">'
+                    f'Colour scale: &nbsp;'
+                    f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
+                    f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
+                    f'(hour columns only). &nbsp;'
+                    f'<strong>Total</strong> column = full-day sum per procedure.'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+        with _topn_col:
+            st.segmented_control(
+                "Show top",
+                options=[5, 10, 15, 20, 25, 30, 35, 40],
+                default=10,
+                key="analytics_top_n",
+                label_visibility="visible",
             )
 
         # ── Plotly heatmap (replaces the prior st.dataframe HTML table) ─────
@@ -1575,7 +1594,8 @@ def render(params: dict, ss) -> None:
                 return
 
         monthly_pivot, n_days, month_raw_df = build_monthly_pivot(
-            filtered_df, selected_year, selected_month
+            filtered_df, selected_year, selected_month,
+            top_n=st.session_state.get("analytics_top_n", 10),
         )
 
         if monthly_pivot is None:
@@ -1590,22 +1610,19 @@ def render(params: dict, ss) -> None:
         _m_n_procs     = len(monthly_pivot)
         _m_avg_per_day = round(_m_total_vol / max(n_days, 1))
 
-        _mm1, _mm2, _mm3, _mm4, _mm5 = st.columns(5)
+        _mm1, _mm2, _mm3, _mm4 = st.columns(4)
         with _mm1:
             st.markdown(metric_card("Total volume", f"{_m_total_vol:,}", accent=True),
                         unsafe_allow_html=True)
         with _mm2:
-            _mtp_disp = _m_top_proc[:28] + "…" if len(_m_top_proc) > 28 else _m_top_proc
-            st.markdown(metric_card("Top procedure", _mtp_disp,
+            # Full procedure name (no truncation) — wraps via .metric-card-long.
+            st.markdown(metric_card("Top procedure", _m_top_proc,
                         sub=f"highest volume in {month_name_str}"),
                         unsafe_allow_html=True)
         with _mm3:
             st.markdown(metric_card("Peak hour", _m_peak_disp,
                         sub="highest avg volume"), unsafe_allow_html=True)
         with _mm4:
-            st.markdown(metric_card("Procedures shown", str(_m_n_procs),
-                        sub="top 30 by month volume"), unsafe_allow_html=True)
-        with _mm5:
             st.markdown(metric_card("Avg / day", f"{_m_avg_per_day:,}",
                         sub=f"over {n_days} days"), unsafe_allow_html=True)
 
@@ -1617,17 +1634,30 @@ def render(params: dict, ss) -> None:
             f'</div>',
             unsafe_allow_html=True,
         )
-        st.markdown(
-            f'<div class="heatmap-legend">'
-            f'Values = avg completed volume per day in hour. '
-            f'Colour scale: &nbsp;'
-            f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
-            f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
-            f'(hour columns only). &nbsp;'
-            f'<strong>Total</strong> column = avg daily total per procedure.'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+        # Legend on the left + "Show top N" segmented control on the right.
+        # Same widget instance as the Daily view (shared key=analytics_top_n)
+        # so the selection persists when switching between Daily and Monthly.
+        _m_leg_col, _m_topn_col = st.columns([0.7, 0.3], vertical_alignment="center")
+        with _m_leg_col:
+            st.markdown(
+                f'<div class="heatmap-legend">'
+                f'Values = avg completed volume per day in hour. '
+                f'Colour scale: &nbsp;'
+                f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
+                f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
+                f'(hour columns only). &nbsp;'
+                f'<strong>Total</strong> column = avg daily total per procedure.'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with _m_topn_col:
+            st.segmented_control(
+                "Show top",
+                options=[5, 10, 15, 20, 25, 30, 35, 40],
+                default=10,
+                key="analytics_top_n",
+                label_visibility="visible",
+            )
 
         _m_fig = _build_analytics_heatmap(
             monthly_pivot,
