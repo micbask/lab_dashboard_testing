@@ -50,89 +50,173 @@ def inject_css() -> None:
 _GLOBAL_CSS = """
 <style>
 /* ═══════════════════════════════════════════════════════
-   BASE — background & font
+   BASE — font + background
    ═══════════════════════════════════════════════════════
-   Two-tier background strategy:
-
-     • Outer wrappers (html, body, stApp, stAppViewContainer) =
-       #1a1a1a (dark, matches the banner). This makes ANY residual
-       empty strip above the banner — created by Streamlit's
-       stAppViewContainer `top: 3.75rem` offset (hard-coded for
-       where stHeader used to be, persists even when stHeader is
-       display:none) — visually merge with the banner.
-     • Inner content area (stMain, stMainBlockContainer,
-       block-container) = #f4f4f4 (light). This is where the KPI
-       cards / heatmap / etc. live. They render on a light surface
-       as before; only the area ABOVE the content turns dark.
-
-   The banner itself is dark and full-bleeds across stMain; with
-   the outer wrapper now also dark, the visible result is "the
-   banner is the first thing on the page" — the gap blends in
-   instead of appearing as a separate strip. */
-html, body {
-    font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
-    background-color: #1a1a1a !important;
-}
+   Light surface (#f4f4f4) for the main content area; sidebar
+   gets its own dark surface via the SIDEBAR section below.
+   Inter is the dashboard's primary typeface. */
+html, body,
+[data-testid="stApp"], .stApp,
 [data-testid="stAppViewContainer"],
-[data-testid="stApp"],
-.stApp {
-    font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
-    background-color: #1a1a1a !important;
-}
-/* Inner content area — light background where the KPI cards,
-   heatmap, section headings live. */
-[data-testid="stMain"],
-[data-testid="stMainBlockContainer"],
-.stMainBlockContainer,
-section.main {
+[data-testid="stMain"], section.main,
+[data-testid="stMainBlockContainer"], .stMainBlockContainer {
     font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
     background-color: #f4f4f4 !important;
 }
-/* Try also collapsing the residual `top` offset Streamlit applies
-   to stAppViewContainer to make room for the (now hidden) header.
-   Belt-and-suspenders alongside the dark-bg merge above. */
-[data-testid="stAppViewContainer"] {
-    top: 0 !important;
-    margin-top: 0 !important;
+
+/* ═══════════════════════════════════════════════════════
+   TOP-OF-PAGE LAYOUT — eliminate the empty strip above
+   the dashboard's dark banner
+   ═══════════════════════════════════════════════════════
+   Two source-confirmed causes stack to produce the visible
+   strip on Streamlit Cloud (verified against streamlit/
+   streamlit develop @ 2026-05-12; pinned to 1.57.0 in
+   requirements.txt to keep these selectors valid):
+
+   (A) `<StyledHeader data-testid="stHeader">` is rendered
+       at `position: absolute; top: 0; height: 3.75rem` with
+       a background that ranges from transparent to bgColor
+       depending on whether it has content. With
+       `client.toolbarMode = "viewer"` (.streamlit/config.toml:12)
+       the header has no children — it's a 60-px-tall
+       transparent overlay sitting over stMainContent.
+       Source: frontend/app/src/components/Header/styled-components.ts
+       Source: frontend/app/src/components/Header/Header.tsx
+
+   (B) `<StyledFlexContainerBlock data-testid="stVerticalBlock">`
+       is the main column's flex container; it uses
+       `gap: theme.spacing.lg = 1rem = 16 px` between every
+       direct child. Every `st.markdown(<style>/<script>)`
+       call (used here for title-pin + CSS injection) creates
+       an empty `<div data-testid="stElementContainer">` that
+       contributes one 16-px gap slot — N injections × 16 px
+       = the visible light strip above the banner.
+       Source: frontend/lib/src/components/core/Block/
+               styled-components.ts (StyledFlexContainerBlock
+               with translateGapWidth → theme.spacing.lg)
+       Source: frontend/lib/src/components/core/Block/utils.ts
+               (getClassnamePrefix(Direction.VERTICAL) ===
+               "stVerticalBlock")
+       Source: frontend/lib/src/theme/primitives/spacing.ts
+               (spacing.lg === "1rem")
+
+   The same source file contains direct evidence the gap is
+   intentional: `StyledElementContainer` short-circuits the
+   `elementType === "empty"` case to `display: none` with the
+   verbatim comment "Use display: none for empty elements to
+   avoid the flexbox gap" — exactly the workaround we're
+   replicating for our style/script-only wrappers below.
+
+   Earlier diagnostics blamed `stMainBlockContainer.padding-top:
+   6rem` and tried specificity battles to override it. That
+   rule IS being applied at runtime (single-class emotion vs.
+   single-class !important override, source order favours the
+   override). The padding has been 0 for several commits;
+   the residual gap is entirely the flex-gap × N empty slots
+   pathway above. */
+
+/* (A) Header overlay → zero footprint. Keep in DOM (so any
+   future child like the sidebar collapse button can still
+   receive pointer events) but collapse height + transparency. */
+[data-testid="stHeader"],
+header[data-testid="stHeader"],
+.stAppHeader {
+    background: transparent !important;
+    height: 0 !important;
+    min-height: 0 !important;
+}
+/* Hide every direct child of the header — pairs with
+   client.toolbarMode = "viewer" so deploy / toolbar / menu /
+   status widget render to nothing even if Cloud re-enables them. */
+[data-testid="stHeader"] > *,
+[data-testid="stToolbar"],
+.stAppToolbar {
+    display: none !important;
+}
+
+/* (B1) Zero the flex gap on the MAIN column's TOP-LEVEL
+   vertical block. The two-`>` direct-child chain is LOAD-
+   BEARING — it pins the rule to exactly the page-level block
+   and prevents leakage into nested `st.columns` / `st.expander`
+   / `st.tabs` / `st.container` (all of which reuse the
+   `stVerticalBlock` testid). Do NOT broaden these selectors. */
+[data-testid="stMain"]
+    > [data-testid="stMainBlockContainer"]
+    > [data-testid="stVerticalBlock"] {
+    gap: 0 !important;
+}
+
+/* (B2) Same intent with a descendant combinator between
+   stMainBlockContainer and stVerticalBlock — defensive coverage
+   if a future Streamlit release inserts a wrapper there.
+   As of develop 2026-05-12 no such wrapper exists. The trailing
+   `>` still pins to the immediate vertical-block child to keep
+   the rule from leaking into nested columns/expanders/tabs. */
+[data-testid="stMain"]
+    [data-testid="stMainBlockContainer"]
+    > [data-testid="stVerticalBlock"] {
+    gap: 0 !important;
+}
+
+/* (B3) Belt-and-braces — remove empty <style>-only /
+   <script>-only stElementContainer wrappers from layout
+   entirely. The flex-gap fix above (B1/B2) already zeroes
+   their contribution; this rule additionally collapses them
+   to `display: none` so they cannot contribute even if the
+   gap rule fails (e.g., Streamlit renames `stVerticalBlock`
+   in a future release). `:has()` is supported in evergreen
+   Chromium/WebKit/Firefox since late 2023; the fallback is
+   B1/B2 working as expected.
+   Source: frontend/lib/src/components/core/Block/
+           ElementContainer.tsx renders <StyledElementContainer
+           data-testid="stElementContainer">. */
+[data-testid="stElementContainer"]:has(
+    > [data-testid="stMarkdownContainer"] > div:only-child > style:only-child
+),
+[data-testid="stElementContainer"]:has(
+    > [data-testid="stMarkdownContainer"] > div:only-child > script:only-child
+),
+[data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"]:empty) {
+    display: none !important;
+}
+
+/* (C) stMainBlockContainer padding-top → 0 so the banner sits
+   flush at the very top of the content column. This rule has
+   been present for several commits and is genuinely working;
+   restated here for clarity alongside its sibling rules above.
+   Source: frontend/app/src/components/AppView/styled-components.ts
+           StyledAppViewBlockContainer.paddingTop = "6rem"
+           default (for non-embedded apps without top nav). */
+.stMainBlockContainer,
+[data-testid="stMainBlockContainer"] {
     padding-top: 0 !important;
 }
 .block-container {
     padding-top: 0 !important;
     padding-bottom: 2rem !important;
-    background-color: #f4f4f4 !important;
-    /* Explicit horizontal padding so the inner content (KPI cards,
-       heatmap, section headings) sits 24 px from block-container's
-       outer edge. The header bar + cardinal stripe use their own
-       full-bleed calc() margins (see render_header / .app-header-stripe
-       below) and do NOT depend on this padding to align — they extend
-       past block-container's max-width: 1480 px to reach stMain's
-       full content area.
-       padding-top: 0 (was 1.8rem) — paired with stHeader hidden, this
-       eliminates the residual empty strip at the top of the page so
-       the dark banner is the first thing in the content area.
-       background-color explicitly light so block-container doesn't
-       inherit the dark outer-wrapper background by accident. */
     padding-left: 24px !important;
     padding-right: 24px !important;
     max-width: 1480px !important;
 }
-/* Streamlit 1.38+ wraps block-container in a `.stMainBlockContainer`
-   element with its own padding-top. Hide stHeader doesn't shrink
-   this — community-confirmed (discuss.streamlit.io threads on
-   "remove top whitespace after hiding stHeader", 2024-2026) the fix
-   is to override .stMainBlockContainer padding directly. */
-.stMainBlockContainer,
-[data-testid="stMainBlockContainer"] {
+
+/* (D) stApp / stAppViewContainer defensive padding reset —
+   source confirms these are at top:0 with no padding by
+   default, but cheap insurance against a future regression. */
+[data-testid="stApp"],
+[data-testid="stAppViewContainer"] {
     padding-top: 0 !important;
 }
 
-/* Safety net for the full-bleed banner + cardinal stripe — these
-   elements use `width: calc(100vw - 320 px)` and negative margins
-   to overflow their parent container. If any wrapper has
-   `overflow-x: hidden` (Streamlit sometimes sets this on stMain or
-   block-container in newer versions), the bar gets clipped at the
-   parent's bounds and the visual full-bleed fails. Force every
-   plausible wrapper between stMain and the bar to allow horizontal
+/* ═══════════════════════════════════════════════════════
+   FULL-BLEED OVERFLOW SAFETY NET
+   ═══════════════════════════════════════════════════════
+   The dashboard's dark banner + cardinal stripe use
+   `width: calc(100vw - 320px)` with negative-margin shifting
+   (see render_header below) to bleed past block-container's
+   max-width: 1480px and reach stMain's full content area.
+   If any wrapper has `overflow-x: hidden` (Streamlit
+   occasionally adds this on newer releases) the bar gets
+   clipped. Force every plausible wrapper to allow horizontal
    overflow. */
 [data-testid="stMain"],
 [data-testid="stAppViewContainer"],
@@ -141,118 +225,6 @@ section.main {
 [data-testid="stMain"] [data-testid="stVerticalBlock"],
 [data-testid="stMain"] [data-testid="stMainBlockContainer"] {
     overflow-x: visible !important;
-}
-
-/* ═══════════════════════════════════════════════════════
-   STREAMLIT CHROME — hide everything above the app banner
-   ═══════════════════════════════════════════════════════
-   The top of a Streamlit app on Community Cloud renders three
-   layers we don't want:
-
-     1. [data-testid="stDecoration"] — 4 px coloured gradient bar
-        at the very top of the viewport. Hiding it removes the
-        red/cyan stripe.
-     2. [data-testid="stHeader"] — the entire top header strip.
-        Contains the Streamlit Cloud owner toolbar (Share / Star /
-        Edit / GitHub icons on a public app viewed by its owner),
-        the Deploy button, the running-man status widget, and the
-        three-dot hamburger menu. Hiding it removes ALL of these
-        in one rule, since they're all children of stHeader.
-     3. Footer ("Made with Streamlit") — small enough we keep it,
-        but no harm in hiding consistently.
-
-   `display: none !important` collapses the height to 0 (vs.
-   `visibility: hidden` which leaves the empty space). With the
-   header collapsed, the dark banner naturally rises to the top
-   of the viewport — visual equivalent of "the banner IS the
-   first thing on the page".
-
-   Selectors verified against current (2024-2026) Streamlit forum
-   threads on the topic; the post-1.38 selectors `stAppDeployButton`
-   and `stAppHeader` are added as fallbacks for newer versions
-   that may have renamed the testids.
-
-   Note that `client.toolbarMode = "viewer"` in .streamlit/config.toml
-   provides the documented config-level path for hiding the Deploy
-   button (Streamlit PR #14337 → 1.55). The CSS below ensures
-   complete suppression even on older Streamlit versions or if the
-   config option doesn't catch every chrome element. */
-[data-testid="stHeader"],
-[data-testid="stAppHeader"],
-[data-testid="stDecoration"],
-[data-testid="stStatusWidget"],
-[data-testid="stToolbar"],
-[data-testid="stMainMenu"],
-[data-testid="stDeployButton"],
-[data-testid="stAppDeployButton"],
-header[data-testid="stHeader"],
-#MainMenu {
-    display: none !important;
-    visibility: hidden !important;
-    height: 0 !important;
-    min-height: 0 !important;
-}
-/* Bottom-right Community Cloud overlays — VIEWER-VISIBLE badges:
-     • Streamlit logo / "Hosted with Streamlit" badge (red square)
-       — visible to ALL viewers on public Cloud apps, links to
-       streamlit.io.
-     • Deployer avatar (small profile circle) — sometimes appears
-       above the badge, may be the deployer's GitHub avatar.
-     • Manage app button — owner-only, but caught by the same
-       selectors below.
-
-   The exact CSS class names are hashed per build (e.g.
-   `.viewerBadge_link__1S137`) so attribute-prefix matching is the
-   only stable approach. Layered selectors below catch by class
-   prefix, link href, image src, AND data-testid — whichever the
-   current Streamlit version uses. */
-/* Class-name prefix matching (legacy + current hash patterns) */
-[class*="viewerBadge"],
-[class*="ViewerBadge"],
-[class*="badge"][class*="Streamlit"],
-[class*="streamlit-badge"],
-[class*="streamlit_badge"],
-[class*="ManageApp"],
-[class*="manage-app"],
-[class*="HostMenu"],
-[class*="hostMenu"],
-[class*="cloudBadge"],
-[class*="StreamlitBadge"] {
-    display: none !important;
-    visibility: hidden !important;
-}
-/* Link-target matching — catches any `<a href="…streamlit.io">` or
-   `…streamlit.app` link, which is how the Cloud badge points back
-   to Streamlit's site. */
-a[href*="streamlit.io"],
-a[href*="streamlit.app"],
-a[href*="share.streamlit.app"] {
-    display: none !important;
-    visibility: hidden !important;
-}
-/* Image-source matching — catches Streamlit logo images and any
-   GitHub-avatar images that Cloud uses for the deployer profile
-   circle in the floating overlay. */
-img[src*="streamlit.io"],
-img[src*="streamlit-mark"],
-img[alt*="Streamlit" i],
-img[src*="avatars.githubusercontent.com"] {
-    display: none !important;
-    visibility: hidden !important;
-}
-/* Data-testid matching for various button/menu variants */
-[data-testid*="manage-app"],
-[data-testid="manage-app-button"],
-[data-testid="stActionButton"],
-[data-testid*="ViewerBadge"],
-[data-testid*="HostMenu"] {
-    display: none !important;
-    visibility: hidden !important;
-}
-/* Legacy footer element */
-footer {
-    display: none !important;
-    visibility: hidden !important;
 }
 
 /* ═══════════════════════════════════════════════════════
