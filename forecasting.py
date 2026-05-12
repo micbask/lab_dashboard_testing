@@ -415,6 +415,7 @@ def build_forecast_pivot(
     selected_date: date,
     hour_range: tuple[int, int],
     time_basis: str = "Completed",
+    top_n: int = 30,
 ) -> tuple[pd.DataFrame | None, list[int]]:
     """Build a procedure x hour pivot from forecast predictions for a future date.
 
@@ -422,6 +423,11 @@ def build_forecast_pivot(
       - "Completed" → predictions_complete (based on Date/Time - Complete)
       - "In-Lab"    → predictions_inlab    (based on Date/Time - In Lab)
     Legacy payloads without split predictions fall back to "predictions".
+
+    top_n caps the returned procedure rows. Forecasts are only trained for
+    the top 30 procedures (train_forecasts uses head(30)) so the effective
+    ceiling here is 30; values of top_n > 30 silently degrade to whatever
+    procedures the forecast payload actually contains.
     """
     h_start, h_end = hour_range
     hours = list(range(h_start, h_end + 1))
@@ -444,6 +450,6 @@ def build_forecast_pivot(
     pivot = pd.DataFrame(rows).T.reindex(columns=hours, fill_value=0.0)
     pivot = pivot.fillna(0)
     pivot["Total"] = pivot.sum(axis=1)
-    pivot = pivot.sort_values("Total", ascending=False).head(30)
+    pivot = pivot.sort_values("Total", ascending=False).head(top_n)
     pivot.columns = [HOUR_LABELS[c] if isinstance(c, int) else c for c in pivot.columns]
     return pivot, hours
