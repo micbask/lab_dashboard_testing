@@ -1251,7 +1251,7 @@ def render(params: dict, ss) -> None:
 
         if _is_forecast_view:
             st.markdown(
-                '<div style="background:#1a1a1a;color:#e0e0e0;border-left:4px solid #FF9800;'
+                '<div style="background:#1C1917;color:#e0e0e0;border-left:4px solid #FF9800;'
                 'border-radius:6px;padding:0.85rem 1rem;font-size:0.82rem;margin-bottom:0.5rem;">'
                 "This forecast is generated using Prophet, a forecasting ML model trained on all "
                 "available historical data. It learns weekly patterns in procedure "
