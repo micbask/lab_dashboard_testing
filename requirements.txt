@@ -2,6 +2,7 @@ streamlit==1.57.0
 pandas>=2.0.0
 numpy>=1.26.0
 matplotlib>=3.8.0
+Pillow>=9.0  # ImageDraw.rounded_rectangle needs >=8.2; pin 9.0 floor as belt-and-braces (app.py:_ensure_favicon falls back to emoji silently if too old)
 openpyxl>=3.1.0
 pyarrow>=15.0.0
 requests>=2.31.0
