@@ -216,16 +216,35 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                   box-shadow: none !important;
               }
 
-              /* Password input — override the global stTextInput rules. */
+              /* Password input — wrapper-styled so the eye toggle sits
+                 INSIDE the bordered box. Mirrors the global pattern in
+                 ui_components.py: border + background on the wrapper
+                 [data-baseweb="input"]; <input> is transparent with
+                 right-padding for the eye; defensive catch-all strips
+                 chrome from the eye element regardless of its tag. */
               html body #login-overlay [data-testid="stForm"]
-                  [data-testid="stTextInput"] input {
+                  [data-testid="stTextInput"] [data-baseweb="input"] {
                   width: 100% !important;
-                  padding: 11px 14px !important;
-                  font-size: 14px !important;
-                  font-weight: 400 !important;
+                  background: #ffffff !important;
                   border: 1px solid rgba(0, 0, 0, 0.14) !important;
                   border-radius: 8px !important;
-                  background: #ffffff !important;
+                  box-sizing: border-box !important;
+                  transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
+              }
+              html body #login-overlay [data-testid="stForm"]
+                  [data-testid="stTextInput"] [data-baseweb="input"]:focus-within {
+                  border-color: #790A26 !important;
+                  box-shadow: 0 0 0 2px rgba(121, 10, 38, 0.12) !important;
+              }
+              html body #login-overlay [data-testid="stForm"]
+                  [data-testid="stTextInput"] [data-baseweb="input"] input {
+                  width: 100% !important;
+                  padding: 11px 14px !important;
+                  padding-right: 36px !important;
+                  font-size: 14px !important;
+                  font-weight: 400 !important;
+                  background: transparent !important;
+                  border: none !important;
                   color: #1a1a1a !important;
                   box-sizing: border-box !important;
                   outline: none !important;
@@ -233,10 +252,13 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                   font-family: 'Inter', system-ui, sans-serif !important;
               }
               html body #login-overlay [data-testid="stForm"]
-                  [data-testid="stTextInput"] input:focus {
-                  border-color: #790A26 !important;
+                  [data-testid="stTextInput"] [data-baseweb="input"]
+                  > *:not([data-baseweb="base-input"]):not(input) {
+                  background: transparent !important;
+                  background-color: transparent !important;
+                  border: none !important;
+                  box-shadow: none !important;
                   outline: none !important;
-                  box-shadow: 0 0 0 2px rgba(121, 10, 38, 0.12) !important;
               }
               html body #login-overlay [data-testid="stForm"]
                   [data-testid="stTextInput"] {
