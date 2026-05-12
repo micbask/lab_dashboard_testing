@@ -843,21 +843,72 @@ html body section[data-testid="stSidebar"] [data-testid="stRadio"]
 }
 
 /* ═══════════════════════════════════════════════════════
-   TEXT INPUTS
-   ═══════════════════════════════════════════════════════ */
-[data-testid="stTextInput"] input,
-[data-testid="stSidebar"] [data-testid="stTextInput"] input {
+   TEXT INPUTS — wrapper-styled so password eye sits INSIDE
+   ═══════════════════════════════════════════════════════
+   Streamlit renders st.text_input(type="password") with baseweb's
+   Input component, whose DOM is roughly:
+     <div data-testid="stTextInput">
+       <label>...</label>
+       <div data-baseweb="input">                  ← the WRAPPER
+         <div data-baseweb="base-input">           ← inner pad container
+           <input type="password" />
+         </div>
+         <button/span>[eye SVG]</button/span>      ← baseweb's MaskToggleButton
+       </div>
+     </div>
+   The visual goal: ONE border around the whole wrapper, eye toggle
+   appears INSIDE that single bordered box rather than as a separate
+   adjacent box. Achieved by:
+     (1) shifting border + background from <input> to the wrapper
+         [data-baseweb="input"];
+     (2) stripping chrome (border/bg/shadow) from any direct child of
+         the wrapper that is NOT the input or the inner base-input
+         padding container — a defensive selector that catches the
+         eye toggle regardless of whether baseweb renders it as a
+         <button>, <span role="button">, or <div tabindex="0">;
+     (3) adding right-padding to the <input> so typed text doesn't
+         overlap the eye glyph.
+   Scoped to [data-testid="stTextInput"] only — date inputs use
+   [data-testid="stDateInput"] and keep their own existing styling. */
+
+/* Wrapper gets the border + background. */
+[data-testid="stTextInput"] [data-baseweb="input"],
+[data-testid="stSidebar"] [data-testid="stTextInput"] [data-baseweb="input"] {
     background-color: #ffffff !important;
-    color: #111111 !important;
     border: 1px solid #cccccc !important;
     border-radius: 5px !important;
-    font-size: 0.9rem !important;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
 }
-[data-testid="stTextInput"] input:focus,
-[data-testid="stSidebar"] [data-testid="stTextInput"] input:focus {
+/* Focus ring on the wrapper when ANY descendant (input or eye) is focused. */
+[data-testid="stTextInput"] [data-baseweb="input"]:focus-within,
+[data-testid="stSidebar"] [data-testid="stTextInput"] [data-baseweb="input"]:focus-within {
     border-color: #6F1828 !important;
-    outline: none !important;
     box-shadow: 0 0 0 2px rgba(111,24,40,0.15) !important;
+}
+/* Strip the input element's own border/background — it now lives
+   inside the bordered wrapper. Right-padding leaves room for the
+   eye glyph; baseweb absolutely-positions or flex-places the eye at
+   the wrapper's right edge. */
+[data-testid="stTextInput"] [data-baseweb="input"] input,
+[data-testid="stSidebar"] [data-testid="stTextInput"] [data-baseweb="input"] input {
+    background-color: transparent !important;
+    color: #111111 !important;
+    border: none !important;
+    box-shadow: none !important;
+    outline: none !important;
+    font-size: 0.9rem !important;
+    padding-right: 36px !important;
+}
+/* Defensive catch-all for the eye toggle — strips border/background/
+   shadow from any direct child of the wrapper that is NOT the input
+   or the inner base-input padding container. Works regardless of
+   what element type baseweb uses (<button>, <span>, <div>). */
+[data-testid="stTextInput"] [data-baseweb="input"] > *:not([data-baseweb="base-input"]):not(input) {
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    outline: none !important;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -1112,11 +1163,21 @@ hr {
     margin-top: 10px;
     word-break: break-word;
 }
-/* Long values (procedure names) shrink to 14 px so they wrap
-   without making the card taller than its short-value peers. */
+/* Long values (procedure names) — 13 px / line-height 1.3 lets the
+   full name wrap to 2 lines without truncation. The equal-height row
+   (align-items: stretch on the parent stHorizontalBlock) keeps cards
+   in the same row at the same height regardless of which has a
+   wrapped value. -webkit-line-clamp:2 is a safety net for pathological
+   60+ char procedure names so they cannot push the row taller than 2
+   lines of body text. word-break: break-word (inherited from .value)
+   handles names without natural break points. */
 .metric-card.metric-card-long .value {
-    font-size: 14px;
-    line-height: 1.2;
+    font-size: 13px;
+    line-height: 1.3;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
 .metric-card .sub {
     color: rgba(0, 0, 0, 0.45);
@@ -1172,7 +1233,7 @@ hr {
     width: calc(100vw - 320px) !important;
     max-width: calc(100vw - 320px) !important;
     margin-top: 0 !important;
-    margin-bottom: 16px !important;
+    margin-bottom: 20px !important;
     margin-left: calc(50% - 50vw + 160px) !important;
     margin-right: 0 !important;
     padding: 0 !important;
@@ -1426,7 +1487,10 @@ def render_header(map_type: str, date_str: str) -> None:
           min-width: 0 !important;
       }}
 
-      /* ── Inactive nav button — transparent, muted white text. */
+      /* ── Inactive nav button — transparent, muted white text. ALL
+            CAPS with slight letter-spacing for typographic clarity at
+            12 px size; applied to BOTH outer button + inner p/div so
+            baseweb's possible inner `text-transform: none` cannot win. */
       html body {_pill_sel} button,
       html body {_pill_sel} [data-testid="stBaseButton-secondary"],
       html body {_pill_sel} .stButton > button {{
@@ -1439,6 +1503,8 @@ def render_header(map_type: str, date_str: str) -> None:
           font-size: 12px !important;
           font-weight: 500 !important;
           line-height: 1.2 !important;
+          text-transform: uppercase !important;
+          letter-spacing: 0.04em !important;
           min-width: 0 !important;
           min-height: 0 !important;
           height: auto !important;
@@ -1452,7 +1518,8 @@ def render_header(map_type: str, date_str: str) -> None:
           color: inherit !important;
           font-size: 12px !important;
           font-weight: 500 !important;
-          letter-spacing: 0 !important;
+          letter-spacing: 0.04em !important;
+          text-transform: uppercase !important;
           line-height: 1.2 !important;
           margin: 0 !important;
           padding: 0 !important;
@@ -1469,7 +1536,9 @@ def render_header(map_type: str, date_str: str) -> None:
       }}
 
       /* ── Active nav button — gold pill with dark text. Must come AFTER
-            the hover rule above so hover doesn't dim the active gold. */
+            the hover rule above so hover doesn't dim the active gold.
+            text-transform + letter-spacing repeated here so the active
+            rule wins specificity on those properties too (defensive). */
       html body {_pill_sel} .st-key-{_active_key} button,
       html body {_pill_sel} .st-key-{_active_key} button:hover,
       html body {_pill_sel} .st-key-{_active_key} button:focus,
@@ -1479,6 +1548,8 @@ def render_header(map_type: str, date_str: str) -> None:
           background: #F1AB1F !important;
           background-color: #F1AB1F !important;
           color: #1C1917 !important;
+          text-transform: uppercase !important;
+          letter-spacing: 0.04em !important;
       }}
       html body {_pill_sel} .st-key-{_active_key} button p,
       html body {_pill_sel} .st-key-{_active_key} button div,
@@ -1486,6 +1557,8 @@ def render_header(map_type: str, date_str: str) -> None:
       html body .st-key-{_active_key} button div {{
           color: #1C1917 !important;
           font-weight: 500 !important;
+          text-transform: uppercase !important;
+          letter-spacing: 0.04em !important;
       }}
     </style>
     """, unsafe_allow_html=True)
@@ -1493,7 +1566,7 @@ def render_header(map_type: str, date_str: str) -> None:
     cols = st.columns([0.65, 0.35], vertical_alignment="center")
     with cols[0]:
         st.markdown(
-            f'<div class="app-header-title">Laboratory productivity dashboard</div>'
+            f'<div class="app-header-title">Laboratory Productivity Dashboard</div>'
             f'<div class="app-header-subtitle">{_subtitle}</div>',
             unsafe_allow_html=True,
         )
