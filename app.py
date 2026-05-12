@@ -11,6 +11,7 @@ from copy import deepcopy
 from datetime import datetime
 
 import streamlit as st
+import streamlit.components.v1 as _components
 
 from config import DEFAULT_RESOURCES
 from ui_components import inject_css, setup_mpl_font
@@ -19,36 +20,52 @@ import pre_analytics.dashboard as _pre_analytics
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# FAVICON  (generated on first run; Pillow ships transitively with matplotlib
-# which is in requirements.txt, so the import is safe)
+# FAVICON  (regenerated on every container start so disk + code never drift;
+# Pillow ≥ 9.0 is pinned in requirements.txt — `rounded_rectangle` needs ≥ 8.2)
 # ═════════════════════════════════════════════════════════════════════════════
 def _ensure_favicon(path: str = "assets/favicon.png") -> str | None:
-    """Generate the bar-chart favicon PNG on disk if it isn't already there.
+    """Generate the bar-chart favicon PNG.
 
-    The icon is a 64×64 transparent-background PNG with four ascending
-    USC-cardinal (#790A26) bars. Returns the path on success, or None if
-    Pillow isn't importable / the disk write fails (caller falls back to
-    an emoji so st.set_page_config never receives a broken value).
+    4 ascending bars in a 64×64 viewBox, all bottoms aligned at y=54 (small
+    visual gap to the canvas edge), all bars 8 px wide with rounded top
+    corners (rx=1.5). The first 3 bars are USC cardinal red (#790A26); the
+    tallest (rightmost) bar is USC gold (#F1AB1F). Geometry matches the
+    SVG used in the login overlay so favicon + in-app logo stay consistent.
+
+    Rendered at 256×256 then LANCZOS-downscaled to 64×64 for crisp edges at
+    every UI size — browsers downscale to 16/32 as needed. The function
+    regenerates unconditionally (no `os.path.exists` short-circuit) so a
+    stale PNG from a warm-restart container cannot mask a code change.
+    Pillow's `rounded_rectangle` (added in 8.2) requires Pillow ≥ 9.0 which
+    is pinned in requirements.txt. Returns the path on success, or None if
+    Pillow is unimportable / disk write fails — caller falls back to an
+    emoji so st.set_page_config never receives a broken value.
     """
-    if os.path.exists(path):
-        return path
     try:
         from PIL import Image, ImageDraw
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        # 4× supersample → crisp 64×64 after LANCZOS downscale.
+        scale = 4
+        size = 64 * scale
+        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        cardinal  = "#790A26"
-        bar_w     = 9
-        bar_gap   = 3
-        bottom    = 56          # 8 px of bottom padding (bars span y=bottom-h..bottom-1)
-        heights   = [18, 28, 38, 46]
-        x = 10                   # (64 − (4*9 + 3*3)) // 2 ≈ 10
-        for h in heights:
-            draw.rectangle(
-                [x, bottom - h, x + bar_w - 1, bottom - 1],
-                fill=cardinal,
+        cardinal = "#790A26"
+        gold     = "#F1AB1F"
+        # (x, y_top, width, height, fill) in 64×64 viewBox coords.
+        bars = [
+            (14, 36, 8, 18, cardinal),
+            (26, 28, 8, 26, cardinal),
+            (38, 20, 8, 34, cardinal),
+            (50, 10, 8, 44, gold),
+        ]
+        for x, y, w, h, fill in bars:
+            draw.rounded_rectangle(
+                [x * scale, y * scale,
+                 (x + w) * scale - 1, (y + h) * scale - 1],
+                radius=int(1.5 * scale),
+                fill=fill,
             )
-            x += bar_w + bar_gap
+        img = img.resize((64, 64), Image.LANCZOS)
         img.save(path, "PNG")
         return path
     except Exception:
@@ -69,27 +86,53 @@ st.set_page_config(
 )
 
 # Streamlit Community Cloud appends "· Streamlit" to the document title
-# after every rerun. Pin the title to "Lab Productivity" on script load
-# and watch for any subsequent mutation so the suffix never sticks.
-st.markdown(
+# after every rerun. Pin the title to "Lab Productivity" via an iframe-
+# injected MutationObserver. Why an iframe instead of `st.markdown(
+# "<script>...")`: st.markdown routes through react-markdown +
+# rehype-raw, which renders <script> tags via React.createElement —
+# React-created script elements DO NOT execute (well-known React/HTML5
+# behaviour). `streamlit.components.v1.html` embeds the markup via an
+# <iframe srcdoc="..."> instead; scripts inside srcdoc iframes DO
+# execute. The iframe inherits the parent's origin (no `sandbox`
+# attribute is set by Streamlit's IFrame component, verified in
+# `frontend/app/src/components/elements/IFrame/IFrame.tsx` on 1.57),
+# so `window.parent.document.title` is accessible.
+#
+# Observer-guard rationale: each Streamlit rerun creates a fresh iframe
+# with a fresh `window`. If we stored the observer on the iframe's own
+# `window`, every rerun would install a new one and they would stack.
+# We store on `window.parent.<key>` so the guard survives across
+# iframe reloads. Any prior observer is explicitly disconnected before
+# we install a new one — defensive against `<title>` elements being
+# replaced (rare; some frameworks do this on route changes).
+_components.html(
     """
     <script>
     (function() {
-        const desiredTitle = "Lab Productivity";
-        document.title = desiredTitle;
-        const observer = new MutationObserver(function() {
-            if (document.title !== desiredTitle) {
-                document.title = desiredTitle;
+        var desiredTitle = "Lab Productivity";
+        try {
+            var parentWin = window.parent;
+            var parentDoc = parentWin.document;
+            parentDoc.title = desiredTitle;
+            var titleEl = parentDoc.querySelector('title');
+            if (!titleEl) return;
+            if (parentWin.__labTitleObserver) {
+                try { parentWin.__labTitleObserver.disconnect(); } catch (e) {}
             }
-        });
-        const titleEl = document.querySelector('title');
-        if (titleEl) {
-            observer.observe(titleEl, { childList: true });
+            parentWin.__labTitleObserver = new MutationObserver(function() {
+                if (parentDoc.title !== desiredTitle) {
+                    parentDoc.title = desiredTitle;
+                }
+            });
+            parentWin.__labTitleObserver.observe(titleEl, { childList: true });
+        } catch (e) {
+            // Cross-origin guard — defensive only; Streamlit's iframe
+            // is same-origin in 1.57 so we expect this path never runs.
         }
     })();
     </script>
     """,
-    unsafe_allow_html=True,
+    height=0,
 )
 
 inject_css()
@@ -263,10 +306,10 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                     """
                     <div class="login-icon-block">
                       <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
-                        <rect x="10" y="40" width="9" height="16" fill="#790A26"/>
-                        <rect x="22" y="30" width="9" height="26" fill="#790A26"/>
-                        <rect x="34" y="20" width="9" height="36" fill="#790A26"/>
-                        <rect x="46" y="10" width="9" height="46" fill="#790A26"/>
+                        <rect x="14" y="36" width="8" height="18" fill="#790A26" rx="1.5"/>
+                        <rect x="26" y="28" width="8" height="26" fill="#790A26" rx="1.5"/>
+                        <rect x="38" y="20" width="8" height="34" fill="#790A26" rx="1.5"/>
+                        <rect x="50" y="10" width="8" height="44" fill="#F1AB1F" rx="1.5"/>
                       </svg>
                       <div class="login-title">Laboratory Productivity Dashboard</div>
                       <div class="login-subtitle">ANALYTICS &nbsp;·&nbsp; PRE-ANALYTICS</div>
