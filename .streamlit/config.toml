@@ -18,7 +18,7 @@ backgroundColor = "#f4f4f4"
 # secondaryBackgroundColor MUST stay light. Streamlit uses it as the
 # background of every "secondary surface" — the sidebar, AND the
 # st.date_input calendar popup, AND selectbox dropdowns. The sidebar
-# is overridden to #1a1a1a explicitly via CSS in ui_components.py, so
+# is overridden to #1C1917 explicitly via CSS in ui_components.py, so
 # leaving this at the Streamlit-default light value lets the calendar
 # popup keep its readable light theme (textColor = #0f172a renders
 # dark-on-light correctly there). A previous dark value here painted
