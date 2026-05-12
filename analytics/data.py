@@ -13,6 +13,7 @@ def build_pivot(
     df: pd.DataFrame,
     selected_date: date,
     hour_range: tuple,
+    top_n: int = 30,
 ) -> tuple:
     h_start, h_end = hour_range
     hours   = list(range(h_start, h_end + 1))
@@ -22,11 +23,11 @@ def build_pivot(
     if df_dh.empty:
         return None, None, df_date, hours
 
-    top30 = (
+    top_procs = (
         df_date.groupby("Order Procedure")["Complete Volume"]
-        .sum().sort_values(ascending=False).head(30).index.tolist()
+        .sum().sort_values(ascending=False).head(top_n).index.tolist()
     )
-    df_dh = df_dh[df_dh["Order Procedure"].isin(top30)].copy()
+    df_dh = df_dh[df_dh["Order Procedure"].isin(top_procs)].copy()
     if df_dh.empty:
         return None, None, df_date, hours
 
@@ -44,6 +45,7 @@ def build_pivot(
 
 def build_monthly_pivot(
     df: pd.DataFrame, year: int, month: int,
+    top_n: int = 30,
 ) -> tuple:
     month_start = date(year, month, 1)
     month_end   = date(year, month, _cal.monthrange(year, month)[1])
@@ -55,11 +57,11 @@ def build_monthly_pivot(
     if month_df.empty:
         return None, 0, month_df
 
-    top30 = (
+    top_procs = (
         month_df.groupby("Order Procedure")["Complete Volume"]
-        .sum().sort_values(ascending=False).head(30).index.tolist()
+        .sum().sort_values(ascending=False).head(top_n).index.tolist()
     )
-    month_df = month_df[month_df["Order Procedure"].isin(top30)].copy()
+    month_df = month_df[month_df["Order Procedure"].isin(top_procs)].copy()
 
     pivot = (
         month_df.pivot_table(
