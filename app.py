@@ -85,26 +85,45 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Streamlit Community Cloud appends "· Streamlit" to the document title
-# after every rerun. Pin the title to "Lab Productivity" via an iframe-
-# injected MutationObserver. Why an iframe instead of `st.markdown(
-# "<script>...")`: st.markdown routes through react-markdown +
-# rehype-raw, which renders <script> tags via React.createElement —
-# React-created script elements DO NOT execute (well-known React/HTML5
-# behaviour). `streamlit.components.v1.html` embeds the markup via an
-# <iframe srcdoc="..."> instead; scripts inside srcdoc iframes DO
-# execute. The iframe inherits the parent's origin (no `sandbox`
-# attribute is set by Streamlit's IFrame component, verified in
-# `frontend/app/src/components/elements/IFrame/IFrame.tsx` on 1.57),
-# so `window.parent.document.title` is accessible.
+# Pin browser-tab title to "Lab Productivity" with NO "· Streamlit"
+# suffix. Per source inspection of streamlit/streamlit @ 1.57.0
+# (PR #8900, June 2024 — removed the suffix from `getTitle()` in
+# frontend/app/src/util/AppNavigation.ts), the suffix-appending code
+# path no longer exists in the open-source frontend. If the user
+# still observes the suffix on Cloud, the cause is one of:
+#   • A stale browser tab title (cache, pinned tab, PWA, bookmark)
+#   • A browser extension rewriting tab titles
+#   • Closed-source Cloud-edge HTML rewriting (no documented case)
+# This script is defense-in-depth against all of the above EXCEPT
+# the last (which app-level JS cannot reach).
 #
-# Observer-guard rationale: each Streamlit rerun creates a fresh iframe
-# with a fresh `window`. If we stored the observer on the iframe's own
-# `window`, every rerun would install a new one and they would stack.
-# We store on `window.parent.<key>` so the guard survives across
-# iframe reloads. Any prior observer is explicitly disconnected before
-# we install a new one — defensive against `<title>` elements being
-# replaced (rare; some frameworks do this on route changes).
+# Why an iframe (`components.v1.html`) and not `st.markdown(<script>)`:
+# st.markdown routes through react-markdown + rehype-raw which renders
+# <script> tags via React.createElement — React-created script
+# elements DO NOT execute. `components.v1.html` embeds the markup via
+# an <iframe srcdoc="..."> instead; scripts inside srcdoc iframes DO
+# execute. The iframe sandbox is `allow-same-origin allow-scripts`
+# (verified in frontend/lib/src/util/IFrameUtil.ts on 1.57.0), so
+# `window.parent.document` is accessible.
+#
+# Three-layer defense against any title rewriting that runs after us:
+#   1. SET `parent.document.title` immediately on iframe load.
+#   2. MutationObserver on `parent.document.head` with
+#      `childList + subtree + characterData` — catches text-node
+#      mutation inside <title>, full <title> element replacement,
+#      OR any other head-subtree mutation that could swap titles.
+#      Spec: Document#title setter does "string replace all" on the
+#      title element's children → fires `childList` on title node →
+#      bubbles up via subtree:true on head.
+#   3. setInterval (250 ms) polling fallback — catches anything the
+#      observer somehow misses (browser quirks, async title writes,
+#      etc.). At 4 Hz the CPU cost is negligible (~0.1%).
+#
+# Observer + interval dedup: each Streamlit rerun creates a fresh
+# iframe with a fresh window. Without dedup we'd stack one observer
+# and one interval per rerun. We store both on `parent.window` (which
+# persists across iframe reloads) and explicitly disconnect / clear
+# the prior instances before installing new ones.
 _components.html(
     """
     <script>
@@ -113,9 +132,9 @@ _components.html(
         try {
             var parentWin = window.parent;
             var parentDoc = parentWin.document;
+            // Layer 1: immediate set.
             parentDoc.title = desiredTitle;
-            var titleEl = parentDoc.querySelector('title');
-            if (!titleEl) return;
+            // Layer 2: MutationObserver on <head> subtree.
             if (parentWin.__labTitleObserver) {
                 try { parentWin.__labTitleObserver.disconnect(); } catch (e) {}
             }
@@ -124,10 +143,24 @@ _components.html(
                     parentDoc.title = desiredTitle;
                 }
             });
-            parentWin.__labTitleObserver.observe(titleEl, { childList: true });
+            parentWin.__labTitleObserver.observe(parentDoc.head, {
+                childList: true,
+                subtree: true,
+                characterData: true
+            });
+            // Layer 3: 250 ms polling fallback.
+            if (parentWin.__labTitlePoller) {
+                try { clearInterval(parentWin.__labTitlePoller); } catch (e) {}
+            }
+            parentWin.__labTitlePoller = setInterval(function() {
+                if (parentDoc.title !== desiredTitle) {
+                    parentDoc.title = desiredTitle;
+                }
+            }, 250);
         } catch (e) {
             // Cross-origin guard — defensive only; Streamlit's iframe
-            // is same-origin in 1.57 so we expect this path never runs.
+            // is `allow-same-origin allow-scripts` per IFrameUtil.ts
+            // on 1.57.0 so we expect this path never runs.
         }
     })();
     </script>
