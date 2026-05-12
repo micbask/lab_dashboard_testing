@@ -239,8 +239,8 @@ header[data-testid="stHeader"],
    visible drag affordance. */
 [data-testid="stSidebar"],
 section[data-testid="stSidebar"] {
-    background-color: #1a1a1a !important;
-    border-right: 1px solid #2e2e2e !important;
+    background-color: #1C1917 !important;
+    border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
     width: 320px !important;
     min-width: 320px !important;
     max-width: 320px !important;
@@ -400,7 +400,7 @@ html body section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]
     letter-spacing: 0 !important;
 }
 [data-testid="stSidebar"] hr {
-    border-color: #2e2e2e !important;
+    border-color: rgba(255, 255, 255, 0.08) !important;
     margin: 0.6rem 0 !important;
 }
 
@@ -942,37 +942,107 @@ html body section[data-testid="stSidebar"] [data-testid="stRadio"]
     font-size: 0.88rem !important;
 }
 
-/* Sidebar expanders have a WHITE background — undo the sidebar's global
-   light-text rules for anything rendered inside them, otherwise labels
-   and captions become invisible (light gray on white). */
-[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] p,
-[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] li,
-[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] span,
-[data-testid="stSidebar"] [data-testid="stExpander"] label,
-[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stWidgetLabel"],
-[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stWidgetLabel"] p {
-    color: #0f172a !important;
+/* ═══════════════════════════════════════════════════════
+   SIDEBAR EXPANDERS — dark surface matching the sidebar
+   ═══════════════════════════════════════════════════════
+   Verified against streamlit/streamlit @ 1.57.0 source:
+     - Outer wrapper:    [data-testid="stExpander"]
+     - Native <details><summary> (1.57.0 still uses these,
+       per frontend/lib/src/components/elements/Expander/
+       Expander.tsx)
+     - Expanded body:    [data-testid="stExpanderDetails"]
+     - Chevron:          Material-Symbols font glyph inside a
+                         <span data-testid="stIconMaterial"> —
+                         NOT an SVG (verified against
+                         MaterialFontIcon.tsx + Material/
+                         styled-components.ts on 1.57.0). The
+                         color is applied via the `color`
+                         property, not `fill`.
+   Override scope is `section[data-testid="stSidebar"]` so
+   main-area expanders keep their light treatment. The global
+   `[data-testid="stExpander"] { background: #ffffff }` rule
+   above continues to apply to main-area expanders (Hourly
+   Volume, drill-down, Weekday) via specificity cascade. */
+
+/* Outer wrapper — match the sidebar surface, subtle definition. */
+section[data-testid="stSidebar"] [data-testid="stExpander"] {
+    background: #1C1917 !important;
+    background-color: #1C1917 !important;
+    border: 0.5px solid rgba(255, 255, 255, 0.08) !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
 }
-[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stCaptionContainer"],
-[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stCaptionContainer"] p,
-[data-testid="stSidebar"] [data-testid="stExpander"] small {
-    color: #475569 !important;
+
+/* Expanded body — same dark surface, no inner border. */
+section[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stExpanderDetails"] {
+    background: #1C1917 !important;
+    background-color: #1C1917 !important;
+    border: none !important;
 }
-[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] strong {
-    color: #0f172a !important;
+
+/* Header summary button — white text, slight hover lift. */
+section[data-testid="stSidebar"] [data-testid="stExpander"] summary {
+    color: #ffffff !important;
+    font-weight: 500 !important;
+    font-size: 0.88rem !important;
+    background: transparent !important;
+    background-color: transparent !important;
+    transition: background-color 0.15s ease !important;
 }
-[data-testid="stSidebar"] [data-testid="stExpander"] summary,
-[data-testid="stSidebar"] [data-testid="stExpander"] summary p,
-[data-testid="stSidebar"] [data-testid="stExpander"] summary span {
-    color: #0f172a !important;
+section[data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
+    background: rgba(255, 255, 255, 0.03) !important;
+    background-color: rgba(255, 255, 255, 0.03) !important;
 }
-/* File uploader "drag and drop" area and hint text inside sidebar expander */
-[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stFileUploaderDropzone"] {
-    background: #f8fafc !important;
-    border: 1px dashed #94a3b8 !important;
+
+/* Summary label text (inside the markdown <p>). */
+section[data-testid="stSidebar"] [data-testid="stExpander"] summary p,
+section[data-testid="stSidebar"] [data-testid="stExpander"] summary span,
+section[data-testid="stSidebar"] [data-testid="stExpander"] summary [data-testid="stMarkdownContainer"] p {
+    color: #ffffff !important;
 }
-[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stFileUploaderDropzone"] * {
-    color: #0f172a !important;
+
+/* Chevron — Material-Symbols font glyph in a <span data-testid=
+   "stIconMaterial">. Color is what tints the glyph; `fill:` would
+   be a no-op since there's no SVG. Slightly muted white so the
+   chevron reads as secondary to the label text. */
+section[data-testid="stSidebar"] [data-testid="stExpander"] summary [data-testid="stIconMaterial"] {
+    color: rgba(255, 255, 255, 0.7) !important;
+}
+
+/* Body text inside the expander — flip ALL the previous DARK
+   rules to light. The expander now matches the sidebar surface
+   so widget labels, paragraph text, and inline strong/em read
+   as light-on-dark. */
+section[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] p,
+section[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] li,
+section[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] span,
+section[data-testid="stSidebar"] [data-testid="stExpander"] label,
+section[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stWidgetLabel"],
+section[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stWidgetLabel"] p,
+section[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] strong {
+    color: #e8e8e8 !important;
+}
+
+/* Captions inside expander (st.caption) — slightly dimmer. */
+section[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stCaptionContainer"],
+section[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stCaptionContainer"] p,
+section[data-testid="stSidebar"] [data-testid="stExpander"] small {
+    color: rgba(255, 255, 255, 0.55) !important;
+}
+
+/* File uploader dropzone — apply to EVERY sidebar dropzone, not
+   just ones inside expanders. The analytics dashboard has a
+   second uploader OUTSIDE the Data Management expander (in the
+   `else` branch when GitHub storage isn't configured); without
+   this broader rule it would render as a default light dropzone
+   against the dark sidebar. */
+section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
+    background: rgba(255, 255, 255, 0.03) !important;
+    background-color: rgba(255, 255, 255, 0.03) !important;
+    border: 1px dashed rgba(255, 255, 255, 0.18) !important;
+}
+section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] * {
+    color: #e8e8e8 !important;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -1268,7 +1338,7 @@ def render_header(map_type: str, date_str: str) -> None:
             1480 px to stMain's edges (sidebar right → viewport right). */
       {_banner_sel} {{
           position: relative !important;
-          background: #1a1a1a !important;
+          background: #1C1917 !important;
           padding: 20px 24px !important;
           /* FULL-BLEED MINUS SIDEBAR — pin the bar to span exactly
              from the sidebar's right edge to the viewport's right
@@ -1408,13 +1478,13 @@ def render_header(map_type: str, date_str: str) -> None:
       html body .st-key-{_active_key} button:focus {{
           background: #F1AB1F !important;
           background-color: #F1AB1F !important;
-          color: #171717 !important;
+          color: #1C1917 !important;
       }}
       html body {_pill_sel} .st-key-{_active_key} button p,
       html body {_pill_sel} .st-key-{_active_key} button div,
       html body .st-key-{_active_key} button p,
       html body .st-key-{_active_key} button div {{
-          color: #171717 !important;
+          color: #1C1917 !important;
           font-weight: 500 !important;
       }}
     </style>
