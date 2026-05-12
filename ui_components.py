@@ -506,7 +506,29 @@ html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-bas
     color: #ffffff !important;
     border: 1px solid rgba(255, 255, 255, 0.15) !important;
     border-radius: 6px !important;
-    padding: 8px 12px !important;
+    /* No `padding` declaration here — baseweb's StyledControlContainer
+       has `box-sizing: border-box; overflow: hidden; height:
+       theme.sizes.minElementHeight (= 2.5rem = 40 px)` per
+       uber/baseweb/src/select/styled-components.ts. Adding an outer
+       `padding: 8px 12px` here previously took 16 px off the inner
+       height, the nested StyledValueContainer's own `spacing.sm` (8 px
+       top + 8 px bottom) consumed the rest, and the visible value text
+       (~14 px line-height) got clipped to near-zero — visually empty
+       trigger with a chevron. The dropdown panel renders in a separate
+       baseweb popover and was unaffected, which matched the user's
+       report. Removing the rule restores baseweb's default trigger
+       sizing; horizontal breathing room is added below via a
+       ValueContainer-level padding rule that doesn't touch height. */
+}
+/* Tiny horizontal padding on the inner StyledValueContainer so the
+   text doesn't sit flush against the left edge of the dark trigger.
+   ValueContainer-level (not ControlContainer-level) so it doesn't
+   subtract from `minElementHeight` and cannot reintroduce the
+   text-clipping regression above. */
+html body section[data-testid="stSidebar"] [data-testid="stSelectbox"]
+    [data-baseweb="select"] > div:first-child > div:first-child {
+    padding-left: 4px !important;
+    padding-right: 4px !important;
 }
 html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child:focus-within,
 html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child[aria-expanded="true"] {
