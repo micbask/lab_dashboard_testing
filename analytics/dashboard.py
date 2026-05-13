@@ -28,6 +28,7 @@ from ui_components import (
     metric_card, render_header, status_chip,
     style_monthly_pivot,
     build_png, build_monthly_png, build_weekday_png,
+    render_data_management_sidebar,
 )
 from analytics.data import (
     build_pivot, build_monthly_pivot, build_weekday_pivot,
@@ -563,142 +564,44 @@ def render_sidebar(ss) -> dict:
 
             # Resource Allocation expander removed (FIX 2).
 
-        # ── 6. Data Management (admin-gated expander; admin tools) ──
-        # The user-facing sidebar no longer surfaces storage metadata —
-        # the "DATA SOURCE" section heading, the "Storage: GitHub
-        # (partitioned)" caption, and the always-visible row-count chip
-        # are moved into the Data Management expander below so only
-        # admins who open it see the technical details.
-        st.markdown("---")
+        # ── 6. Data Management (shared component, Issue 2A) ─────────
+        # Refactored into ui_components.render_data_management_sidebar.
+        # Both analytics and pre-analytics now call the same function;
+        # any future changes propagate to both dashboards.
+        # Determine the date range to pass to the export button (Issue
+        # 2B): Daily → single date, Monthly → first-to-last of month,
+        # TAT → same Daily/Monthly conventions. Date range is required
+        # so the Export Raw Data button knows which parquet slice to
+        # pull. The `view_label` arg controls the filename suffix
+        # ("daily" → raw_data_YYYY-MM-DD.xlsx, "monthly" → ...YYYY-MM).
+        if view_mode == "Monthly":
+            _dm_start = date(selected_year, selected_month, 1)
+            _dm_end   = date(selected_year, selected_month,
+                             _cal.monthrange(selected_year, selected_month)[1])
+            _dm_label = "monthly"
+        else:  # Daily or TAT-Daily
+            _dm_start = selected_date
+            _dm_end   = selected_date
+            _dm_label = "daily"
+            if view_mode == "TAT":
+                # TAT view has its own Daily/Monthly toggle; if Monthly,
+                # span the full month, else single date.
+                if "_tat_date_str" in locals() and len(_tat_date_str) == 7:
+                    _yr = int(_tat_date_str[:4]); _mo = int(_tat_date_str[5:7])
+                    _dm_start = date(_yr, _mo, 1)
+                    _dm_end   = date(_yr, _mo, _cal.monthrange(_yr, _mo)[1])
+                    _dm_label = "monthly"
+
         if storage_is_configured():
-            with st.expander("Data Management", expanded=not _data_exists):
-                # Row count / date range / load-error chip — hoisted in
-                # from the old DATA SOURCE block. Renders at the top of
-                # the expander contents on every open.
-                if _load_err is not None:
-                    status_chip("Load error", level="error")
-                    st.error(f"Could not read data index: {_load_err}")
-                elif _data_exists:
-                    status_chip(
-                        f"{_data_summary['total_rows']:,} rows · "
-                        f"{_data_summary['min_date']} → {_data_summary['max_date']}",
-                        level="ok",
-                    )
-                else:
-                    status_chip("No data yet — upload below", level="warn")
-                st.caption("Storage: GitHub (partitioned)")
-                st.markdown("---")
-
-                admin_pw   = st.secrets.get("admin_password", None)
-                authorized = True
-                if admin_pw:
-                    if ss.get("admin_authorized", False):
-                        authorized = True
-                    else:
-                        entered_pw = st.text_input(
-                            "Admin password", type="password", key="admin_pw"
-                        )
-                        if entered_pw == admin_pw:
-                            ss["admin_authorized"] = True
-                            st.rerun()
-                        elif entered_pw:
-                            st.error("Incorrect password.")
-                        authorized = ss.get("admin_authorized", False)
-
-                if authorized:
-
-                    st.markdown('<div class="refresh-btn">', unsafe_allow_html=True)
-                    if st.button("↺  Refresh data", width="stretch", key="refresh_data_btn"):
-                        st.cache_data.clear()
-                        ss.pop("_partition_index", None)
-                        st.rerun()
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-                    if st.button(
-                        "⟳  Refresh Forecast", width="stretch",
-                        key="refresh_forecast_btn",
-                        disabled=(not _data_exists),
-                    ):
-                        ss["pending_forecast_retrain"] = True
-                        st.rerun()
-
-                    if _data_exists:
-                        st.markdown("**Current dataset**")
-                        st.caption(
-                            f"Rows: **{_data_summary['total_rows']:,}**  \n"
-                            f"Date range: **{_data_summary['min_date']}** → "
-                            f"**{_data_summary['max_date']}**  \n"
-                            f"Partitions: **{_data_summary['partitions']}**"
-                        )
-
-                        with st.expander("Remove a date range", expanded=False):
-                            st.caption(
-                                "Permanently deletes all rows in the chosen window "
-                                "from the master dataset.  This cannot be undone."
-                            )
-                            _dr_min = date.fromisoformat(_data_summary["min_date"])
-                            _dr_max = date.fromisoformat(_data_summary["max_date"])
-                            _dc1, _dc2 = st.columns(2)
-                            with _dc1:
-                                del_start = st.date_input(
-                                    "From", value=_dr_min,
-                                    min_value=_dr_min, max_value=_dr_max,
-                                    key="del_start",
-                                )
-                            with _dc2:
-                                del_end = st.date_input(
-                                    "To", value=_dr_min,
-                                    min_value=_dr_min, max_value=_dr_max,
-                                    key="del_end",
-                                )
-                            if del_start > del_end:
-                                st.error("'From' date must be on or before 'To' date.")
-                            else:
-                                _affected = count_rows_in_date_range(del_start, del_end)
-                                if _affected:
-                                    st.warning(f"Will delete **{_affected:,}** rows.")
-
-                            if st.button(
-                                "Delete this range", type="primary",
-                                width="stretch", key="btn_del_range",
-                                disabled=(del_start > del_end),
-                            ):
-                                ss["pending_delete_range"] = {
-                                    "start": del_start, "end": del_end
-                                }
-                                st.rerun()
-
-                        st.markdown("---")
-
-                    st.markdown("**Step 1 — Select file(s)**")
-                    new_files = st.file_uploader(
-                        "Upload files", type=["xlsx", "xls", "csv"],
-                        key="admin_upload",
-                        label_visibility="collapsed",
-                        accept_multiple_files=True,
-                    )
-                    if new_files:
-                        _staged = []
-                        for _uf in new_files:
-                            _staged.append({"bytes": _uf.read(), "name": _uf.name})
-                        ss["staged_files"] = _staged
-                        _names = ", ".join(f"**{s['name']}**" for s in _staged)
-                        st.caption(f"Ready: {_names}  ({len(_staged)} file(s))")
-
-                        st.markdown("**Step 2 — Add to master dataset**")
-                        if st.button(
-                            "Process & add to master",
-                            type="primary", width="stretch",
-                        ):
-                            ss["pending_upload"] = ss.pop("staged_files")
-                            st.rerun()
-
-                    st.markdown("---")
-                    st.markdown("**Danger zone**")
-                    if st.button("Reset — delete all data", width="stretch"):
-                        ss["pending_reset"] = True
-                        st.rerun()
-
+            render_data_management_sidebar(
+                ss,
+                start_date=_dm_start,
+                end_date=_dm_end,
+                view_label=_dm_label,
+                data_exists=_data_exists,
+                data_summary=_data_summary,
+                load_err=_load_err,
+            )
         else:
             st.markdown("**Data source:** Local file upload")
             st.caption(
