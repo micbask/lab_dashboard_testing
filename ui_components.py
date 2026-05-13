@@ -1,5 +1,5 @@
 """
-ui_components.py — CSS injection, header, metric cards, pivot styling, PNG export.
+ui_components.py — CSS injection, header, metric cards.
 
 Contains all visual/presentation logic extracted from the monolithic app.py.
 Changes from original:
@@ -10,32 +10,12 @@ Changes from original:
     to prevent page reload / session loss and query_params race conditions (#11)
 """
 
-import io
-import calendar as _cal
 from datetime import date
 
-import numpy as np
 import pandas as pd
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-from matplotlib import font_manager
 import streamlit as st
 
-from config import VMAX, HOUR_LABELS, NAVY, GOLD, STEEL
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# MATPLOTLIB FONT
-# ═════════════════════════════════════════════════════════════════════════════
-
-def setup_mpl_font() -> None:
-    """Use Palatino if available, fall back to generic serif."""
-    installed = {f.name for f in font_manager.fontManager.ttflist}
-    for name in ("Palatino Linotype", "Palatino"):
-        if name in installed:
-            mpl.rcParams["font.family"] = name
-            return
-    mpl.rcParams["font.family"] = "serif"
+from config import NAVY, GOLD, STEEL
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -500,10 +480,10 @@ html body [data-testid="stBaseButton-primary"]:disabled {
    SELECTBOXES / DROPDOWNS
    ═══════════════════════════════════════════════════════ */
 /* Default selectbox trigger (used in the main panel: TAT proc filter
-   pop-up, drill-down procedure/hour pickers, admin date-range editor
-   inside the Data Management expander). Maroon fill is preserved
-   here because these triggers sit on the WHITE main-area background;
-   sidebar selectboxes override this to a subtle dark fill below. */
+   pop-up, admin date-range editor inside the Data Management
+   expander). Maroon fill is preserved here because these triggers
+   sit on the WHITE main-area background; sidebar selectboxes
+   override this to a subtle dark fill below. */
 [data-testid="stSelectbox"] > div > div,
 [data-testid="stSelectbox"] [role="combobox"],
 [data-testid="stSelectbox"] [data-baseweb="select"] > div:first-child {
@@ -1101,8 +1081,8 @@ html body section[data-testid="stSidebar"] [data-testid="stRadio"]
    Override scope is `section[data-testid="stSidebar"]` so
    main-area expanders keep their light treatment. The global
    `[data-testid="stExpander"] { background: #ffffff }` rule
-   above continues to apply to main-area expanders (Hourly
-   Volume, drill-down, Weekday) via specificity cascade. */
+   above continues to apply to any remaining main-area expanders
+   (e.g. the Data Management expander) via specificity cascade. */
 
 /* Outer wrapper — match the sidebar surface, subtle definition. */
 section[data-testid="stSidebar"] [data-testid="stExpander"] {
@@ -1526,12 +1506,14 @@ html body [class*="st-key-top_n_btn_"] button div {
 }
 .metrics-divider {
     /* Subtle horizontal line between the KPI card row and the
-       section heading below. Combined with the 12 px on each side,
-       the total gap from KPI cards to the section heading text is
-       ~24 px (matches the spec'd vertical-rhythm value). */
+       section heading below. Top margin = 24 px (gap from KPI
+       cards to the line); bottom margin = 12 px which combines
+       with the section-heading's 12 px margin-top to give 24 px
+       below the line. Result: line is visually centered between
+       the KPI cards and the section heading text (24 / 24). */
     border: none;
     border-top: 1px solid rgba(0, 0, 0, 0.06);
-    margin: 12px 0;
+    margin: 24px 0 12px 0;
     height: 0;
 }
 .status-chip {
@@ -2083,202 +2065,3 @@ def style_forecast_pivot(pivot: pd.DataFrame, vmax: int):
     """Style forecast pivot with Oranges colormap (issue #8)."""
     return style_pivot(pivot, vmax, cmap="Oranges")
 
-
-def style_monthly_pivot(pivot: pd.DataFrame, vmax: int):
-    """Apply viridis_r gradient styling to a monthly average pivot."""
-    hour_cols = [c for c in pivot.columns if c != "Total"]
-    return (
-        pivot.style
-        .background_gradient(cmap="viridis_r", vmin=0, vmax=vmax, subset=hour_cols)
-        .format(lambda v: str(int(round(v))))
-        .set_properties(**{"text-align": "center"})
-        .set_properties(subset=["Total"], **{
-            "font-weight": "bold",
-            "font-size":   "13px",
-            "border-left": "2px solid #888",
-        })
-        .set_table_styles([
-            {"selector": "th",            "props": [("text-align", "center"), ("font-size", "12px")]},
-            {"selector": "th.row_heading","props": [("text-align", "left"),   ("min-width", "220px")]},
-        ])
-    )
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# PNG EXPORT
-# ═════════════════════════════════════════════════════════════════════════════
-
-def build_png(
-    df_dh: pd.DataFrame,
-    map_type: str,
-    selected_date: date,
-    hours: list,
-    is_forecast: bool = False,
-) -> bytes:
-    """Render the heatmap as a high-DPI PNG and return raw PNG bytes."""
-    vmax    = VMAX[map_type]
-    n_hours = len(hours)
-    cmap    = "Oranges" if is_forecast else "viridis_r"
-
-    raw = (
-        df_dh.pivot_table(
-            index="Order Procedure", columns="hour",
-            values="Complete Volume", aggfunc="sum", fill_value=0.0,
-        ).reindex(columns=hours, fill_value=0.0)
-    )
-    raw["__total__"] = raw.sum(axis=1)
-    raw = raw.sort_values("__total__", ascending=False)
-    row_totals = raw["__total__"].values
-    raw = raw.drop(columns=["__total__"])
-
-    mat     = raw.to_numpy()
-    ylabels = raw.index.tolist()
-    xlabels = [HOUR_LABELS[h] for h in hours]
-
-    fig_w = max(10, 0.6 * n_hours)
-    fig_h = max(5,  0.35 * len(ylabels))
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=150)
-
-    im = ax.imshow(mat, aspect="auto", cmap=cmap, vmin=0, vmax=vmax)
-    label_prefix = "Forecast — " if is_forecast else ""
-    ax.set_title(
-        f"{label_prefix}{map_type} – Top 30 Procedures  |  "
-        f"{pd.Timestamp(selected_date).strftime('%B %d, %Y')}",
-        fontsize=11, pad=10,
-    )
-    ax.set_xticks(np.arange(n_hours))
-    ax.set_xticklabels(xlabels, rotation=45, ha="right", fontsize=8)
-    ax.set_yticks(np.arange(len(ylabels)))
-    ax.set_yticklabels(ylabels, fontsize=8)
-
-    cbar = fig.colorbar(im, ax=ax, fraction=0.02, pad=0.005)
-    cbar.set_label("Completed volume in hour", fontsize=8)
-
-    for i in range(mat.shape[0]):
-        for j in range(mat.shape[1]):
-            ax.text(j, i, f"{mat[i, j]:.0f}", ha="center", va="center",
-                    fontsize=6.5, color="black")
-
-    total_x = n_hours - 0.25
-    ax.text(total_x, -0.75, "Total", ha="center", va="center",
-            fontsize=8, fontweight="bold", transform=ax.transData)
-    for i, t in enumerate(row_totals):
-        ax.text(total_x, i, f"{t:.0f}", ha="center", va="center",
-                fontsize=8, fontweight="bold", transform=ax.transData)
-    ax.set_xlim(-0.5, n_hours + 0.25)
-    fig.tight_layout()
-
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=250, bbox_inches="tight")
-    buf.seek(0)
-    plt.close(fig)
-    return buf.getvalue()
-
-
-def build_monthly_png(
-    monthly_pivot: pd.DataFrame,
-    map_type: str,
-    year: int,
-    month: int,
-    n_days: int,
-) -> bytes:
-    """Render the monthly average heatmap as a high-DPI PNG."""
-    vmax      = VMAX[map_type]
-    hour_cols = [c for c in monthly_pivot.columns if c != "Total"]
-    n_hours   = len(hour_cols)
-
-    mat        = monthly_pivot[hour_cols].to_numpy()
-    row_totals = monthly_pivot["Total"].values
-    ylabels    = monthly_pivot.index.tolist()
-    month_label = f"{_cal.month_name[month]} {year}"
-
-    fig_w = max(10, 0.6 * n_hours)
-    fig_h = max(5,  0.35 * len(ylabels))
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=150)
-
-    im = ax.imshow(mat, aspect="auto", cmap="viridis_r", vmin=0, vmax=vmax)
-    ax.set_title(
-        f"{map_type} – Monthly Average (Top 30)  |  "
-        f"{month_label}  |  N = {n_days} days",
-        fontsize=11, pad=10,
-    )
-    ax.set_xticks(np.arange(n_hours))
-    ax.set_xticklabels(hour_cols, rotation=45, ha="right", fontsize=8)
-    ax.set_yticks(np.arange(len(ylabels)))
-    ax.set_yticklabels(ylabels, fontsize=8)
-
-    cbar = fig.colorbar(im, ax=ax, fraction=0.02, pad=0.005)
-    cbar.set_label("Avg completed volume per day in hour", fontsize=8)
-
-    for i in range(mat.shape[0]):
-        for j in range(mat.shape[1]):
-            ax.text(j, i, f"{mat[i, j]:.1f}", ha="center", va="center",
-                    fontsize=6.5, color="black")
-
-    total_x = n_hours - 0.25
-    ax.text(total_x, -0.75, "Total", ha="center", va="center",
-            fontsize=8, fontweight="bold", transform=ax.transData)
-    for i, t in enumerate(row_totals):
-        ax.text(total_x, i, f"{t:.1f}", ha="center", va="center",
-                fontsize=8, fontweight="bold", transform=ax.transData)
-    ax.set_xlim(-0.5, n_hours + 0.25)
-    fig.tight_layout()
-
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=250, bbox_inches="tight")
-    buf.seek(0)
-    plt.close(fig)
-    return buf.getvalue()
-
-
-def build_weekday_png(
-    weekday_pivot: pd.DataFrame,
-    map_type: str,
-    year: int,
-    month: int,
-) -> bytes:
-    """Render the weekday x hour average heatmap as a high-DPI PNG."""
-    hour_cols  = [c for c in weekday_pivot.columns if c != "Total"]
-    n_hours    = len(hour_cols)
-    mat        = weekday_pivot[hour_cols].to_numpy()
-    row_totals = weekday_pivot["Total"].values
-    ylabels    = weekday_pivot.index.tolist()
-    vmax       = max(1, int(mat.max()))
-    month_label = f"{_cal.month_name[month]} {year}"
-
-    fig_w = max(10, 0.6 * n_hours)
-    fig_h = max(3,  0.55 * len(ylabels))
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=150)
-
-    im = ax.imshow(mat, aspect="auto", cmap="viridis_r", vmin=0, vmax=vmax)
-    ax.set_title(
-        f"{map_type} — Weekday Pattern  |  {month_label}",
-        fontsize=11, pad=10,
-    )
-    ax.set_xticks(np.arange(n_hours))
-    ax.set_xticklabels(hour_cols, rotation=45, ha="right", fontsize=8)
-    ax.set_yticks(np.arange(len(ylabels)))
-    ax.set_yticklabels(ylabels, fontsize=9)
-
-    cbar = fig.colorbar(im, ax=ax, fraction=0.02, pad=0.005)
-    cbar.set_label("Avg completed volume per weekday occurrence", fontsize=8)
-
-    for i in range(mat.shape[0]):
-        for j in range(mat.shape[1]):
-            ax.text(j, i, str(int(round(mat[i, j]))), ha="center", va="center",
-                    fontsize=6.5, color="black")
-
-    total_x = n_hours - 0.25
-    ax.text(total_x, -0.75, "Total", ha="center", va="center",
-            fontsize=8, fontweight="bold", transform=ax.transData)
-    for i, t in enumerate(row_totals):
-        ax.text(total_x, i, str(int(round(t))), ha="center", va="center",
-                fontsize=8, fontweight="bold", transform=ax.transData)
-    ax.set_xlim(-0.5, n_hours + 0.25)
-    fig.tight_layout()
-
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=250, bbox_inches="tight")
-    buf.seek(0)
-    plt.close(fig)
-    return buf.getvalue()
