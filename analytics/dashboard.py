@@ -1069,50 +1069,69 @@ def render(params: dict, ss) -> None:
         return
 
     # ── Top-N selector state (Analytics-only). ─────────────────────────────
-    # Replaces the prior `st.segmented_control` widget (which resisted four
-    # iterations of inline-layout CSS because Streamlit wraps every widget
-    # in an `stElementContainer` that defaults to `width: 100%` / block
-    # layout, even inside a flex parent). The new design renders the
-    # selector as three native HTML `<a>` tags embedded in the same
-    # `st.markdown` block as the legend text — `<a>` is intrinsically
-    # inline per HTML spec, so single-line rendering is architecturally
-    # guaranteed (no flex / specificity battle). State lives in
-    # `st.query_params["top_n"]`, which persists across reruns AND
-    # Daily↔Monthly view switches (URL is preserved across all Streamlit
-    # interactions). Clicking an `<a href="?top_n=N">` navigates the
-    # iframe to the new URL, Streamlit picks up the param on the next
-    # rerun, and we mirror into `session_state["analytics_top_n"]` so
-    # downstream `build_*_pivot(top_n=...)` calls see the right value.
+    # PREVIOUS APPROACHES that failed:
+    #   1. `st.segmented_control` + heavy CSS overrides — 4 iterations, all
+    #      failed to break out of Streamlit's stElementContainer block layout.
+    #   2. Custom HTML <a href="?top_n=N"> tags reading state from
+    #      st.query_params — visually worked, BUT clicking the link triggers
+    #      a full BROWSER NAVIGATION inside the iframe (Streamlit cannot
+    #      distinguish an intra-app rerun from a real navigation when the
+    #      URL changes). The full navigation reloads the app from scratch,
+    #      wiping every session_state value including app_authenticated.
+    #      Users got bounced back to the login screen on every click.
+    #
+    # CURRENT (CORRECT) APPROACH:
+    # Use native `st.button` widgets. Click → script rerun → session_state
+    # preserved. Layout achieved via `st.columns([wide, narrow, narrow, narrow,
+    # narrow])` — legend prose + "Showing top" label + 3 buttons in one row.
+    # Buttons styled aggressively via CSS scoped to `[class*="st-key-
+    # top_n_btn_"]` so they look like minimal inline text instead of pill
+    # buttons. type="primary" marks the selected option; CSS gives the
+    # primary variant cardinal red text + gold underline.
     _VALID_TOP_N = (10, 20, 30)
-    try:
-        _qp_top_n = int(st.query_params.get("top_n", "10"))
-    except (ValueError, TypeError):
-        _qp_top_n = 10
-    if _qp_top_n not in _VALID_TOP_N:
-        _qp_top_n = 10
-    st.session_state["analytics_top_n"] = _qp_top_n
-    # Preserve the existing `dashboard` query param so clicking a Top-N
-    # link doesn't reset the Analytics/Pre-Analytics nav.
-    _qp_dashboard = st.query_params.get("dashboard", "analytics")
+    if st.session_state.get("analytics_top_n") not in _VALID_TOP_N:
+        st.session_state["analytics_top_n"] = 10
 
-    def _top_n_legend_html(prefix_html: str) -> str:
-        """Build the legend bar HTML with three inline <a> tags appended.
+    def _render_top_n_legend(prefix_html: str) -> None:
+        """Render legend prose + Top-N selector inline using st.columns.
 
-        prefix_html is the legend prose ending with `&nbsp;&nbsp;Showing top`
-        (the sentence-ender). The active option gets `class="top-n-opt
-        active"` for cardinal-red + gold-underline styling; the others
-        get the muted-gray inactive style. CSS lives in ui_components.py
-        as `.top-n-opt` / `.top-n-opt.active`.
+        prefix_html is the legend prose (e.g. "Colour scale: ... full-day
+        sum per procedure."). The function appends a "Showing top" label
+        column and three st.button columns in the same row. Selected
+        button is rendered with type="primary" so CSS can target it for
+        cardinal+gold styling; the others are type="secondary".
+
+        Critically uses native Streamlit widgets — clicks trigger script
+        reruns (which preserve session_state including auth) rather than
+        the full-page navigation that <a href="?top_n=N"> caused in the
+        prior implementation.
         """
-        def _opt(n: int) -> str:
-            cls = "top-n-opt active" if n == _qp_top_n else "top-n-opt"
-            href = f"?dashboard={_qp_dashboard}&top_n={n}"
-            return f'<a class="{cls}" href="{href}" target="_self">{n}</a>'
-        return (
-            f'<div class="heatmap-legend-inline">{prefix_html}'
-            f'{_opt(10)}{_opt(20)}{_opt(30)}'
-            f'</div>'
+        current_n = st.session_state.get("analytics_top_n", 10)
+        _cols = st.columns(
+            [6, 0.7, 0.3, 0.3, 0.3],
+            vertical_alignment="center",
         )
+        with _cols[0]:
+            st.markdown(
+                f'<div class="heatmap-legend-inline">{prefix_html}</div>',
+                unsafe_allow_html=True,
+            )
+        with _cols[1]:
+            st.markdown(
+                '<div class="top-n-label">Showing top</div>',
+                unsafe_allow_html=True,
+            )
+        for _col, _n in zip(_cols[2:], (10, 20, 30)):
+            with _col:
+                _is_sel = (_n == current_n)
+                if st.button(
+                    str(_n),
+                    key=f"top_n_btn_{_n}",
+                    type="primary" if _is_sel else "secondary",
+                    use_container_width=True,
+                ):
+                    st.session_state["analytics_top_n"] = _n
+                    st.rerun()
 
     # ── Daily view ─────────────────────────────────────────────────────────
     if view_mode == "Daily":
@@ -1246,9 +1265,8 @@ def render(params: dict, ss) -> None:
         st.markdown(f'<div class="section-heading">{_heading_label}</div>',
                     unsafe_allow_html=True)
 
-        # Inline legend + Top-N selector. Single st.markdown call with
-        # the prose + three <a> tags — see _top_n_legend_html for the
-        # architectural rationale (no widget chrome, no flex battle).
+        # Inline legend + Top-N selector via _render_top_n_legend
+        # (st.button-based, preserves session_state on click).
         # Analytics-only; pre-analytics' render path doesn't call this.
         if _is_forecast_view:
             _prefix = (
@@ -1257,7 +1275,6 @@ def render(params: dict, ss) -> None:
                 f'<strong style="color:{_ORANGES_HIGH};">■</strong> high '
                 f'(hour columns only). &nbsp;'
                 f'<strong>Total</strong> column = forecasted full-day sum per procedure.'
-                f'&nbsp;&nbsp;Showing top &nbsp;'
             )
         else:
             _prefix = (
@@ -1266,9 +1283,8 @@ def render(params: dict, ss) -> None:
                 f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
                 f'(hour columns only). &nbsp;'
                 f'<strong>Total</strong> column = full-day sum per procedure.'
-                f'&nbsp;&nbsp;Showing top &nbsp;'
             )
-        st.markdown(_top_n_legend_html(_prefix), unsafe_allow_html=True)
+        _render_top_n_legend(_prefix)
 
         # ── Plotly heatmap (replaces the prior st.dataframe HTML table) ─────
         if _is_forecast_view:
@@ -1539,10 +1555,10 @@ def render(params: dict, ss) -> None:
             f'</div>',
             unsafe_allow_html=True,
         )
-        # Inline legend + Top-N selector (Monthly view). Same Option-A
-        # design as the Daily branch: single st.markdown call with the
-        # legend prose + three <a> tags. Selection persists across
-        # Daily↔Monthly switches via the shared `top_n` query param.
+        # Inline legend + Top-N selector (Monthly view). Same
+        # st.button-based design as the Daily branch — preserves
+        # session_state on click. Selection shared with Daily via
+        # `st.session_state["analytics_top_n"]`.
         _m_prefix = (
             f'Values = avg completed volume per day in hour. '
             f'Colour scale: &nbsp;'
@@ -1550,9 +1566,8 @@ def render(params: dict, ss) -> None:
             f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
             f'(hour columns only). &nbsp;'
             f'<strong>Total</strong> column = avg daily total per procedure.'
-            f'&nbsp;&nbsp;Showing top &nbsp;'
         )
-        st.markdown(_top_n_legend_html(_m_prefix), unsafe_allow_html=True)
+        _render_top_n_legend(_m_prefix)
 
         _m_fig = _build_analytics_heatmap(
             monthly_pivot,
