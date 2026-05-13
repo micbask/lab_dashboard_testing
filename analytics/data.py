@@ -159,17 +159,6 @@ def load_monthly_avg_for_comparison(
 # TAT DATA LAYER (Phase 1)
 # ════════════════════════════════════════════════════════════════════════════
 
-# Accession-number prefixes that identify each facility. The TAT view
-# filters on "Accession Nbr - Formatted" (more accurate than the older
-# Patient-Location prefix because every sample carries an accession
-# number, including outpatient cases where Patient Location can be
-# blank or non-USC/non-NCI). Keck accessions start with "267"; Norris
-# accessions start with "330".
-_TAT_FACILITY_PREFIX = {
-    "Keck":   "267",
-    "Norris": "330",
-}
-
 # Stat columns reported per priority group inside `build_tat_table`'s
 # MultiIndex output. The order here is the order they appear in the
 # rendered table.
@@ -178,10 +167,10 @@ _TAT_STAT_COLS = ["n", "Mean", "% <1h"]
 
 @st.cache_data(show_spinner=False, ttl=300)
 def load_tat_data(
-    date_str: str, view: str, facility: str,
+    date_str: str, view: str, resources: tuple,
 ) -> pd.DataFrame:
-    """Load Turn-Around-Time data for a facility/date range from the
-    partitioned Parquet store.
+    """Load Turn-Around-Time data scoped to a Testing Bench for the given
+    date range from the partitioned Parquet store.
 
     Parameters
     ----------
@@ -189,9 +178,12 @@ def load_tat_data(
         'YYYY-MM-DD' for `view='Daily'`; 'YYYY-MM' for `view='Monthly'`.
     view : str
         'Daily' or 'Monthly'.
-    facility : str
-        'Keck'   (Accession Nbr - Formatted starts with '267') or
-        'Norris' (Accession Nbr - Formatted starts with '330').
+    resources : tuple[str, ...]
+        Performing Service Resource values for the selected Testing Bench
+        (e.g. the entries of `DEFAULT_RESOURCES["Keck Core"]`). The same
+        resource list used by the Completed and In-Lab views, so TAT
+        reports turnaround time for the bench that actually performed the
+        test rather than the patient's facility.
 
     Returns a DataFrame with columns
         ['Order Procedure', 'Collection Priority', 'TAT_minutes']
@@ -200,10 +192,9 @@ def load_tat_data(
     Date/Time - Drawn is null are dropped before the computation.
 
     Uses the same partition-aware loader (`load_filtered_data`) as the
-    existing volume heatmaps; the resource and procedure-exclusion filters
-    are bypassed by passing empty tuples, then the facility filter is
-    applied on `Accession Nbr - Formatted` (267 = Keck, 330 = Norris)
-    after the partition load.
+    Completed / In-Lab heatmaps — the bench-level resource filter is
+    applied inside the DuckDB query, so this function no longer needs a
+    post-load accession-prefix filter.
     """
     if view == "Daily":
         target_date = date.fromisoformat(date_str)
@@ -224,15 +215,15 @@ def load_tat_data(
     df = load_filtered_data(
         start_date=start_d,
         end_date=end_d,
-        resources=(),       # skip resource filter — TAT spans all benches
-        exclude_procs=(),   # skip exclusion filter — TAT spans all procs
+        resources=resources,    # bench-level Performing Service Resource filter
+        exclude_procs=(),       # skip exclusion filter — TAT spans all procs
         _index_hash=get_index_hash(),
     )
     if df.empty:
         return _empty
 
     needed = [
-        "Order Procedure", "Collection Priority", "Accession Nbr - Formatted",
+        "Order Procedure", "Collection Priority",
         "Date/Time - Complete", "Date/Time - Drawn",
     ]
     keep = [c for c in needed if c in df.columns]
@@ -256,14 +247,6 @@ def load_tat_data(
         & (cmpl.dt.date >= start_d)
         & (cmpl.dt.date <= end_d)
     ]
-
-    # Accession-prefix facility filter. Cast to str first because the
-    # parquet column can come back as int / pandas StringDtype / object
-    # depending on how the source file was parsed.
-    prefix = _TAT_FACILITY_PREFIX.get(facility, "")
-    if prefix and "Accession Nbr - Formatted" in df.columns:
-        acc = df["Accession Nbr - Formatted"].astype(str)
-        df = df[acc.str.startswith(prefix, na=False)]
 
     df = df[df["Date/Time - Drawn"].notna()]
     if df.empty:
