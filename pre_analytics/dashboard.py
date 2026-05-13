@@ -5,14 +5,48 @@ import pandas as pd
 import streamlit as st
 
 from config import HOUR_LABELS
-from storage import storage_is_configured, get_data_summary, ensure_partitioned_storage
-from ui_components import metric_card, render_header
+from storage import (
+    storage_is_configured, get_data_summary, ensure_partitioned_storage,
+    reset_all_data, delete_date_range,
+)
+from ui_components import (
+    metric_card, render_header, render_data_management_sidebar,
+)
 from pre_analytics.data import load_phlebotomy_staff, load_draw_data, build_draw_pivot
 
 
 def render_sidebar(ss) -> dict:
     """Render pre-analytics sidebar widgets. Returns params dict for render()."""
     with st.sidebar:
+        # ── Pending background tasks (Issue 2A — DM parity with
+        # analytics). Mirror analytics' handler block so that Reset /
+        # Delete Range from the pre-analytics Data Management expander
+        # actually take effect on this dashboard's session too.
+        # `pending_forecast_retrain` is analytics-only (pre-analytics
+        # has no forecasts), so we don't handle it here — if a user
+        # clicks Refresh Forecast from pre-analytics' DM, the flag sits
+        # until they visit analytics, which is the documented behaviour. */
+        if ss.pop("pending_reset", False):
+            try:
+                if storage_is_configured():
+                    reset_all_data()
+                    st.cache_data.clear()
+                    st.success("Master dataset cleared.")
+            except Exception as _rst_err:
+                st.error(f"Reset failed: {_rst_err}")
+
+        if "pending_delete_range" in ss:
+            del_info = ss.pop("pending_delete_range")
+            try:
+                result = delete_date_range(del_info["start"], del_info["end"])
+                st.cache_data.clear()
+                st.success(
+                    f"Deleted {result['rows_removed']:,} rows "
+                    f"({del_info['start']} → {del_info['end']})."
+                )
+            except Exception as _dr_err:
+                st.error(f"Delete failed: {_dr_err}")
+
         st.markdown(
             '<div class="sidebar-section-label">LOCATION</div>',
             unsafe_allow_html=True,
@@ -147,6 +181,41 @@ def render_sidebar(ss) -> dict:
             f'</div>',
             unsafe_allow_html=True,
         )
+
+        # ── Data Management (Issue 2A — shared with analytics). ─────
+        # Same shared function as analytics; mirrors the dark expander
+        # with Export Raw Data button (Issue 2B) + admin-gated body.
+        # Compute the date range to pass for the export button:
+        # Daily → single date, Monthly → first-to-last of month.
+        if storage_is_configured():
+            if pa_view == "Daily":
+                _pa_dm_start = pa_date
+                _pa_dm_end   = pa_date
+                _pa_dm_label = "daily"
+            else:  # Monthly
+                _pa_dm_start = date(_pa_sel_year, _pa_sel_month, 1)
+                _pa_dm_end   = date(
+                    _pa_sel_year, _pa_sel_month,
+                    _cal.monthrange(_pa_sel_year, _pa_sel_month)[1],
+                )
+                _pa_dm_label = "monthly"
+
+            _pa_dm_data_summary: dict = {"total_rows": 0, "partitions": 0}
+            _pa_dm_load_err: Exception | None = None
+            try:
+                _pa_dm_data_summary = get_data_summary()
+            except Exception as _pa_e:
+                _pa_dm_load_err = _pa_e
+
+            render_data_management_sidebar(
+                ss,
+                start_date=_pa_dm_start,
+                end_date=_pa_dm_end,
+                view_label=_pa_dm_label,
+                data_exists=_pa_data_ok,
+                data_summary=_pa_dm_data_summary,
+                load_err=_pa_dm_load_err,
+            )
 
     return {
         "pa_location": pa_location,
