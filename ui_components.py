@@ -1506,15 +1506,19 @@ html body [class*="st-key-top_n_btn_"] button div {
 }
 .metrics-divider {
     /* Subtle horizontal line between the KPI card row and the
-       section heading below. Top margin = 24 px (gap from KPI
-       cards to the line); bottom margin = 12 px which combines
-       with the section-heading's 12 px margin-top to give 24 px
-       below the line. Result: line is visually centered between
-       the KPI cards and the section heading text (24 / 24). */
-    border: none;
-    border-top: 1px solid rgba(0, 0, 0, 0.06);
-    margin: 24px 0 12px 0;
-    height: 0;
+       section heading below. !important is REQUIRED to beat the
+       global `hr { margin: 1.1rem 0 !important }` rule earlier in
+       this stylesheet (element selector + !important would otherwise
+       win over a class selector without !important).
+       Top margin = 32 px (gap from KPI cards to the line); bottom
+       margin = 20 px which combines with the section-heading's 12 px
+       margin-top to give 32 px below the line. Result: the line is
+       visually centered between the KPI cards and the section heading
+       text at 32 / 32 px. */
+    border: none !important;
+    border-top: 1px solid rgba(0, 0, 0, 0.06) !important;
+    margin: 32px 0 20px 0 !important;
+    height: 0 !important;
 }
 .status-chip {
     display: inline-block;
@@ -2064,4 +2068,3 @@ def style_pivot(pivot: pd.DataFrame, vmax: int, cmap: str = "viridis_r"):
 def style_forecast_pivot(pivot: pd.DataFrame, vmax: int):
     """Style forecast pivot with Oranges colormap (issue #8)."""
     return style_pivot(pivot, vmax, cmap="Oranges")
-
