@@ -8,7 +8,6 @@ All rendering logic lives in analytics/ and pre_analytics/ modules.
 
 import os
 from copy import deepcopy
-from datetime import datetime
 
 import streamlit as st
 import streamlit.components.v1 as _components
@@ -410,10 +409,7 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
 
             # Footer beneath the card (stays inside the centered column).
             st.markdown(
-                f'<div class="login-footer">'
-                f'© {datetime.now().year} Laboratory Productivity Dashboard. '
-                f'All rights reserved.'
-                f'</div>',
+                '<div class="login-footer">v3.1 · May 2026</div>',
                 unsafe_allow_html=True,
             )
 
@@ -465,10 +461,9 @@ else:
 # view, the "no data" welcome state, and the pre-analytics page.
 # ═════════════════════════════════════════════════════════════════════════════
 st.markdown(
-    f'<div style="text-align: center; font-size: 12px; '
-    f'color: rgba(0, 0, 0, 0.4); padding: 32px 0 16px 0;">'
-    f'© {datetime.now().year} Laboratory Productivity Dashboard. '
-    f'All rights reserved.'
-    f'</div>',
+    '<div style="text-align: center; font-size: 12px; '
+    'color: rgba(0, 0, 0, 0.4); padding: 32px 0 16px 0;">'
+    'v3.1 · May 2026'
+    '</div>',
     unsafe_allow_html=True,
 )
