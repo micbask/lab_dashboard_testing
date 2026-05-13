@@ -364,24 +364,40 @@ def render(params: dict, ss) -> None:
             _fig = _pgo.Figure(data=_pgo.Heatmap(**_heatmap_kwargs))
             _fig.update_traces(hoverongaps=False)
 
-            # Row-driven chart height — total height adapts to row count
-            # so that EACH CELL is uniformly 28 px tall regardless of the
-            # per-shift row count. The previous formula `max(320, n*28+100)`
-            # had a 320-px FLOOR that defeated this: for small shifts
-            # (Keck Early AM = 2 rows, Norris NS = 3 rows) the floor padded
-            # the chart up to 320 px, leaving Plotly to distribute that
-            # height across only 2-3 rows → ~73-110 px per cell. That made
-            # cells in small-shift sections appear ~3-4× larger than cells
-            # in larger sections (Keck AM ~8 rows, Norris AM many rows)
-            # where the formula already exceeded 320. Dropping the floor
-            # gives uniform 28 px/row across every shift. Matches the cell
-            # density of analytics/dashboard.py:215 (Analytics row counts
-            # are always ≥10 so the floor there never binds; this commit
-            # leaves the Analytics formula as-is).
-            _plot_h = len(_techs) * 28 + 100
+            # Row-driven chart height — TARGET: each cell is exactly
+            # 28 px tall, regardless of how many tech rows the section
+            # has. Achieved by `total_height = n * 28 + chrome` where
+            # chrome is the EXACT vertical space Plotly subtracts from
+            # `layout.height` to render the surrounding axes.
+            #
+            # Chrome breakdown (verified against plotly.js source —
+            # `src/plots/plots.js::initMargins()` does
+            # `plot_h = layout.height - margin.t - margin.b`):
+            #   • margin.t = 10
+            #   • margin.b = 30  (enough for the 10-pt x-axis tick
+            #     labels + descender + small padding; previously was
+            #     10 which forced labels to render outside the
+            #     reserved margin — invisible/clipped — but the chrome
+            #     SUBTRACTED from layout.height stayed at 20 px,
+            #     causing the prior `+100` budget to LEAK 80 px into
+            #     the plot area; those 80 px got distributed across
+            #     cells, producing `28 + 80/n` per cell — i.e. 68 px
+            #     in a 2-row chart vs 37 px in a 9-row chart, the
+            #     ~2× ratio the user reported)
+            #   • Total chrome = 40 px
+            #
+            # automargin=True is on the y-axis only — Plotly's
+            # MARGIN_MAPPING.height ties t/b to x-axes (NOT y), so
+            # yaxis automargin only affects L/R margins. The x-axis
+            # has no automargin, so chrome is constant at exactly
+            # 40 px regardless of label content.
+            #
+            # Per-cell after this change:  (n*28 + 40 - 40) / n = 28
+            # for ALL n. Uniform.
+            _plot_h = len(_techs) * 28 + 40
             _fig.update_layout(
                 height=_plot_h,
-                margin=dict(l=10, r=10, t=10, b=10),
+                margin=dict(l=10, r=10, t=10, b=30),
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
                 dragmode=False,
