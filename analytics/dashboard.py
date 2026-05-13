@@ -2,7 +2,6 @@ import calendar as _cal
 from copy import deepcopy
 from datetime import date, timedelta
 
-import altair as alt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -26,8 +25,6 @@ from forecasting import (
 from parsing import parse_single_file, deduplicate_and_merge, clean_procedure_names
 from ui_components import (
     metric_card, render_header, status_chip,
-    style_monthly_pivot,
-    build_png, build_monthly_png, build_weekday_png,
     render_data_management_sidebar,
 )
 from analytics.data import (
@@ -633,7 +630,9 @@ def render_sidebar(ss) -> dict:
 # ════════════════════════════════════════════════════════════════════════════
 
 # Per-priority colours used across the TAT table headers and bar chart so
-# Routine/Stat/Combined stay visually grouped end-to-end.
+# Routine/Stat/All stay visually grouped end-to-end. The "All" column
+# is the union of Routine + Stat/Time-Study (internally still keyed on
+# the "Combined" MultiIndex label coming out of analytics/data.py).
 _TAT_ROUTINE_COLOR  = "#0066cc"
 _TAT_STAT_COLOR     = "#cc6600"
 _TAT_COMBINED_COLOR = "#444444"
@@ -777,9 +776,9 @@ def _render_tat_view(params: dict) -> None:
         f"<span style='color:{_TAT_STAT_COLOR}'>Stat</span><br>n",
         f"<span style='color:{_TAT_STAT_COLOR}'>Stat</span><br>Mean",
         f"<span style='color:{_TAT_STAT_COLOR}'>Stat</span><br>% <1h",
-        f"<span style='color:{_TAT_COMBINED_COLOR}'>Combined</span><br>n",
-        f"<span style='color:{_TAT_COMBINED_COLOR}'>Combined</span><br>Mean",
-        f"<span style='color:{_TAT_COMBINED_COLOR}'>Combined</span><br>% <1h",
+        f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>n",
+        f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>Mean",
+        f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>% <1h",
     ]
 
     # Column-tinted header / cell fills so the priority groups read as
@@ -918,10 +917,10 @@ def _render_tat_view(params: dict) -> None:
     _bar_fig.add_trace(go.Bar(
         y=_bar_procs,
         x=_bar_xs(_comb_means_raw),
-        name="Combined",
+        name="All",
         orientation="h",
         marker_color=_TAT_COMBINED_COLOR,
-        hovertemplate=_bar_hover(_comb_means_raw, "Combined"),
+        hovertemplate=_bar_hover(_comb_means_raw, "All"),
     ))
 
     _bar_h = max(300, len(_bar_procs) * 50 + 100)
@@ -1367,114 +1366,63 @@ def render(params: dict, ss) -> None:
             },
         )
 
-        _file_prefix = map_type.replace(" ", "_")
-        _date_tag    = pd.Timestamp(selected_date).strftime("%Y-%m-%d")
-
-        if not _is_forecast_view and df_date_hour is not None and not df_date_hour.empty:
-            _dl1, _dl2 = st.columns(2)
-            with _dl1:
-                st.download_button(
-                    "Download PNG",
-                    data=build_png(df_date_hour, map_type, selected_date, hours),
-                    file_name=f"{_file_prefix}_{_date_tag}.png",
-                    mime="image/png",
-                    width="stretch",
-                    key="daily_png_dl",
-                )
-            with _dl2:
-                _cols_for_csv = [c for c in [
-                    "Order Procedure", "Performing Service Resource",
-                    "Date/Time - Complete", "Complete Volume",
-                ] if c in df_date.columns]
-                _daily_raw_csv = (
-                    df_date[_cols_for_csv]
-                    .sort_values("Date/Time - Complete")
-                    .reset_index(drop=True)
-                    .to_csv(index=False)
-                    .encode()
-                )
-                st.download_button(
-                    "Download CSV",
-                    data=_daily_raw_csv,
-                    file_name=f"{_file_prefix}_raw_{_date_tag}.csv",
-                    mime="text/csv",
-                    width="stretch",
-                    key="daily_csv_dl",
-                )
-
+        # Hourly Volume bar chart (Plotly, USC cardinal). Rendered as a
+        # regular section below the heatmap — replaces the previous
+        # Altair-in-expander chart, the Download PNG/CSV buttons, and
+        # the "Drill into a cell" expander that lived in this section.
         st.markdown("---")
 
-        with st.expander("Hourly Volume", expanded=False):
-            _hourly = pivot[_hour_cols].sum().reset_index()
-            _hourly.columns = ["Hour", "Total Volume"]
-            _hourly_chart = (
-                alt.Chart(_hourly)
-                .mark_bar()
-                .encode(
-                    x=alt.X("Hour:N", sort=list(_hour_cols), title="Hour"),
-                    y=alt.Y("Total Volume:Q", title="Total Volume"),
-                )
-                .properties(height=220)
+        st.markdown(
+            f'<div class="section-heading">Hourly volume · {date_str}</div>',
+            unsafe_allow_html=True,
+        )
+
+        _hourly = pivot[_hour_cols].sum().reset_index()
+        _hourly.columns = ["Hour", "Total Volume"]
+        _hourly_fig = go.Figure()
+        _hourly_fig.add_trace(
+            go.Bar(
+                x=_hourly["Hour"],
+                y=_hourly["Total Volume"],
+                marker_color="#790A26",
+                hovertemplate="<b>%{x}</b><br>Volume: %{y}<extra></extra>",
             )
-            st.altair_chart(_hourly_chart, use_container_width=True)
-
-        if not _is_forecast_view:
-            with st.expander("Drill into a cell — individual completion events",
-                             expanded=False):
-                st.markdown(
-                    "Select a **procedure** and **hour** to inspect every individual "
-                    "completion event recorded in that cell."
-                )
-                _dd1, _dd2 = st.columns(2)
-                with _dd1:
-                    sel_proc = st.selectbox("Procedure", pivot.index.tolist(),
-                                            key="drill_proc")
-                with _dd2:
-                    sel_hour_label = st.selectbox("Hour", _hour_cols, key="drill_hour")
-
-                sel_hour_int = LABEL_TO_HOUR[sel_hour_label]
-                detail = df_date[
-                    (df_date["Order Procedure"] == sel_proc) &
-                    (df_date["hour"] == sel_hour_int)
-                ].copy().sort_values("Date/Time - Complete")
-
-                _show_cols = {k: v for k, v in {
-                    "Date/Time - Complete":        "Completed At",
-                    "Performing Service Resource": "Resource",
-                    "Complete Volume":             "Volume",
-                }.items() if k in detail.columns}
-
-                detail_display = (
-                    detail[list(_show_cols.keys())]
-                    .rename(columns=_show_cols)
-                    .reset_index(drop=True)
-                )
-                if "Completed At" in detail_display.columns:
-                    detail_display["Completed At"] = (
-                        pd.to_datetime(detail_display["Completed At"])
-                        .dt.strftime("%Y-%m-%d  %H:%M:%S")
-                    )
-
-                if detail_display.empty:
-                    st.info(
-                        f"No completions for **{sel_proc}** during "
-                        f"**{sel_hour_label}** on {date_str}."
-                    )
-                else:
-                    _cell_vol = (
-                        int(detail_display["Volume"].sum())
-                        if "Volume" in detail_display.columns else len(detail_display)
-                    )
-                    st.markdown(
-                        f"**{len(detail_display)} event(s)** &nbsp;·&nbsp; "
-                        f"*{sel_proc}* &nbsp;·&nbsp; "
-                        f"**{sel_hour_label}** &nbsp;·&nbsp; "
-                        f"Total volume: **{_cell_vol}**"
-                    )
-                    st.dataframe(
-                        detail_display, width="stretch",
-                        height=min(80 + 35 * len(detail_display), 500),
-                    )
+        )
+        _hourly_fig.update_layout(
+            height=280,
+            margin=dict(l=10, r=10, t=10, b=40),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            dragmode=False,
+            xaxis=dict(
+                tickfont=dict(size=10), title=None,
+                fixedrange=True, categoryorder="array",
+                categoryarray=list(_hour_cols),
+            ),
+            yaxis=dict(
+                tickfont=dict(size=10), title="Total volume",
+                fixedrange=True, automargin=True,
+            ),
+            hoverlabel=dict(
+                bgcolor="white",
+                bordercolor="#6F1828",
+                font=dict(
+                    size=12,
+                    family="Inter, system-ui, sans-serif",
+                    color="#1a1a1a",
+                ),
+            ),
+        )
+        st.plotly_chart(
+            _hourly_fig,
+            use_container_width=True,
+            key="analytics_daily_hourly",
+            config={
+                "staticPlot": False,
+                "scrollZoom": False,
+                "displayModeBar": False,
+            },
+        )
 
     else:  # Monthly view
         selected_year  = params["selected_year"]
@@ -1588,125 +1536,93 @@ def render(params: dict, ss) -> None:
             },
         )
 
-        _m_file_prefix = map_type.replace(" ", "_")
-        _m_month_label = _cal.month_name[selected_month]
-        _m_file_tag    = f"{_m_month_label}_{selected_year}"
-        _mdl1, _mdl2   = st.columns(2)
-        with _mdl1:
-            st.download_button(
-                "Download PNG",
-                data=build_monthly_png(
-                    monthly_pivot, map_type, selected_year, selected_month, n_days
-                ),
-                file_name=f"{_m_file_prefix}_{_m_file_tag}.png",
-                mime="image/png",
-                width="stretch",
-                key="monthly_png_dl",
-            )
-        with _mdl2:
-            _csv_cols = [c for c in [
-                "Order Procedure", "Performing Service Resource",
-                "Date/Time - Complete", "Complete Volume",
-            ] if c in filtered_df.columns]
-            _monthly_raw_csv = (
-                filtered_df[_csv_cols]
-                .sort_values("Date/Time - Complete")
-                .reset_index(drop=True)
-                .to_csv(index=False)
-                .encode()
-            )
-            st.download_button(
-                "Download CSV",
-                data=_monthly_raw_csv,
-                file_name=f"{_m_file_prefix}_raw_{_m_file_tag}.csv",
-                mime="text/csv",
-                width="stretch",
-                key="monthly_csv_dl",
-            )
-
+        # Weekday-pattern Plotly heatmap. Replaces the previous
+        # pandas-style dataframe inside an st.expander. The Download
+        # PNG/CSV buttons that lived above this block (monthly) and
+        # below it (weekday) have been removed.
         st.markdown("---")
 
-        with st.expander("Hourly Volume by Day of Week", expanded=False):
-            weekday_pivot, _wd_counts = build_weekday_pivot(
-                month_raw_df, selected_year, selected_month
+        weekday_pivot, _wd_counts = build_weekday_pivot(
+            month_raw_df, selected_year, selected_month
+        )
+
+        if weekday_pivot is None:
+            st.info("No data available for weekday breakdown.")
+        else:
+            _wd_hour_cols    = [c for c in weekday_pivot.columns if c != "Total"]
+            _wd_busiest_day  = weekday_pivot["Total"].idxmax()
+            _wd_lightest_day = weekday_pivot["Total"].idxmin()
+            _wd_peak_hour    = weekday_pivot[_wd_hour_cols].sum().idxmax()
+            _wd_peak_disp    = _wd_peak_hour.replace("AM", " AM").replace("PM", " PM")
+
+            _wc1, _wc2, _wc3 = st.columns(3)
+            with _wc1:
+                st.markdown(
+                    metric_card(
+                        "Busiest day",
+                        _wd_busiest_day.split("  ")[0],
+                        sub=f"avg {int(round(weekday_pivot.loc[_wd_busiest_day, 'Total']))} vol / day",
+                    ),
+                    unsafe_allow_html=True,
+                )
+            with _wc2:
+                st.markdown(
+                    metric_card("Peak hour", _wd_peak_disp,
+                                sub="highest avg volume across weekdays"),
+                    unsafe_allow_html=True,
+                )
+            with _wc3:
+                st.markdown(
+                    metric_card(
+                        "Lightest day",
+                        _wd_lightest_day.split("  ")[0],
+                        sub=f"avg {int(round(weekday_pivot.loc[_wd_lightest_day, 'Total']))} vol / day",
+                    ),
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown(
+                f'<div class="section-heading">'
+                f'{map_type} — weekday pattern · {month_name_str}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f'<div class="heatmap-legend">'
+                f'Values = avg completed volume per occurrence of that weekday. '
+                f'Colour scale: &nbsp;'
+                f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
+                f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
+                f'(hour columns only). &nbsp;'
+                f'<strong>Total</strong> column = avg daily total for that weekday.'
+                f'</div>',
+                unsafe_allow_html=True,
             )
 
-            if weekday_pivot is None:
-                st.info("No data available for weekday breakdown.")
-            else:
-                _wd_hour_cols    = [c for c in weekday_pivot.columns if c != "Total"]
-                _wd_busiest_day  = weekday_pivot["Total"].idxmax()
-                _wd_lightest_day = weekday_pivot["Total"].idxmin()
-                _wd_peak_hour    = weekday_pivot[_wd_hour_cols].sum().idxmax()
-                _wd_peak_disp    = _wd_peak_hour.replace("AM", " AM").replace("PM", " PM")
-
-                _wc1, _wc2, _wc3 = st.columns(3)
-                with _wc1:
-                    st.markdown(
-                        metric_card(
-                            "Busiest day",
-                            _wd_busiest_day.split("  ")[0],
-                            sub=f"avg {int(round(weekday_pivot.loc[_wd_busiest_day, 'Total']))} vol / day",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-                with _wc2:
-                    st.markdown(
-                        metric_card("Peak hour", _wd_peak_disp,
-                                    sub="highest avg volume across weekdays"),
-                        unsafe_allow_html=True,
-                    )
-                with _wc3:
-                    st.markdown(
-                        metric_card(
-                            "Lightest day",
-                            _wd_lightest_day.split("  ")[0],
-                            sub=f"avg {int(round(weekday_pivot.loc[_wd_lightest_day, 'Total']))} vol / day",
-                        ),
-                        unsafe_allow_html=True,
-                    )
-
-                st.markdown(
-                    f'<div class="section-heading">'
-                    f'{map_type} — weekday pattern · {month_name_str}'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-                _wd_vmax = max(1, int(weekday_pivot[_wd_hour_cols].values.max()))
-                st.markdown(
-                    f'<div class="heatmap-legend">'
-                    f'Values = avg completed volume per occurrence of that weekday. '
-                    f'Colour scale: &nbsp;<strong style="color:#f5e642;">■</strong> low &nbsp;→&nbsp; '
-                    f'<strong style="color:#3b0f70;">■</strong> high (≥ {_wd_vmax}). &nbsp;'
-                    f'<strong>Total</strong> column = avg daily total for that weekday.'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-
-                st.dataframe(
-                    style_monthly_pivot(weekday_pivot, _wd_vmax),
-                    width="stretch",
-                    height=min(80 + 35 * 7, 400),
-                )
-
-                _wdl1, _wdl2 = st.columns(2)
-                with _wdl1:
-                    st.download_button(
-                        "Download PNG",
-                        data=build_weekday_png(
-                            weekday_pivot, map_type, selected_year, selected_month
-                        ),
-                        file_name=f"{_m_file_prefix}_Weekday_{_m_file_tag}.png",
-                        mime="image/png",
-                        width="stretch",
-                        key="weekday_png_dl",
-                    )
-                with _wdl2:
-                    st.download_button(
-                        "Download CSV",
-                        data=weekday_pivot.to_csv(index=True).encode(),
-                        file_name=f"{_m_file_prefix}_Weekday_{_m_file_tag}.csv",
-                        mime="text/csv",
-                        width="stretch",
-                        key="weekday_csv_dl",
-                    )
+            _wd_fig = _build_analytics_heatmap(
+                weekday_pivot,
+                colorscale="Viridis_r",
+                hovertemplate=(
+                    "<b>%{y} @ %{customdata[0]}</b><br>"
+                    "Avg: %{customdata[1]:.1f}<extra></extra>"
+                ),
+            )
+            # Match the Pre-Analytics cell-uniformity formula:
+            # height = n_rows * 28 + 40, with margin.b = 30 for x-axis
+            # label clearance. Total chrome = 40 px → per-cell = 28 px
+            # uniformly for any n_rows.
+            _wd_n = len(weekday_pivot)
+            _wd_fig.update_layout(
+                height=_wd_n * 28 + 40,
+                margin=dict(l=10, r=10, t=10, b=30),
+            )
+            st.plotly_chart(
+                _wd_fig,
+                use_container_width=True,
+                key="analytics_weekday_heatmap",
+                config={
+                    "staticPlot": False,
+                    "scrollZoom": False,
+                    "displayModeBar": False,
+                },
+            )
