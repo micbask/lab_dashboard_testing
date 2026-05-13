@@ -1420,58 +1420,67 @@ html body [class*="st-key-top_n_btn_"] [data-testid="stBaseButton-primary"] div 
     text-underline-offset: 3px !important;
 }
 
-/* ── Top-N legend BASELINE ALIGNMENT (Issue 2 fix) ──────────
-   "Showing top" and the 10/20/30 buttons appeared visually
-   misaligned because Streamlit's `st.columns(vertical_alignment=
-   "center")` centers each column's stElementContainer wrapper —
-   but the bare-markdown wrapper and the .stButton wrapper have
-   DIFFERENT intrinsic heights (the .stButton wrapper inherits
-   `min-height: ~2.25rem` from the maroon site-wide button rule,
-   which the prior `[class*="st-key-..."] button { min-height: 0 }`
-   override didn't reach — wrong nesting target).
-   Fix: lock all THREE column children (.heatmap-legend-inline,
-   .top-n-label, and the .stButton/element-container wrapping
-   each button) to identical 24-px content boxes that center their
-   own text. With wrappers of identical height, the parent flex's
-   `align-items: center` trivially aligns the text baselines.
-   font-size: 12px / line-height: 1 on all three so glyph metrics
-   match exactly. */
+/* ── Top-N legend BASELINE ALIGNMENT (Issue 2 fix v3) ──────
+   "Showing top" and the 10/20/30 buttons looked misaligned
+   despite multiple iterations. The previous "lock all column
+   children to 24 px boxes + align-items: center" approach
+   failed because Streamlit 1.57.0 implements
+   `st.columns(vertical_alignment="center")` as
+       margin-top: auto; margin-bottom: auto
+   on EACH stColumn — NOT as `align-items: center` on the
+   parent stHorizontalBlock. In flex layout, `margin: auto`
+   on a child ABSORBS all free space first, OVERRIDING the
+   parent's `align-items`. So any `align-items` rule on the
+   parent is a no-op until the columns' auto margins are
+   neutralized.
+   Verified by reading streamlit/streamlit 1.57.0's JS bundle
+   (`src.D9MArGZj.js`): `i === a.CENTER && {marginTop:'auto',
+   marginBottom:'auto'}`.
+   This fix:
+     1. Zero the auto margins on each stColumn (so the
+        parent's align-items takes effect).
+     2. Set `align-items: baseline` on the parent
+        stHorizontalBlock (`:has()` scopes it to the row
+        containing our Top-N buttons only).
+     3. Match font-size + line-height across all three
+        children (12 px / 1.5) so baselines coincide.
+     4. Drop ALL the 24-px height locks from the prior
+        attempt — height locks prevent flex from giving each
+        wrapper its natural intrinsic height, and baseline
+        alignment needs the natural baseline position, not a
+        clamped one. */
+[data-testid="stHorizontalBlock"]:has([class*="st-key-top_n_btn_"]) {
+    align-items: baseline !important;
+}
+[data-testid="stHorizontalBlock"]:has([class*="st-key-top_n_btn_"])
+    > [data-testid="stColumn"] {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+}
 .heatmap-legend-inline,
 .top-n-label {
-    display: flex !important;
-    align-items: center !important;
-    height: 24px !important;
     font-size: 12px !important;
-    line-height: 1 !important;
+    line-height: 1.5 !important;
     margin: 0 !important;
+    padding: 0 !important;
 }
 .top-n-label {
-    justify-content: flex-end !important;
-}
-html body [class*="st-key-top_n_btn_"] .stButton,
-html body [class*="st-key-top_n_btn_"] [data-testid="stElementContainer"] {
-    min-height: 0 !important;
-    height: 24px !important;
-    display: flex !important;
-    align-items: center !important;
+    text-align: right;
+    padding-right: 4px !important;
 }
 html body [class*="st-key-top_n_btn_"] button {
-    height: 24px !important;
-    min-height: 24px !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
     font-size: 12px !important;
-    line-height: 1 !important;
-    padding: 0 4px !important;
+    line-height: 1.5 !important;
+    padding: 0 6px !important;
+    min-height: 0 !important;
+    height: auto !important;
 }
 html body [class*="st-key-top_n_btn_"] button p,
 html body [class*="st-key-top_n_btn_"] button div {
     font-size: 12px !important;
-    line-height: 1 !important;
-    display: flex !important;
-    align-items: center !important;
-    height: 100%;
+    line-height: 1.5 !important;
+    margin: 0 !important;
+    padding: 0 !important;
 }
 
 /* ═══════════════════════════════════════════════════════
