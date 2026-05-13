@@ -564,40 +564,13 @@ def render_sidebar(ss) -> dict:
 
             # Resource Allocation expander removed (FIX 2).
 
-        # ── 6. Data Management (shared component, Issue 2A) ─────────
+        # ── 6. Data Management (shared component) ───────────────────
         # Refactored into ui_components.render_data_management_sidebar.
         # Both analytics and pre-analytics now call the same function;
         # any future changes propagate to both dashboards.
-        # Determine the date range to pass to the export button (Issue
-        # 2B): Daily → single date, Monthly → first-to-last of month,
-        # TAT → same Daily/Monthly conventions. Date range is required
-        # so the Export Raw Data button knows which parquet slice to
-        # pull. The `view_label` arg controls the filename suffix
-        # ("daily" → raw_data_YYYY-MM-DD.xlsx, "monthly" → ...YYYY-MM).
-        if view_mode == "Monthly":
-            _dm_start = date(selected_year, selected_month, 1)
-            _dm_end   = date(selected_year, selected_month,
-                             _cal.monthrange(selected_year, selected_month)[1])
-            _dm_label = "monthly"
-        else:  # Daily or TAT-Daily
-            _dm_start = selected_date
-            _dm_end   = selected_date
-            _dm_label = "daily"
-            if view_mode == "TAT":
-                # TAT view has its own Daily/Monthly toggle; if Monthly,
-                # span the full month, else single date.
-                if "_tat_date_str" in locals() and len(_tat_date_str) == 7:
-                    _yr = int(_tat_date_str[:4]); _mo = int(_tat_date_str[5:7])
-                    _dm_start = date(_yr, _mo, 1)
-                    _dm_end   = date(_yr, _mo, _cal.monthrange(_yr, _mo)[1])
-                    _dm_label = "monthly"
-
         if storage_is_configured():
             render_data_management_sidebar(
                 ss,
-                start_date=_dm_start,
-                end_date=_dm_end,
-                view_label=_dm_label,
                 data_exists=_data_exists,
                 data_summary=_data_summary,
                 load_err=_load_err,
@@ -1095,6 +1068,52 @@ def render(params: dict, ss) -> None:
         _render_tat_view(params)
         return
 
+    # ── Top-N selector state (Analytics-only). ─────────────────────────────
+    # Replaces the prior `st.segmented_control` widget (which resisted four
+    # iterations of inline-layout CSS because Streamlit wraps every widget
+    # in an `stElementContainer` that defaults to `width: 100%` / block
+    # layout, even inside a flex parent). The new design renders the
+    # selector as three native HTML `<a>` tags embedded in the same
+    # `st.markdown` block as the legend text — `<a>` is intrinsically
+    # inline per HTML spec, so single-line rendering is architecturally
+    # guaranteed (no flex / specificity battle). State lives in
+    # `st.query_params["top_n"]`, which persists across reruns AND
+    # Daily↔Monthly view switches (URL is preserved across all Streamlit
+    # interactions). Clicking an `<a href="?top_n=N">` navigates the
+    # iframe to the new URL, Streamlit picks up the param on the next
+    # rerun, and we mirror into `session_state["analytics_top_n"]` so
+    # downstream `build_*_pivot(top_n=...)` calls see the right value.
+    _VALID_TOP_N = (10, 20, 30)
+    try:
+        _qp_top_n = int(st.query_params.get("top_n", "10"))
+    except (ValueError, TypeError):
+        _qp_top_n = 10
+    if _qp_top_n not in _VALID_TOP_N:
+        _qp_top_n = 10
+    st.session_state["analytics_top_n"] = _qp_top_n
+    # Preserve the existing `dashboard` query param so clicking a Top-N
+    # link doesn't reset the Analytics/Pre-Analytics nav.
+    _qp_dashboard = st.query_params.get("dashboard", "analytics")
+
+    def _top_n_legend_html(prefix_html: str) -> str:
+        """Build the legend bar HTML with three inline <a> tags appended.
+
+        prefix_html is the legend prose ending with `&nbsp;&nbsp;Showing top`
+        (the sentence-ender). The active option gets `class="top-n-opt
+        active"` for cardinal-red + gold-underline styling; the others
+        get the muted-gray inactive style. CSS lives in ui_components.py
+        as `.top-n-opt` / `.top-n-opt.active`.
+        """
+        def _opt(n: int) -> str:
+            cls = "top-n-opt active" if n == _qp_top_n else "top-n-opt"
+            href = f"?dashboard={_qp_dashboard}&top_n={n}"
+            return f'<a class="{cls}" href="{href}" target="_self">{n}</a>'
+        return (
+            f'<div class="heatmap-legend-inline">{prefix_html}'
+            f'{_opt(10)}{_opt(20)}{_opt(30)}'
+            f'</div>'
+        )
+
     # ── Daily view ─────────────────────────────────────────────────────────
     if view_mode == "Daily":
         selected_date    = params["selected_date"]
@@ -1227,52 +1246,29 @@ def render(params: dict, ss) -> None:
         st.markdown(f'<div class="section-heading">{_heading_label}</div>',
                     unsafe_allow_html=True)
 
-        # Legend + INLINE Top-N selector. The legend prose ends with
-        # "Showing top" and the segmented_control (rendered immediately
-        # below, with label hidden + all chrome stripped via CSS in
-        # ui_components.py) appears to continue the sentence as "10 |
-        # 20 | 30". Both are wrapped in `st.container(key=...)` so the
-        # CSS scope (`.st-key-heatmap_legend_with_topn_daily ...`) can
-        # apply `display: flex` to the NESTED stVerticalBlock to put
-        # them on the same line. Distinct daily/monthly keys avoid
-        # Streamlit's DuplicateWidgetID for the container, while the
-        # segmented_control itself uses a shared `analytics_top_n` key
-        # so the selection persists across Daily↔Monthly view switches.
-        # Default = 10 procedures. Outside the TAT early-return; never
-        # appears on TAT. Pre-Analytics has its own render path; the
-        # widget never appears there.
-        with st.container(key="heatmap_legend_with_topn_daily"):
-            if _is_forecast_view:
-                st.markdown(
-                    f'<div class="heatmap-legend-inline">'
-                    f'Colour scale: &nbsp;'
-                    f'<strong style="color:{_ORANGES_LOW};">■</strong> low &nbsp;→&nbsp; '
-                    f'<strong style="color:{_ORANGES_HIGH};">■</strong> high '
-                    f'(hour columns only). &nbsp;'
-                    f'<strong>Total</strong> column = forecasted full-day sum per procedure.'
-                    f'&nbsp;&nbsp;Showing top'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.markdown(
-                    f'<div class="heatmap-legend-inline">'
-                    f'Colour scale: &nbsp;'
-                    f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
-                    f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
-                    f'(hour columns only). &nbsp;'
-                    f'<strong>Total</strong> column = full-day sum per procedure.'
-                    f'&nbsp;&nbsp;Showing top'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-            st.segmented_control(
-                "Show top",
-                options=[10, 20, 30],
-                default=10,
-                key="analytics_top_n",
-                label_visibility="collapsed",
+        # Inline legend + Top-N selector. Single st.markdown call with
+        # the prose + three <a> tags — see _top_n_legend_html for the
+        # architectural rationale (no widget chrome, no flex battle).
+        # Analytics-only; pre-analytics' render path doesn't call this.
+        if _is_forecast_view:
+            _prefix = (
+                f'Colour scale: &nbsp;'
+                f'<strong style="color:{_ORANGES_LOW};">■</strong> low &nbsp;→&nbsp; '
+                f'<strong style="color:{_ORANGES_HIGH};">■</strong> high '
+                f'(hour columns only). &nbsp;'
+                f'<strong>Total</strong> column = forecasted full-day sum per procedure.'
+                f'&nbsp;&nbsp;Showing top &nbsp;'
             )
+        else:
+            _prefix = (
+                f'Colour scale: &nbsp;'
+                f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
+                f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
+                f'(hour columns only). &nbsp;'
+                f'<strong>Total</strong> column = full-day sum per procedure.'
+                f'&nbsp;&nbsp;Showing top &nbsp;'
+            )
+        st.markdown(_top_n_legend_html(_prefix), unsafe_allow_html=True)
 
         # ── Plotly heatmap (replaces the prior st.dataframe HTML table) ─────
         if _is_forecast_view:
@@ -1543,32 +1539,20 @@ def render(params: dict, ss) -> None:
             f'</div>',
             unsafe_allow_html=True,
         )
-        # Legend + INLINE Top-N selector (Monthly view). Same widget
-        # instance as Daily (shared key="analytics_top_n") so the
-        # selection persists across view switches. Container key is
-        # distinct (`heatmap_legend_with_topn_monthly`) to avoid
-        # DuplicateWidgetID — both keys are matched by the same CSS
-        # block in ui_components.py via `[class*="st-key-heatmap_legend_with_topn"]`.
-        with st.container(key="heatmap_legend_with_topn_monthly"):
-            st.markdown(
-                f'<div class="heatmap-legend-inline">'
-                f'Values = avg completed volume per day in hour. '
-                f'Colour scale: &nbsp;'
-                f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
-                f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
-                f'(hour columns only). &nbsp;'
-                f'<strong>Total</strong> column = avg daily total per procedure.'
-                f'&nbsp;&nbsp;Showing top'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-            st.segmented_control(
-                "Show top",
-                options=[10, 20, 30],
-                default=10,
-                key="analytics_top_n",
-                label_visibility="collapsed",
-            )
+        # Inline legend + Top-N selector (Monthly view). Same Option-A
+        # design as the Daily branch: single st.markdown call with the
+        # legend prose + three <a> tags. Selection persists across
+        # Daily↔Monthly switches via the shared `top_n` query param.
+        _m_prefix = (
+            f'Values = avg completed volume per day in hour. '
+            f'Colour scale: &nbsp;'
+            f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
+            f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
+            f'(hour columns only). &nbsp;'
+            f'<strong>Total</strong> column = avg daily total per procedure.'
+            f'&nbsp;&nbsp;Showing top &nbsp;'
+        )
+        st.markdown(_top_n_legend_html(_m_prefix), unsafe_allow_html=True)
 
         _m_fig = _build_analytics_heatmap(
             monthly_pivot,
