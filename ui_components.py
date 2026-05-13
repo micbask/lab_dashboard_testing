@@ -115,23 +115,36 @@ html, body,
    the residual gap is entirely the flex-gap × N empty slots
    pathway above. */
 
-/* (A) Header overlay → zero footprint. Keep in DOM (so any
-   future child like the sidebar collapse button can still
-   receive pointer events) but collapse height + transparency. */
-[data-testid="stHeader"],
-header[data-testid="stHeader"],
-.stAppHeader {
-    background: transparent !important;
-    height: 0 !important;
-    min-height: 0 !important;
-}
-/* Hide every direct child of the header — pairs with
-   client.toolbarMode = "viewer" so deploy / toolbar / menu /
-   status widget render to nothing even if Cloud re-enables them. */
-[data-testid="stHeader"] > *,
-[data-testid="stToolbar"],
-.stAppToolbar {
-    display: none !important;
+/* (A) Header overlay → zero footprint, DESKTOP ONLY.
+   Gated to `@media (min-width: 768.01px)` so on mobile (≤768 px)
+   Streamlit's native header renders — most importantly, the
+   stExpandSidebarButton inside [data-testid="stHeader"] >
+   [data-testid="stToolbar"] which is the ONLY way to reopen the
+   sidebar once it's been closed on a phone. Verified via the 1.57.0
+   frontend bundle: in `viewer` toolbarMode, MainMenu + StatusWidget
+   still render in the header, so the `> *` / stToolbar display:none
+   rules ARE doing real work on desktop and must be preserved (just
+   gated). The boundary uses 768.01 to align with Streamlit's own
+   `@media (max-width: 768px)` sidebar-overlay rule which IS
+   inclusive at 768; without the 0.01 offset, iPad mini portrait
+   (768 px) gets desktop CSS but Streamlit applies the overlay rule
+   → conflict. */
+@media (min-width: 768.01px) {
+    [data-testid="stHeader"],
+    header[data-testid="stHeader"],
+    .stAppHeader {
+        background: transparent !important;
+        height: 0 !important;
+        min-height: 0 !important;
+    }
+    /* Hide every direct child of the header — pairs with
+       client.toolbarMode = "viewer" so deploy / toolbar / menu /
+       status widget render to nothing even if Cloud re-enables them. */
+    [data-testid="stHeader"] > *,
+    [data-testid="stToolbar"],
+    .stAppToolbar {
+        display: none !important;
+    }
 }
 
 /* (B1) Zero the flex gap on the MAIN column's TOP-LEVEL
@@ -198,6 +211,15 @@ header[data-testid="stHeader"],
     padding-right: 24px !important;
     max-width: 1480px !important;
 }
+/* On mobile (≤768 px), shrink horizontal padding so the content
+   area isn't eating 12% of a 390 px viewport. 12 px each side
+   leaves ~93% of viewport for the heatmap / KPI cards / banner. */
+@media (max-width: 768px) {
+    .block-container {
+        padding-left: 12px !important;
+        padding-right: 12px !important;
+    }
+}
 
 /* (D) stApp / stAppViewContainer defensive padding reset —
    source confirms these are at top:0 with no padding by
@@ -237,17 +259,36 @@ header[data-testid="stHeader"],
    Streamlit versions and a bare role="separator" in others)
    is hidden via both selectors so the right edge has no
    visible drag affordance. */
+/* Sidebar — ALWAYS dark, but width-locked + in-flow only on
+   desktop. On mobile (≤768 px) Streamlit's native CSS turns the
+   sidebar into a position:absolute overlay; our previous ungated
+   `width: 320px !important; position: relative !important;` rules
+   were beating that overlay rule (via !important) and pinning the
+   sidebar at 320 px of in-flow column even on a 390 px phone —
+   which is THE root cause of the screenshot the user submitted.
+   Gating width + position to `@media (min-width: 768.01px)` lets
+   Streamlit's mobile-overlay behavior take over below the
+   breakpoint. Background + border stay ungated so the dark theme
+   applies regardless of viewport.
+   The 768.01 boundary aligns cleanly with Streamlit's own
+   `(max-width: 768px)` overlay rule (inclusive at 768) — see the
+   stHeader gating comment above. */
 [data-testid="stSidebar"],
 section[data-testid="stSidebar"] {
     background-color: #1C1917 !important;
     border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
-    width: 320px !important;
-    min-width: 320px !important;
-    max-width: 320px !important;
-    position: relative !important;
 }
-section[data-testid="stSidebar"] > div:first-child {
-    width: 320px !important;
+@media (min-width: 768.01px) {
+    [data-testid="stSidebar"],
+    section[data-testid="stSidebar"] {
+        width: 320px !important;
+        min-width: 320px !important;
+        max-width: 320px !important;
+        position: relative !important;
+    }
+    section[data-testid="stSidebar"] > div:first-child {
+        width: 320px !important;
+    }
 }
 section[data-testid="stSidebar"] [data-testid="stSidebarResizer"],
 section[data-testid="stSidebar"] div[role="separator"] {
@@ -1226,19 +1267,32 @@ hr {
 .app-header-stripe {
     height: 2px !important;
     background: #790A26 !important;
-    /* Same full-bleed-minus-sidebar geometry as the bar above:
-       explicit width = stMain (100vw - 320 px sidebar), shifted
-       left via calc margin so the left edge sits at the sidebar's
-       right edge. Stripe + bar share identical horizontal extent. */
-    width: calc(100vw - 320px) !important;
-    max-width: calc(100vw - 320px) !important;
     margin-top: 0 !important;
     margin-bottom: 20px !important;
-    margin-left: calc(50% - 50vw + 160px) !important;
-    margin-right: 0 !important;
     padding: 0 !important;
     border: none !important;
     position: relative !important;
+}
+/* Desktop full-bleed-minus-sidebar geometry: explicit width = stMain
+   (100vw - 320 px sidebar), shifted left via calc margin so the left
+   edge sits at the sidebar's right edge. On mobile (≤768 px) the
+   sidebar is overlay (not a 320 px column), so this calc geometry
+   becomes wrong — see mobile override below. */
+@media (min-width: 768.01px) {
+    .app-header-stripe {
+        width: calc(100vw - 320px) !important;
+        max-width: calc(100vw - 320px) !important;
+        margin-left: calc(50% - 50vw + 160px) !important;
+        margin-right: 0 !important;
+    }
+}
+@media (max-width: 768px) {
+    .app-header-stripe {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+    }
 }
 .metrics-divider {
     /* Subtle horizontal line between the KPI card row and the
@@ -1397,48 +1451,45 @@ def render_header(map_type: str, date_str: str) -> None:
             chrome across the top of the content area. Full-bleed via
             calc() margins so it spans past block-container's max-width
             1480 px to stMain's edges (sidebar right → viewport right). */
+      /* Banner — DESKTOP layout uses full-bleed-minus-sidebar calc()
+         geometry: width = stMain (100vw - 320px sidebar), margin-left
+         calc shift to pin the bar to the sidebar's right edge. On
+         MOBILE (≤768 px) the sidebar is an overlay (not a 320 px
+         column), so the calc() margins shift the banner LEFT 160 px
+         off-screen and the width is `100vw - 320px` which on a 390 px
+         phone = 70 px — producing the 1-char-wide vertical title
+         column in the user's screenshot. The geometry is gated to
+         desktop and a mobile counterpart resets margins to 0 and
+         width to 100%.
+         The unconditional properties (background, padding, position,
+         align-items, gap, border-radius, box-sizing) apply at every
+         viewport so the banner looks coherent on both. */
       {_banner_sel} {{
           position: relative !important;
           background: #1C1917 !important;
           padding: 20px 24px !important;
-          /* FULL-BLEED MINUS SIDEBAR — pin the bar to span exactly
-             from the sidebar's right edge to the viewport's right
-             edge, regardless of block-container's max-width: 1480 px,
-             any wrapper padding, or Streamlit's `overflow-x` quirks.
-
-             Three properties working together:
-               1. `width: calc(100vw - 320px)` — explicit width =
-                  viewport minus sidebar = stMain's full content
-                  area. No reliance on parent box sizing.
-               2. `margin-left: calc(50% - 50vw + 160px)` — shifts
-                  the bar's box from its natural position (parent
-                  content edge, somewhere inside block-container)
-                  back to the sidebar's right edge in viewport
-                  coords. Math: 50%=parent center, 50vw=viewport
-                  center, +160=half sidebar; negative when needed.
-               3. `margin-right: 0` — width controls the right edge
-                  now, so margin-right doesn't need to participate.
-
-             Parent containers are forced to `overflow-x: visible`
-             (in _GLOBAL_CSS below) so the bar's overflow isn't
-             clipped. The previous box-shadow trick was a no-op —
-             see commit history for diagnosis.
-
-             `margin-top: 0` because .block-container AND
-             .stMainBlockContainer both have padding-top: 0 (set
-             in _GLOBAL_CSS), AND [data-testid="stHeader"] is hidden
-             (display: none), so the bar naturally sits at the top
-             of stMain — no negative-margin offset needed. */
           margin-top: 0 !important;
           margin-bottom: 0 !important;
-          margin-left: calc(50% - 50vw + 160px) !important;
-          margin-right: 0 !important;
-          width: calc(100vw - 320px) !important;
-          max-width: calc(100vw - 320px) !important;
           align-items: center !important;
           gap: 16px !important;
           border-radius: 0 !important;
           box-sizing: border-box !important;
+      }}
+      @media (min-width: 768.01px) {{
+          {_banner_sel} {{
+              margin-left: calc(50% - 50vw + 160px) !important;
+              margin-right: 0 !important;
+              width: calc(100vw - 320px) !important;
+              max-width: calc(100vw - 320px) !important;
+          }}
+      }}
+      @media (max-width: 768px) {{
+          {_banner_sel} {{
+              margin-left: 0 !important;
+              margin-right: 0 !important;
+              width: 100% !important;
+              max-width: 100% !important;
+          }}
       }}
       /* Force every wrapper inside the banner back to static positioning
          so the bar's own positioning context governs absolute children. */
