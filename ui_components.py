@@ -1303,70 +1303,121 @@ hr {
 }
 
 /* ═══════════════════════════════════════════════════════
-   INLINE TOP-N selector (Analytics) — three native HTML <a>
-   tags embedded in the legend st.markdown. Selected option
-   gets `.top-n-opt.active`; others get `.top-n-opt`.
+   INLINE TOP-N selector (Analytics) — st.button-based
    ═══════════════════════════════════════════════════════
-   This replaces an earlier attempt that wrapped Streamlit's
-   `st.segmented_control` in `st.container(key=...)` and tried
-   to force inline layout via CSS overrides on `stButtonGroup`
-   + `stElementContainer`. That approach failed across four
-   iterations because Streamlit wraps every widget in an
-   `stElementContainer` that defaults to block layout —
-   forcing children to stack in the parent vertical block
-   regardless of how aggressively we toggled flex on the
-   parent. The fix here ABANDONS st.segmented_control entirely
-   and uses inline `<a>` elements (`<a>` IS an inline element
-   by HTML spec) inside ONE st.markdown div. No widget chrome
-   to fight, no flex specificity battle, single-line layout
-   architecturally guaranteed.
-   State lives in `st.query_params["top_n"]` (read at the top
-   of analytics' render() function) which is mirrored into
-   `st.session_state["analytics_top_n"]` for downstream
-   `build_*_pivot(top_n=...)` calls. URL persistence means
-   selection survives reruns AND Daily↔Monthly view switches
-   AND tab-bookmarking. */
+   The selector is rendered as three `st.button` widgets inside
+   a 5-column `st.columns([6, 0.7, 0.3, 0.3, 0.3])` row alongside
+   the legend prose + "Showing top" label. Clicking a button
+   triggers a normal Streamlit script rerun (preserves
+   session_state including app_authenticated) — NOT a browser
+   navigation, which the prior `<a href="?top_n=N">` approach
+   triggered and which wiped the auth session, bouncing users
+   back to the login screen on every click.
+
+   The currently-selected button is rendered with
+   `type="primary"` (others `type="secondary"`); the CSS below
+   strips all default button chrome from buttons whose wrapper
+   carries `st-key-top_n_btn_<n>` (only the Top-N buttons) and
+   applies cardinal-red + gold-underline styling to the
+   primary variant. Other buttons in the app are untouched
+   because the scope is the `[class*="st-key-top_n_btn_"]`
+   wrapper class — unique to these three widgets. */
+
+/* Legend prose container (col 0) — strip the boxed-legend look
+   so the prose reads as plain inline text on the same row. */
 .heatmap-legend-inline {
     background: transparent;
     border: none;
     padding: 0;
-    margin: 0 0 12px 0;
+    margin: 0;
     font-size: 12px;
     color: rgba(0, 0, 0, 0.6);
-    display: block;
     line-height: 1.5;
-    white-space: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;       /* Firefox */
 }
-.heatmap-legend-inline::-webkit-scrollbar {
-    display: none;               /* WebKit / Chromium */
-}
-.heatmap-legend-inline .top-n-opt {
-    color: rgba(0, 0, 0, 0.55);
-    text-decoration: none;
-    margin: 0 6px;
-    padding: 0 2px;
+
+/* "Showing top" inline label (col 1) — same muted gray as the
+   legend, sized to match. */
+.top-n-label {
     font-size: 12px;
-    cursor: pointer;
-    transition: color 0.1s ease;
+    color: rgba(0, 0, 0, 0.55);
+    line-height: 1.5;
+    text-align: right;
+    padding-right: 4px;
 }
-.heatmap-legend-inline .top-n-opt:first-of-type {
-    margin-left: 4px;
+
+/* Top-N button shells — strip default Streamlit chrome so the
+   buttons read as inline numbers. The wrapper class
+   `st-key-top_n_btn_<10|20|30>` is auto-generated from each
+   button's `key=` argument and is unique to these three
+   widgets, so the rules below cannot bleed into any other
+   button in the app.
+
+   Specificity: `html body [class*="st-key-top_n_btn_"] button`
+   is 0,1,3 — equal to the site-wide `html body .stButton >
+   button` maroon rule. With `!important` on both sides and
+   equal specificity, source order is the tiebreaker, and this
+   block is below the maroon rule in the same _GLOBAL_CSS
+   string — so this wins. */
+html body [class*="st-key-top_n_btn_"] button,
+html body [class*="st-key-top_n_btn_"] [data-testid="stBaseButton-secondary"],
+html body [class*="st-key-top_n_btn_"] [data-testid="stBaseButton-primary"] {
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+    outline: none !important;
+    padding: 0 4px !important;
+    margin: 0 !important;
+    min-height: 0 !important;
+    height: auto !important;
+    border-radius: 0 !important;
+    font-weight: 500 !important;
+    font-size: 13px !important;
+    line-height: 1.4 !important;
 }
-.heatmap-legend-inline .top-n-opt:last-of-type {
-    margin-right: 0;
+/* Inner <p>/<div> inside the button — Streamlit wraps the label
+   in a markdown container; that's where the actual visible text
+   lives. */
+html body [class*="st-key-top_n_btn_"] button p,
+html body [class*="st-key-top_n_btn_"] button div {
+    color: rgba(0, 0, 0, 0.55) !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    text-decoration: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    line-height: 1.4 !important;
+    text-shadow: none !important;
 }
-.heatmap-legend-inline .top-n-opt:hover {
-    color: rgba(0, 0, 0, 0.85);
+/* Hover state — slightly darker (unselected). */
+html body [class*="st-key-top_n_btn_"] button:hover p,
+html body [class*="st-key-top_n_btn_"] button:hover div {
+    color: rgba(0, 0, 0, 0.85) !important;
 }
-.heatmap-legend-inline .top-n-opt.active {
-    color: #790A26;
-    font-weight: 500;
-    text-decoration: underline;
-    text-decoration-color: #F1AB1F;
-    text-decoration-thickness: 2px;
-    text-underline-offset: 3px;
+
+/* Primary (selected) variant — cardinal red text with gold
+   underline. Matches both the button itself and the inner
+   <p>/<div> so the underline renders on the visible text. */
+html body [class*="st-key-top_n_btn_"] button[kind="primary"],
+html body [class*="st-key-top_n_btn_"] [data-testid="stBaseButton-primary"],
+html body [class*="st-key-top_n_btn_"] button[kind="primary"]:hover,
+html body [class*="st-key-top_n_btn_"] [data-testid="stBaseButton-primary"]:hover {
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+html body [class*="st-key-top_n_btn_"] button[kind="primary"] p,
+html body [class*="st-key-top_n_btn_"] button[kind="primary"] div,
+html body [class*="st-key-top_n_btn_"] [data-testid="stBaseButton-primary"] p,
+html body [class*="st-key-top_n_btn_"] [data-testid="stBaseButton-primary"] div {
+    color: #790A26 !important;
+    font-weight: 500 !important;
+    text-decoration: underline !important;
+    text-decoration-color: #F1AB1F !important;
+    text-decoration-thickness: 2px !important;
+    text-underline-offset: 3px !important;
 }
 /* ═══════════════════════════════════════════════════════
    APP HEADER STRIPE — 2 px cardinal band that sits directly
