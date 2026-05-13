@@ -82,7 +82,7 @@ st.set_page_config(
     page_title="Lab Productivity",
     page_icon=_FAVICON,
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",
 )
 
 # Pin browser-tab title to "Lab Productivity" with NO "· Streamlit"
