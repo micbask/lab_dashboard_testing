@@ -1419,6 +1419,61 @@ html body [class*="st-key-top_n_btn_"] [data-testid="stBaseButton-primary"] div 
     text-decoration-thickness: 2px !important;
     text-underline-offset: 3px !important;
 }
+
+/* ── Top-N legend BASELINE ALIGNMENT (Issue 2 fix) ──────────
+   "Showing top" and the 10/20/30 buttons appeared visually
+   misaligned because Streamlit's `st.columns(vertical_alignment=
+   "center")` centers each column's stElementContainer wrapper —
+   but the bare-markdown wrapper and the .stButton wrapper have
+   DIFFERENT intrinsic heights (the .stButton wrapper inherits
+   `min-height: ~2.25rem` from the maroon site-wide button rule,
+   which the prior `[class*="st-key-..."] button { min-height: 0 }`
+   override didn't reach — wrong nesting target).
+   Fix: lock all THREE column children (.heatmap-legend-inline,
+   .top-n-label, and the .stButton/element-container wrapping
+   each button) to identical 24-px content boxes that center their
+   own text. With wrappers of identical height, the parent flex's
+   `align-items: center` trivially aligns the text baselines.
+   font-size: 12px / line-height: 1 on all three so glyph metrics
+   match exactly. */
+.heatmap-legend-inline,
+.top-n-label {
+    display: flex !important;
+    align-items: center !important;
+    height: 24px !important;
+    font-size: 12px !important;
+    line-height: 1 !important;
+    margin: 0 !important;
+}
+.top-n-label {
+    justify-content: flex-end !important;
+}
+html body [class*="st-key-top_n_btn_"] .stButton,
+html body [class*="st-key-top_n_btn_"] [data-testid="stElementContainer"] {
+    min-height: 0 !important;
+    height: 24px !important;
+    display: flex !important;
+    align-items: center !important;
+}
+html body [class*="st-key-top_n_btn_"] button {
+    height: 24px !important;
+    min-height: 24px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 12px !important;
+    line-height: 1 !important;
+    padding: 0 4px !important;
+}
+html body [class*="st-key-top_n_btn_"] button p,
+html body [class*="st-key-top_n_btn_"] button div {
+    font-size: 12px !important;
+    line-height: 1 !important;
+    display: flex !important;
+    align-items: center !important;
+    height: 100%;
+}
+
 /* ═══════════════════════════════════════════════════════
    APP HEADER STRIPE — 2 px cardinal band that sits directly
    between the dark header bar and the light content area.
