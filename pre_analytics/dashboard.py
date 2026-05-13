@@ -364,7 +364,12 @@ def render(params: dict, ss) -> None:
             _fig = _pgo.Figure(data=_pgo.Heatmap(**_heatmap_kwargs))
             _fig.update_traces(hoverongaps=False)
 
-            _plot_h = max(180, len(_techs) * 45 + 100)
+            # Cell-row height multiplier matches analytics/dashboard.py:215
+            # (28 px/row, min 320 px) so cells render at the same visual
+            # density as Analytics. The previous 45 px/row + min 180 px
+            # made cells ≈1.6× larger than Analytics — same library +
+            # same Plotly config, just inflated row geometry.
+            _plot_h = max(320, len(_techs) * 28 + 100)
             _fig.update_layout(
                 height=_plot_h,
                 margin=dict(l=10, r=10, t=10, b=10),
@@ -375,8 +380,8 @@ def render(params: dict, ss) -> None:
                     tickfont=dict(size=10), side="bottom", fixedrange=True,
                 ),
                 yaxis=dict(
-                    tickfont=dict(size=11), autorange="reversed",
-                    fixedrange=True,
+                    tickfont=dict(size=10), autorange="reversed",
+                    fixedrange=True, automargin=True,
                 ),
                 hoverlabel=dict(
                     bgcolor="white",
@@ -422,7 +427,16 @@ def render(params: dict, ss) -> None:
 
         for _pa_shift in _PA_SHIFT_ORDER.get(pa_location, [None]):
             if pa_location != "HC3" and _pa_shift is not None:
-                st.subheader(f"{pa_location} — {_pa_shift}")
+                # Per-shift heading uses the shared .section-heading class
+                # (16 px / weight 500 / cardinal-stripe gold underline) for
+                # visual parity with the analytics dashboard's section
+                # headings. Previously used `st.subheader` which renders an
+                # <h3> at Streamlit's default ~28 px — dominated the page
+                # visually and looked inconsistent with the rest of the app.
+                st.markdown(
+                    f'<div class="section-heading">{pa_location} — {_pa_shift}</div>',
+                    unsafe_allow_html=True,
+                )
             _hkey = f"heatmap_{pa_location}_{_pa_shift or 'all'}"
             _render_pa_heatmap(
                 _draw_df, pa_location, _pa_shift, pa_view, _hkey,
