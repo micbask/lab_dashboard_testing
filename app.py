@@ -217,17 +217,26 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
               }
 
               /* Password input — wrapper-styled so the eye toggle sits
-                 INSIDE the bordered box. Mirrors the global pattern in
-                 ui_components.py: border + background on the wrapper
-                 [data-baseweb="input"]; <input> is transparent with
-                 right-padding for the eye; defensive catch-all strips
-                 chrome from the eye element regardless of its tag. */
+                 INSIDE the bordered box. Mirrors the corrected pattern
+                 in ui_components.py. Targets the REAL baseweb DOM:
+                 the MaskToggleButton is a sibling of <input> INSIDE
+                 [data-baseweb="base-input"], NOT a direct child of
+                 [data-baseweb="input"] (the earlier `> *:not(...)`
+                 defensive rule matched nothing). Three layers:
+                   (1) Root [data-baseweb="input"]: white bg + border.
+                   (2) InputContainer [data-baseweb="base-input"]:
+                       transparent so wrapper's white is the only
+                       visible surface; zero padding so edges fill.
+                   (3) <button> inside the wrapper: stripped chrome
+                       and minimal padding (0 8px 0 4px) so the eye
+                       SVG sits flush against the right border. */
               html body #login-overlay [data-testid="stForm"]
                   [data-testid="stTextInput"] [data-baseweb="input"] {
                   width: 100% !important;
                   background: #ffffff !important;
                   border: 1px solid rgba(0, 0, 0, 0.14) !important;
                   border-radius: 8px !important;
+                  padding: 0 !important;
                   box-sizing: border-box !important;
                   transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
               }
@@ -237,10 +246,18 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                   box-shadow: 0 0 0 2px rgba(121, 10, 38, 0.12) !important;
               }
               html body #login-overlay [data-testid="stForm"]
+                  [data-testid="stTextInput"]
+                  [data-baseweb="input"] [data-baseweb="base-input"] {
+                  background: transparent !important;
+                  background-color: transparent !important;
+                  padding: 0 !important;
+                  border: none !important;
+              }
+              html body #login-overlay [data-testid="stForm"]
                   [data-testid="stTextInput"] [data-baseweb="input"] input {
                   width: 100% !important;
                   padding: 11px 14px !important;
-                  padding-right: 36px !important;
+                  padding-right: 32px !important;
                   font-size: 14px !important;
                   font-weight: 400 !important;
                   background: transparent !important;
@@ -252,13 +269,20 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                   font-family: 'Inter', system-ui, sans-serif !important;
               }
               html body #login-overlay [data-testid="stForm"]
-                  [data-testid="stTextInput"] [data-baseweb="input"]
-                  > *:not([data-baseweb="base-input"]):not(input) {
+                  [data-testid="stTextInput"] [data-baseweb="input"] button {
                   background: transparent !important;
                   background-color: transparent !important;
                   border: none !important;
                   box-shadow: none !important;
                   outline: none !important;
+                  padding: 0 8px 0 4px !important;
+                  margin: 0 !important;
+              }
+              html body #login-overlay [data-testid="stForm"]
+                  [data-testid="stTextInput"] [data-baseweb="input"] button svg {
+                  margin: 0 !important;
+                  padding: 0 !important;
+                  display: block !important;
               }
               html body #login-overlay [data-testid="stForm"]
                   [data-testid="stTextInput"] {
