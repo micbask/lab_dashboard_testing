@@ -262,36 +262,23 @@ def _apply_in_lab_basis(filtered_df: pd.DataFrame) -> pd.DataFrame:
 def render_sidebar(ss) -> dict:
     """Render analytics sidebar widgets. Returns params dict for render()."""
     with st.sidebar:
-        # ── 1. Top widget: Testing Bench (Completed/In-Lab) / Facility (TAT) ──
-        # Time Basis lives in session_state so we can read its current
-        # value *before* rendering the top widget. That lets the top
-        # widget swap on the same rerun the user changes Time Basis.
+        # ── 1. Testing Bench (same selector for every Time Basis,
+        #      including TAT — TAT now reports turnaround for the
+        #      performing bench rather than the patient's facility).
         if "time_basis" not in st.session_state:
             st.session_state["time_basis"] = "Completed"
-        current_time_basis = st.session_state["time_basis"]
 
-        if current_time_basis == "TAT":
-            st.markdown(
-                '<div class="sidebar-section-label">FACILITY</div>',
-                unsafe_allow_html=True,
-            )
-            map_type = st.radio(
-                "Facility", ["Keck", "Norris"],
-                horizontal=True, label_visibility="collapsed",
-                key="analytics_tat_facility",
-            )
-        else:
-            st.markdown(
-                '<div class="sidebar-section-label">TESTING BENCH</div>',
-                unsafe_allow_html=True,
-            )
-            _bench_short = st.radio(
-                "Testing Bench",
-                list(BENCH_LABEL_TO_VALUE.keys()),
-                horizontal=True, label_visibility="collapsed",
-                key="analytics_bench_short",
-            )
-            map_type = BENCH_LABEL_TO_VALUE[_bench_short]
+        st.markdown(
+            '<div class="sidebar-section-label">TESTING BENCH</div>',
+            unsafe_allow_html=True,
+        )
+        _bench_short = st.radio(
+            "Testing Bench",
+            list(BENCH_LABEL_TO_VALUE.keys()),
+            horizontal=True, label_visibility="collapsed",
+            key="analytics_bench_short",
+        )
+        map_type = BENCH_LABEL_TO_VALUE[_bench_short]
 
         if ss.last_map_type != map_type:
             ss.pop("date_picker", None)
@@ -386,11 +373,14 @@ def render_sidebar(ss) -> dict:
         _is_forecast_date = False
 
         if _data_exists:
+            # TAT now uses the same bench-level resource filter as
+            # Completed / In-Lab. EXCLUDE_PROCS is still skipped on the
+            # TAT path because TAT spans every procedure performed at the
+            # bench, including the ones excluded from volume heatmaps.
+            _current_resources = tuple(sorted(ss.resource_assignments[map_type]))
             if time_basis == "TAT":
-                _current_resources = ()
                 _current_excludes = ()
             else:
-                _current_resources = tuple(sorted(ss.resource_assignments[map_type]))
                 _current_excludes = tuple(sorted(EXCLUDE_PROCS))
             _idx_hash = get_index_hash() if storage_is_configured() else ""
 
@@ -619,8 +609,10 @@ def render_sidebar(ss) -> dict:
         "hour_range": hour_range,
         "fc_data": _fc_data,
         "is_forecast_date": _is_forecast_date,
-        # TAT-only fields; populated when time_basis == "TAT".
-        "tat_facility": map_type if time_basis == "TAT" else None,
+        # TAT-only fields; populated when time_basis == "TAT". The
+        # `tat_bench` value is the full bench name ("Keck Core",
+        # "Norris Core", "Norris Specialty") — same source as map_type.
+        "tat_bench": map_type if time_basis == "TAT" else None,
         "tat_date_str": _tat_date_str,
     }
 
@@ -660,10 +652,16 @@ def _render_tat_view(params: dict) -> None:
     """Render the TAT analytics page: KPI strip, procedure filter,
     Plotly go.Table of priority-grouped statistics, and a horizontal
     grouped bar chart of mean TAT per procedure.
+
+    The TAT view is now scoped by Performing Service Resource (i.e.
+    Testing Bench) — the same scope used by the Completed and In-Lab
+    views — so the reported turnaround is for the bench that actually
+    ran the test rather than the patient's facility.
     """
-    _facility = params.get("tat_facility") or params["map_type"]
-    _date_str = params.get("tat_date_str") or ""
-    _view     = params["view_mode"]
+    _bench     = params.get("tat_bench") or params["map_type"]
+    _date_str  = params.get("tat_date_str") or ""
+    _view      = params["view_mode"]
+    _resources = tuple(params.get("current_resources") or ())
 
     if _view == "Daily" and _date_str:
         try:
@@ -679,13 +677,13 @@ def _render_tat_view(params: dict) -> None:
     else:
         _date_label = _date_str or "—"
 
-    render_header(_facility, f"{_date_label} · TAT")
+    render_header(_bench, f"{_date_label} · TAT")
 
     if not _date_str:
         st.warning("No date string supplied — cannot load TAT data.")
         return
 
-    tat_df = load_tat_data(_date_str, _view, _facility)
+    tat_df = load_tat_data(_date_str, _view, _resources)
 
     # ── KPI strip ──────────────────────────────────────────────────────────
     if tat_df.empty:
@@ -736,14 +734,14 @@ def _render_tat_view(params: dict) -> None:
 
     if tat_df.empty:
         st.warning(
-            f"No TAT data found for **{_facility}** on **{_date_label}**."
+            f"No TAT data found for **{_bench}** on **{_date_label}**."
         )
         return
 
     # ── Procedure filter ───────────────────────────────────────────────────
     _all_procs   = sorted(tat_df["Order Procedure"].dropna().unique().tolist())
     _default_top = get_top_procedures_by_volume(tat_df, n=5)
-    _filter_key  = f"tat_proc_filter_{_facility}_{_date_str}"
+    _filter_key  = f"tat_proc_filter_{_bench}_{_date_str}"
 
     st.markdown(
         '<div class="section-heading">Procedures</div>',
@@ -1580,6 +1578,12 @@ def render(params: dict, ss) -> None:
                     ),
                     unsafe_allow_html=True,
                 )
+
+            # Same metrics-divider treatment as the main monthly heatmap
+            # above — 32 px above + 32 px below (combined with the section
+            # heading's 12 px margin-top) — so the weekday KPI cards and
+            # the "weekday pattern" heading have proper breathing room.
+            st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
 
             st.markdown(
                 f'<div class="section-heading">'
