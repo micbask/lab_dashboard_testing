@@ -1303,136 +1303,70 @@ hr {
 }
 
 /* ═══════════════════════════════════════════════════════
-   INLINE TOP-N selector (Analytics) — strips the
-   st.segmented_control widget chrome so the option buttons
-   read as inline text fragments continuing the legend
-   sentence: "...Showing top  10 | 20 | 30".
-   Scope: [class*="st-key-heatmap_legend_with_topn"]
-   matches both daily (`...topn_daily`) and monthly
-   (`...topn_monthly`) container keys. Distinct keys are
-   required to avoid Streamlit DuplicateWidgetID.
-   Verified testids against streamlit/streamlit @ 1.57.0:
-     - data-testid="stButtonGroup"           — outer group
-     - data-testid="stBaseButton-segmented_control"
-                                              — inactive option
-     - data-testid="stBaseButton-segmented_controlActive"
-                                              — active option
-   ═══════════════════════════════════════════════════════ */
-
-/* Wrapper (.st-key-...) — outer container around legend + group. */
-[class*="st-key-heatmap_legend_with_topn"] {
-    margin-bottom: 12px !important;
-}
-/* Inner stVerticalBlock — flatten to a SINGLE inline-flex line.
-   flex-wrap: nowrap forces the legend + segmented_control to stay
-   on the same row. min-width: max-content defeats Chromium's
-   implicit min-width:auto on flex items so the inner content can
-   never collapse below its natural width. overflow-x: auto + hidden
-   scrollbar chrome is the graceful fallback at viewports too narrow
-   to fit the entire sentence on one line. */
-[class*="st-key-heatmap_legend_with_topn"] [data-testid="stVerticalBlock"] {
-    display: flex !important;
-    flex-direction: row !important;
-    flex-wrap: nowrap !important;
-    align-items: baseline !important;
-    gap: 4px !important;
-    min-width: max-content !important;
-    overflow-x: auto !important;
-    scrollbar-width: none;
-}
-[class*="st-key-heatmap_legend_with_topn"]
-    [data-testid="stVerticalBlock"]::-webkit-scrollbar {
-    display: none;
-}
-[class*="st-key-heatmap_legend_with_topn"] [data-testid="stElementContainer"] {
-    margin: 0 !important;
-    padding: 0 !important;
-    width: auto !important;
-    flex-shrink: 0 !important;  /* don't let the legend prose collapse */
-}
-
-/* Legend prose — strip the boxed look + force the sentence to stay
-   on one line. white-space: nowrap prevents mid-sentence wrapping. */
+   INLINE TOP-N selector (Analytics) — three native HTML <a>
+   tags embedded in the legend st.markdown. Selected option
+   gets `.top-n-opt.active`; others get `.top-n-opt`.
+   ═══════════════════════════════════════════════════════
+   This replaces an earlier attempt that wrapped Streamlit's
+   `st.segmented_control` in `st.container(key=...)` and tried
+   to force inline layout via CSS overrides on `stButtonGroup`
+   + `stElementContainer`. That approach failed across four
+   iterations because Streamlit wraps every widget in an
+   `stElementContainer` that defaults to block layout —
+   forcing children to stack in the parent vertical block
+   regardless of how aggressively we toggled flex on the
+   parent. The fix here ABANDONS st.segmented_control entirely
+   and uses inline `<a>` elements (`<a>` IS an inline element
+   by HTML spec) inside ONE st.markdown div. No widget chrome
+   to fight, no flex specificity battle, single-line layout
+   architecturally guaranteed.
+   State lives in `st.query_params["top_n"]` (read at the top
+   of analytics' render() function) which is mirrored into
+   `st.session_state["analytics_top_n"]` for downstream
+   `build_*_pivot(top_n=...)` calls. URL persistence means
+   selection survives reruns AND Daily↔Monthly view switches
+   AND tab-bookmarking. */
 .heatmap-legend-inline {
     background: transparent;
     border: none;
     padding: 0;
-    margin: 0;
+    margin: 0 0 12px 0;
     font-size: 12px;
     color: rgba(0, 0, 0, 0.6);
-    display: inline;
+    display: block;
     line-height: 1.5;
     white-space: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;       /* Firefox */
 }
-
-/* stButtonGroup outer container — strip chrome, sit inline with
-   the prose. flex-wrap: nowrap so the option buttons NEVER stack. */
-[class*="st-key-heatmap_legend_with_topn"] [data-testid="stButtonGroup"] {
-    background: transparent !important;
-    border: none !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    gap: 0 !important;
-    display: inline-flex !important;
-    align-items: baseline !important;
-    flex-wrap: nowrap !important;
+.heatmap-legend-inline::-webkit-scrollbar {
+    display: none;               /* WebKit / Chromium */
 }
-
-/* Inactive option buttons — strip chrome, match the legend's muted
-   gray. margin: 0 6px provides the visual SPACING between options
-   (replaces the previous "|" pipe separators which had a CSS Text
-   Decoration L3 propagation bug: the ::after pipe inherited the
-   active button's underline regardless of `text-decoration: none`
-   on the pseudo, producing a broken visual). padding: 0 2px keeps
-   the active-state underline tight to the digits only. */
-[class*="st-key-heatmap_legend_with_topn"]
-    [data-testid^="stBaseButton-segmented_control"] {
-    background: transparent !important;
-    background-color: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-    outline: none !important;
-    border-radius: 0 !important;
-    padding: 0 2px !important;
-    margin: 0 6px !important;
-    min-height: 0 !important;
-    height: auto !important;
-    font-size: 12px !important;
-    font-weight: 400 !important;
-    color: rgba(0, 0, 0, 0.55) !important;
-    text-decoration: none !important;
-    line-height: 1.4 !important;
+.heatmap-legend-inline .top-n-opt {
+    color: rgba(0, 0, 0, 0.55);
+    text-decoration: none;
+    margin: 0 6px;
+    padding: 0 2px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: color 0.1s ease;
 }
-/* Edge buttons — first gets a small offset from "Showing top";
-   last gets no trailing margin so the line ends cleanly. */
-[class*="st-key-heatmap_legend_with_topn"]
-    [data-testid^="stBaseButton-segmented_control"]:first-child {
-    margin-left: 4px !important;
+.heatmap-legend-inline .top-n-opt:first-of-type {
+    margin-left: 4px;
 }
-[class*="st-key-heatmap_legend_with_topn"]
-    [data-testid^="stBaseButton-segmented_control"]:last-child {
-    margin-right: 0 !important;
+.heatmap-legend-inline .top-n-opt:last-of-type {
+    margin-right: 0;
 }
-
-/* Active option — cardinal red text with a gold underline. With the
-   pipe ::after rule removed, the underline now spans ONLY the digits
-   (e.g. "20"), not the margin space on either side. Source-order
-   priority over the inactive rule above for shared properties. */
-[class*="st-key-heatmap_legend_with_topn"]
-    [data-testid="stBaseButton-segmented_controlActive"] {
-    color: #790A26 !important;
-    font-weight: 500 !important;
-    text-decoration: underline !important;
-    text-decoration-color: #F1AB1F !important;
-    text-decoration-thickness: 2px !important;
-    text-underline-offset: 3px !important;
-    background: transparent !important;
+.heatmap-legend-inline .top-n-opt:hover {
+    color: rgba(0, 0, 0, 0.85);
 }
-
-/* Defensive — hide the WidgetLabel even though label_visibility
-   is set to "collapsed" at the call site. */
-[class*="st-key-heatmap_legend_with_topn"] [data-testid="stWidgetLabel"] {
-    display: none !important;
+.heatmap-legend-inline .top-n-opt.active {
+    color: #790A26;
+    font-weight: 500;
+    text-decoration: underline;
+    text-decoration-color: #F1AB1F;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 3px;
 }
 /* ═══════════════════════════════════════════════════════
    APP HEADER STRIPE — 2 px cardinal band that sits directly
@@ -1506,35 +1440,6 @@ hr {
     width: 100% !important;
 }
 
-/* ═══════════════════════════════════════════════════════
-   EXPORT RAW DATA button — sits in the dark Data Management
-   expander (background #1C1917). Discrete look: same surface
-   as the sidebar with a thin light border. Scoped via the
-   `key="export_raw_data_btn"` → `.st-key-export_raw_data_btn`
-   wrapper class so it does not affect any other button on
-   the dashboard.
-   ═══════════════════════════════════════════════════════ */
-section[data-testid="stSidebar"] [class*="st-key-export_raw_data_btn"] button {
-    background: #1C1917 !important;
-    background-color: #1C1917 !important;
-    color: #ffffff !important;
-    border: 1px solid rgba(255, 255, 255, 0.12) !important;
-    border-radius: 6px !important;
-    font-weight: 500 !important;
-    width: 100% !important;
-    margin-bottom: 8px !important;
-}
-section[data-testid="stSidebar"] [class*="st-key-export_raw_data_btn"] button:hover {
-    background: #2A2723 !important;
-    background-color: #2A2723 !important;
-    border-color: rgba(255, 255, 255, 0.24) !important;
-}
-/* st.download_button renders a small download-arrow SVG; tint
-   it white so it's visible against the dark button surface. */
-section[data-testid="stSidebar"] [class*="st-key-export_raw_data_btn"] button svg {
-    fill: #ffffff !important;
-    stroke: #ffffff !important;
-}
 div[data-testid="stDataFrame"] {
     border-radius: 8px;
     overflow: hidden;
@@ -1870,46 +1775,35 @@ def status_chip(text: str, level: str = "ok") -> None:
 def render_data_management_sidebar(
     ss,
     *,
-    start_date: date,
-    end_date: date,
-    view_label: str,
     data_exists: bool,
     data_summary: dict,
     load_err: Exception | None,
 ) -> None:
     """Render the Data Management expander inside `with st.sidebar:`.
 
-    Shared between analytics and pre-analytics dashboards (Issue 2A).
-    Both dashboards call this function from their sidebar render path
+    Shared between analytics and pre-analytics dashboards. Both
+    dashboards call this function from their sidebar render path
     after computing `data_exists`, `data_summary`, `load_err` (which
     they already do via `storage.get_data_summary()` / similar). Only
     handles the `storage_is_configured()` path; the local-file-upload
     fallback stays inline in analytics/dashboard.py (pre-analytics
     doesn't use that fallback).
 
-    The function body order:
-      1. Status chip + storage caption + divider (existing).
-      2. EXPORT RAW DATA button — Issue 2B. NOT admin-gated; any
-         dashboard user can export the raw parquet for the current
-         date range. Renders only when `data_exists`.
-      3. Admin password gate (existing).
-      4. Admin-only body: refresh / refresh forecast / current
+    Body order:
+      1. Status chip + storage caption + divider.
+      2. Admin password gate.
+      3. Admin-only body: refresh / refresh forecast / current
          dataset summary / remove-a-date-range / file upload / reset.
 
-    The export uses `storage.load_filtered_data(start, end, (), (),
-    get_index_hash())` with EMPTY filter tuples — bypasses the
-    dashboard's resource + procedure filters (verified `SELECT *` in
-    storage.py). Wrapped in `st.spinner("Preparing export…")` per
-    user spec; first-render load can take 1-3 s on a fresh session.
-
-    The `view_label` arg ("daily" | "monthly") only controls the
-    filename suffix. TAT view passes "daily" or "monthly" the same
-    way the non-TAT path does — the raw parquet bytes are identical.
+    The previous Export Raw Data button was REMOVED because
+    `st.download_button` evaluates its `data=` argument at script-
+    define time (not click time). For a multi-month parquet dataset
+    this meant loading 4M+ rows + xlsx-serializing on every script
+    rerun, OOMing the Streamlit Cloud worker.
     """
     # Late imports — avoid module-level import of storage (which
     # initializes DuckDB connections etc.) for tests / dry-runs.
-    import io as _io
-    from storage import load_filtered_data, get_index_hash, count_rows_in_date_range
+    from storage import count_rows_in_date_range
 
     st.markdown("---")
     with st.expander("Data Management", expanded=not data_exists):
@@ -1927,41 +1821,6 @@ def render_data_management_sidebar(
             status_chip("No data yet — upload below", level="warn")
         st.caption("Storage: GitHub (partitioned)")
         st.markdown("---")
-
-        # ── EXPORT RAW DATA — NOT admin-gated (Issue 2B). ───────────
-        # First interactive control in the expander body, immediately
-        # above the admin-password input. Pulls ALL rows / ALL columns
-        # from the parquet for the current date range, ignoring every
-        # dashboard filter (testing bench / resource / procedure / hour).
-        # Excel hard sheet limit is 1,048,576 rows; not preemptively
-        # split (typical monthly export is well under 100k rows).
-        if data_exists:
-            if view_label == "daily":
-                _fname = f"raw_data_{start_date.isoformat()}.xlsx"
-            else:
-                _fname = f"raw_data_{start_date.strftime('%Y-%m')}.xlsx"
-
-            with st.spinner("Preparing export…"):
-                _df_raw = load_filtered_data(
-                    start_date=start_date,
-                    end_date=end_date,
-                    resources=(),         # NO dashboard filter applied
-                    exclude_procs=(),     # NO dashboard filter applied
-                    _index_hash=get_index_hash(),
-                )
-                _buf = _io.BytesIO()
-                with pd.ExcelWriter(_buf, engine="openpyxl") as _writer:
-                    _df_raw.to_excel(_writer, index=False, sheet_name="Raw Data")
-                _buf.seek(0)
-
-            st.download_button(
-                label="Export Raw Data",
-                data=_buf.getvalue(),
-                file_name=_fname,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="export_raw_data_btn",
-                width="stretch",
-            )
 
         # ── Admin password gate (existing behaviour). ───────────────
         admin_pw   = st.secrets.get("admin_password", None)
