@@ -1323,28 +1323,36 @@ hr {
 [class*="st-key-heatmap_legend_with_topn"] {
     margin-bottom: 12px !important;
 }
-/* Inner stVerticalBlock — flatten to a single inline-flex line.
-   This is THE selector that makes "Showing top 10|20|30" appear
-   as a continuation of the legend sentence rather than stacked
-   below it. Targeting the nested stVerticalBlock (not the outer
-   .st-key-... wrapper) because st.container's key class lives on
-   the outer wrapper but the children stack inside a NESTED
-   stVerticalBlock that has the default theme.spacing.lg gap. */
+/* Inner stVerticalBlock — flatten to a SINGLE inline-flex line.
+   flex-wrap: nowrap forces the legend + segmented_control to stay
+   on the same row. min-width: max-content defeats Chromium's
+   implicit min-width:auto on flex items so the inner content can
+   never collapse below its natural width. overflow-x: auto + hidden
+   scrollbar chrome is the graceful fallback at viewports too narrow
+   to fit the entire sentence on one line. */
 [class*="st-key-heatmap_legend_with_topn"] [data-testid="stVerticalBlock"] {
     display: flex !important;
     flex-direction: row !important;
-    flex-wrap: wrap !important;
+    flex-wrap: nowrap !important;
     align-items: baseline !important;
     gap: 4px !important;
+    min-width: max-content !important;
+    overflow-x: auto !important;
+    scrollbar-width: none;
+}
+[class*="st-key-heatmap_legend_with_topn"]
+    [data-testid="stVerticalBlock"]::-webkit-scrollbar {
+    display: none;
 }
 [class*="st-key-heatmap_legend_with_topn"] [data-testid="stElementContainer"] {
     margin: 0 !important;
     padding: 0 !important;
     width: auto !important;
+    flex-shrink: 0 !important;  /* don't let the legend prose collapse */
 }
 
-/* Legend prose — strip the boxed-look so it reads as plain inline
-   text continuing past the "Showing top" sentence-ender. */
+/* Legend prose — strip the boxed look + force the sentence to stay
+   on one line. white-space: nowrap prevents mid-sentence wrapping. */
 .heatmap-legend-inline {
     background: transparent;
     border: none;
@@ -1354,10 +1362,11 @@ hr {
     color: rgba(0, 0, 0, 0.6);
     display: inline;
     line-height: 1.5;
+    white-space: nowrap;
 }
 
-/* stButtonGroup outer container — strip its background/border/padding
-   so the option buttons sit directly inline with the prose. */
+/* stButtonGroup outer container — strip chrome, sit inline with
+   the prose. flex-wrap: nowrap so the option buttons NEVER stack. */
 [class*="st-key-heatmap_legend_with_topn"] [data-testid="stButtonGroup"] {
     background: transparent !important;
     border: none !important;
@@ -1366,9 +1375,16 @@ hr {
     gap: 0 !important;
     display: inline-flex !important;
     align-items: baseline !important;
+    flex-wrap: nowrap !important;
 }
 
-/* Inactive option buttons — strip chrome, match the legend's muted gray. */
+/* Inactive option buttons — strip chrome, match the legend's muted
+   gray. margin: 0 6px provides the visual SPACING between options
+   (replaces the previous "|" pipe separators which had a CSS Text
+   Decoration L3 propagation bug: the ::after pipe inherited the
+   active button's underline regardless of `text-decoration: none`
+   on the pseudo, producing a broken visual). padding: 0 2px keeps
+   the active-state underline tight to the digits only. */
 [class*="st-key-heatmap_legend_with_topn"]
     [data-testid^="stBaseButton-segmented_control"] {
     background: transparent !important;
@@ -1377,8 +1393,8 @@ hr {
     box-shadow: none !important;
     outline: none !important;
     border-radius: 0 !important;
-    padding: 0 6px !important;
-    margin: 0 !important;
+    padding: 0 2px !important;
+    margin: 0 6px !important;
     min-height: 0 !important;
     height: auto !important;
     font-size: 12px !important;
@@ -1387,12 +1403,21 @@ hr {
     text-decoration: none !important;
     line-height: 1.4 !important;
 }
+/* Edge buttons — first gets a small offset from "Showing top";
+   last gets no trailing margin so the line ends cleanly. */
+[class*="st-key-heatmap_legend_with_topn"]
+    [data-testid^="stBaseButton-segmented_control"]:first-child {
+    margin-left: 4px !important;
+}
+[class*="st-key-heatmap_legend_with_topn"]
+    [data-testid^="stBaseButton-segmented_control"]:last-child {
+    margin-right: 0 !important;
+}
 
-/* Active option — cardinal red text with a gold underline. The
-   data-testid for the active button is segmented_controlActive
-   (verified in streamlit 1.57.0 BaseButton.tsx + ButtonGroup.tsx).
-   This rule comes AFTER the inactive rule so it wins by source order
-   on properties they share (color, font-weight). */
+/* Active option — cardinal red text with a gold underline. With the
+   pipe ::after rule removed, the underline now spans ONLY the digits
+   (e.g. "20"), not the margin space on either side. Source-order
+   priority over the inactive rule above for shared properties. */
 [class*="st-key-heatmap_legend_with_topn"]
     [data-testid="stBaseButton-segmented_controlActive"] {
     color: #790A26 !important;
@@ -1402,20 +1427,6 @@ hr {
     text-decoration-thickness: 2px !important;
     text-underline-offset: 3px !important;
     background: transparent !important;
-}
-
-/* Pipe separators between options (skip last). Matches both
-   inactive AND active variants via the attribute-starts-with
-   selector. pointer-events: none so a click on the pipe doesn't
-   register as a click on the preceding button. */
-[class*="st-key-heatmap_legend_with_topn"]
-    [data-testid^="stBaseButton-segmented_control"]:not(:last-child)::after {
-    content: "|";
-    color: rgba(0, 0, 0, 0.30);
-    pointer-events: none;
-    padding-left: 6px;
-    font-weight: 400;
-    text-decoration: none;
 }
 
 /* Defensive — hide the WidgetLabel even though label_visibility
@@ -1493,6 +1504,36 @@ hr {
     border: none !important;
     border-radius: 6px !important;
     width: 100% !important;
+}
+
+/* ═══════════════════════════════════════════════════════
+   EXPORT RAW DATA button — sits in the dark Data Management
+   expander (background #1C1917). Discrete look: same surface
+   as the sidebar with a thin light border. Scoped via the
+   `key="export_raw_data_btn"` → `.st-key-export_raw_data_btn`
+   wrapper class so it does not affect any other button on
+   the dashboard.
+   ═══════════════════════════════════════════════════════ */
+section[data-testid="stSidebar"] [class*="st-key-export_raw_data_btn"] button {
+    background: #1C1917 !important;
+    background-color: #1C1917 !important;
+    color: #ffffff !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    border-radius: 6px !important;
+    font-weight: 500 !important;
+    width: 100% !important;
+    margin-bottom: 8px !important;
+}
+section[data-testid="stSidebar"] [class*="st-key-export_raw_data_btn"] button:hover {
+    background: #2A2723 !important;
+    background-color: #2A2723 !important;
+    border-color: rgba(255, 255, 255, 0.24) !important;
+}
+/* st.download_button renders a small download-arrow SVG; tint
+   it white so it's visible against the dark button surface. */
+section[data-testid="stSidebar"] [class*="st-key-export_raw_data_btn"] button svg {
+    fill: #ffffff !important;
+    stroke: #ffffff !important;
 }
 div[data-testid="stDataFrame"] {
     border-radius: 8px;
@@ -1820,6 +1861,224 @@ def status_chip(text: str, level: str = "ok") -> None:
         f'<div class="{cls.get(level, "status-chip")}">{text}</div>',
         unsafe_allow_html=True,
     )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# DATA MANAGEMENT SIDEBAR (shared between analytics + pre-analytics)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def render_data_management_sidebar(
+    ss,
+    *,
+    start_date: date,
+    end_date: date,
+    view_label: str,
+    data_exists: bool,
+    data_summary: dict,
+    load_err: Exception | None,
+) -> None:
+    """Render the Data Management expander inside `with st.sidebar:`.
+
+    Shared between analytics and pre-analytics dashboards (Issue 2A).
+    Both dashboards call this function from their sidebar render path
+    after computing `data_exists`, `data_summary`, `load_err` (which
+    they already do via `storage.get_data_summary()` / similar). Only
+    handles the `storage_is_configured()` path; the local-file-upload
+    fallback stays inline in analytics/dashboard.py (pre-analytics
+    doesn't use that fallback).
+
+    The function body order:
+      1. Status chip + storage caption + divider (existing).
+      2. EXPORT RAW DATA button — Issue 2B. NOT admin-gated; any
+         dashboard user can export the raw parquet for the current
+         date range. Renders only when `data_exists`.
+      3. Admin password gate (existing).
+      4. Admin-only body: refresh / refresh forecast / current
+         dataset summary / remove-a-date-range / file upload / reset.
+
+    The export uses `storage.load_filtered_data(start, end, (), (),
+    get_index_hash())` with EMPTY filter tuples — bypasses the
+    dashboard's resource + procedure filters (verified `SELECT *` in
+    storage.py). Wrapped in `st.spinner("Preparing export…")` per
+    user spec; first-render load can take 1-3 s on a fresh session.
+
+    The `view_label` arg ("daily" | "monthly") only controls the
+    filename suffix. TAT view passes "daily" or "monthly" the same
+    way the non-TAT path does — the raw parquet bytes are identical.
+    """
+    # Late imports — avoid module-level import of storage (which
+    # initializes DuckDB connections etc.) for tests / dry-runs.
+    import io as _io
+    from storage import load_filtered_data, get_index_hash, count_rows_in_date_range
+
+    st.markdown("---")
+    with st.expander("Data Management", expanded=not data_exists):
+        # Status chip — error / data summary / no-data warn.
+        if load_err is not None:
+            status_chip("Load error", level="error")
+            st.error(f"Could not read data index: {load_err}")
+        elif data_exists:
+            status_chip(
+                f"{data_summary['total_rows']:,} rows · "
+                f"{data_summary['min_date']} → {data_summary['max_date']}",
+                level="ok",
+            )
+        else:
+            status_chip("No data yet — upload below", level="warn")
+        st.caption("Storage: GitHub (partitioned)")
+        st.markdown("---")
+
+        # ── EXPORT RAW DATA — NOT admin-gated (Issue 2B). ───────────
+        # First interactive control in the expander body, immediately
+        # above the admin-password input. Pulls ALL rows / ALL columns
+        # from the parquet for the current date range, ignoring every
+        # dashboard filter (testing bench / resource / procedure / hour).
+        # Excel hard sheet limit is 1,048,576 rows; not preemptively
+        # split (typical monthly export is well under 100k rows).
+        if data_exists:
+            if view_label == "daily":
+                _fname = f"raw_data_{start_date.isoformat()}.xlsx"
+            else:
+                _fname = f"raw_data_{start_date.strftime('%Y-%m')}.xlsx"
+
+            with st.spinner("Preparing export…"):
+                _df_raw = load_filtered_data(
+                    start_date=start_date,
+                    end_date=end_date,
+                    resources=(),         # NO dashboard filter applied
+                    exclude_procs=(),     # NO dashboard filter applied
+                    _index_hash=get_index_hash(),
+                )
+                _buf = _io.BytesIO()
+                with pd.ExcelWriter(_buf, engine="openpyxl") as _writer:
+                    _df_raw.to_excel(_writer, index=False, sheet_name="Raw Data")
+                _buf.seek(0)
+
+            st.download_button(
+                label="Export Raw Data",
+                data=_buf.getvalue(),
+                file_name=_fname,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="export_raw_data_btn",
+                width="stretch",
+            )
+
+        # ── Admin password gate (existing behaviour). ───────────────
+        admin_pw   = st.secrets.get("admin_password", None)
+        authorized = True
+        if admin_pw:
+            if ss.get("admin_authorized", False):
+                authorized = True
+            else:
+                entered_pw = st.text_input(
+                    "Admin password", type="password", key="admin_pw"
+                )
+                if entered_pw == admin_pw:
+                    ss["admin_authorized"] = True
+                    st.rerun()
+                elif entered_pw:
+                    st.error("Incorrect password.")
+                authorized = ss.get("admin_authorized", False)
+
+        if not authorized:
+            return
+
+        # ── Admin-only body. ────────────────────────────────────────
+        st.markdown('<div class="refresh-btn">', unsafe_allow_html=True)
+        if st.button("↺  Refresh data", width="stretch", key="refresh_data_btn"):
+            st.cache_data.clear()
+            ss.pop("_partition_index", None)
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        if st.button(
+            "⟳  Refresh Forecast", width="stretch",
+            key="refresh_forecast_btn",
+            disabled=(not data_exists),
+        ):
+            ss["pending_forecast_retrain"] = True
+            st.rerun()
+
+        if data_exists:
+            st.markdown("**Current dataset**")
+            st.caption(
+                f"Rows: **{data_summary['total_rows']:,}**  \n"
+                f"Date range: **{data_summary['min_date']}** → "
+                f"**{data_summary['max_date']}**  \n"
+                f"Partitions: **{data_summary['partitions']}**"
+            )
+
+            with st.expander("Remove a date range", expanded=False):
+                st.caption(
+                    "Permanently deletes all rows in the chosen window "
+                    "from the master dataset.  This cannot be undone."
+                )
+                _dr_min = date.fromisoformat(data_summary["min_date"])
+                _dr_max = date.fromisoformat(data_summary["max_date"])
+                _dc1, _dc2 = st.columns(2)
+                with _dc1:
+                    del_start = st.date_input(
+                        "From", value=_dr_min,
+                        min_value=_dr_min, max_value=_dr_max,
+                        key="del_start",
+                    )
+                with _dc2:
+                    del_end = st.date_input(
+                        "To", value=_dr_min,
+                        min_value=_dr_min, max_value=_dr_max,
+                        key="del_end",
+                    )
+                if del_start > del_end:
+                    st.error("'From' date must be on or before 'To' date.")
+                else:
+                    _affected = count_rows_in_date_range(del_start, del_end)
+                    if _affected:
+                        st.warning(f"Will delete **{_affected:,}** rows.")
+
+                if st.button(
+                    "Delete this range", type="primary",
+                    width="stretch", key="btn_del_range",
+                    disabled=(del_start > del_end),
+                ):
+                    ss["pending_delete_range"] = {
+                        "start": del_start, "end": del_end
+                    }
+                    st.rerun()
+
+            st.markdown("---")
+
+        st.markdown("**Step 1 — Select file(s)**")
+        new_files = st.file_uploader(
+            "Upload files", type=["xlsx", "xls", "csv"],
+            key="admin_upload",
+            label_visibility="collapsed",
+            accept_multiple_files=True,
+        )
+        if new_files:
+            _staged = []
+            for _uf in new_files:
+                _staged.append({"bytes": _uf.read(), "name": _uf.name})
+            ss["staged_files"] = _staged
+            _names = ", ".join(f"**{s['name']}**" for s in _staged)
+            st.caption(f"Ready: {_names}  ({len(_staged)} file(s))")
+
+            st.markdown("**Step 2 — Add to master dataset**")
+            if st.button(
+                "Process & add to master",
+                type="primary", width="stretch",
+                key="btn_process_upload",
+            ):
+                ss["pending_upload"] = ss.pop("staged_files")
+                st.rerun()
+
+        st.markdown("---")
+        st.markdown("**Danger zone**")
+        if st.button(
+            "Reset — delete all data", width="stretch",
+            key="btn_reset_all",
+        ):
+            ss["pending_reset"] = True
+            st.rerun()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
