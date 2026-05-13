@@ -886,29 +886,53 @@ html body section[data-testid="stSidebar"] [data-testid="stRadio"]
 /* ═══════════════════════════════════════════════════════
    TEXT INPUTS — wrapper-styled so password eye sits INSIDE
    ═══════════════════════════════════════════════════════
-   Streamlit renders st.text_input(type="password") with baseweb's
-   Input component, whose DOM is roughly:
+   Streamlit renders st.text_input(type="password") through
+   baseweb's Input component. The CORRECT DOM (verified against
+   uber/baseweb v13's src/input/input.tsx + base-input.tsx):
+
      <div data-testid="stTextInput">
-       <label>...</label>
-       <div data-baseweb="input">                  ← the WRAPPER
-         <div data-baseweb="base-input">           ← inner pad container
+       <label data-testid="stWidgetLabel">...</label>
+       <div data-baseweb="input">                  ← Root WRAPPER
+                                                     (gets border + bg)
+         <div data-baseweb="base-input">           ← InputContainer
+                                                     (has its OWN
+                                                      default bg via
+                                                      getInputContainer
+                                                      Colors → mono200
+                                                      light-gray)
            <input type="password" />
+           <button>[eye SVG]</button>              ← StyledMaskTogglе
+                                                     Button — SIBLING
+                                                     of <input>, INSIDE
+                                                     base-input
          </div>
-         <button/span>[eye SVG]</button/span>      ← baseweb's MaskToggleButton
        </div>
      </div>
-   The visual goal: ONE border around the whole wrapper, eye toggle
-   appears INSIDE that single bordered box rather than as a separate
-   adjacent box. Achieved by:
-     (1) shifting border + background from <input> to the wrapper
-         [data-baseweb="input"];
-     (2) stripping chrome (border/bg/shadow) from any direct child of
-         the wrapper that is NOT the input or the inner base-input
-         padding container — a defensive selector that catches the
-         eye toggle regardless of whether baseweb renders it as a
-         <button>, <span role="button">, or <div tabindex="0">;
-     (3) adding right-padding to the <input> so typed text doesn't
-         overlap the eye glyph.
+
+   IMPORTANT — earlier comments in this file (and the now-removed
+   `[data-baseweb="input"] > *:not([data-baseweb="base-input"]):not(input)`
+   defensive rule) assumed the eye toggle was a DIRECT CHILD of
+   `data-baseweb="input"`. It is NOT — it's two levels deep, inside
+   base-input. The `> *:not(...)` direct-child rule therefore matched
+   nothing in the real DOM, and the eye button had been wearing
+   baseweb defaults (including ~12 px paddingRight via scale300) the
+   whole time. That paddingRight + the InputContainer's own light bg
+   produced the visible "white strip to the right of the eye icon"
+   the user reported.
+
+   The fix has three layers:
+     (1) Root wrapper [data-baseweb="input"]: white bg + 1px border
+         (unchanged from before — this is the single visible chrome).
+     (2) InputContainer [data-baseweb="base-input"]: transparent bg
+         (so the wrapper's white is the only visible surface) and
+         zero padding (so no edge strip).
+     (3) StyledMaskToggleButton (any <button> inside the wrapper):
+         transparent bg, no border/shadow/outline, minimal padding
+         (0 8px 0 4px) so the SVG sits close to the wrapper's right
+         border with just a small visual gap.
+   The <input>'s `padding-right` is trimmed from 36px → 32px since
+   the eye button no longer occupies 36px of horizontal real estate.
+
    Scoped to [data-testid="stTextInput"] only — date inputs use
    [data-testid="stDateInput"] and keep their own existing styling. */
 
@@ -918,6 +942,7 @@ html body section[data-testid="stSidebar"] [data-testid="stRadio"]
     background-color: #ffffff !important;
     border: 1px solid #cccccc !important;
     border-radius: 5px !important;
+    padding: 0 !important;
     transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
 }
 /* Focus ring on the wrapper when ANY descendant (input or eye) is focused. */
@@ -926,10 +951,20 @@ html body section[data-testid="stSidebar"] [data-testid="stRadio"]
     border-color: #6F1828 !important;
     box-shadow: 0 0 0 2px rgba(111,24,40,0.15) !important;
 }
-/* Strip the input element's own border/background — it now lives
-   inside the bordered wrapper. Right-padding leaves room for the
-   eye glyph; baseweb absolutely-positions or flex-places the eye at
-   the wrapper's right edge. */
+/* InputContainer (data-baseweb="base-input") — transparent so the
+   wrapper's white is the only visible surface, and zero padding
+   so the input + button fill the wrapper edge-to-edge. */
+[data-testid="stTextInput"] [data-baseweb="input"] [data-baseweb="base-input"],
+[data-testid="stSidebar"] [data-testid="stTextInput"]
+    [data-baseweb="input"] [data-baseweb="base-input"] {
+    background: transparent !important;
+    background-color: transparent !important;
+    padding: 0 !important;
+    border: none !important;
+}
+/* The <input> element — transparent bg, no border (chrome lives on
+   the wrapper). padding-right: 32px keeps the caret clear of the
+   eye toggle (now flush-right with only ~12px of right-side gap). */
 [data-testid="stTextInput"] [data-baseweb="input"] input,
 [data-testid="stSidebar"] [data-testid="stTextInput"] [data-baseweb="input"] input {
     background-color: transparent !important;
@@ -938,18 +973,31 @@ html body section[data-testid="stSidebar"] [data-testid="stRadio"]
     box-shadow: none !important;
     outline: none !important;
     font-size: 0.9rem !important;
-    padding-right: 36px !important;
+    padding-right: 32px !important;
 }
-/* Defensive catch-all for the eye toggle — strips border/background/
-   shadow from any direct child of the wrapper that is NOT the input
-   or the inner base-input padding container. Works regardless of
-   what element type baseweb uses (<button>, <span>, <div>). */
-[data-testid="stTextInput"] [data-baseweb="input"] > *:not([data-baseweb="base-input"]):not(input) {
+/* StyledMaskToggleButton (the eye-toggle <button>) and any other
+   <button> baseweb places inside the Root (e.g. clearable's clear
+   button if ever used). Strip ALL default chrome and trim the
+   default scale300 paddingRight so the SVG sits ~8px from the
+   wrapper's right border. */
+[data-testid="stTextInput"] [data-baseweb="input"] button,
+[data-testid="stSidebar"] [data-testid="stTextInput"]
+    [data-baseweb="input"] button {
     background: transparent !important;
     background-color: transparent !important;
     border: none !important;
     box-shadow: none !important;
     outline: none !important;
+    padding: 0 8px 0 4px !important;
+    margin: 0 !important;
+}
+/* The SVG inside the toggle button. */
+[data-testid="stTextInput"] [data-baseweb="input"] button svg,
+[data-testid="stSidebar"] [data-testid="stTextInput"]
+    [data-baseweb="input"] button svg {
+    margin: 0 !important;
+    padding: 0 !important;
+    display: block !important;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -1253,6 +1301,128 @@ hr {
     margin-top: 0;
     margin-bottom: 12px;  /* 12 px gap to the heatmap below */
 }
+
+/* ═══════════════════════════════════════════════════════
+   INLINE TOP-N selector (Analytics) — strips the
+   st.segmented_control widget chrome so the option buttons
+   read as inline text fragments continuing the legend
+   sentence: "...Showing top  10 | 20 | 30".
+   Scope: [class*="st-key-heatmap_legend_with_topn"]
+   matches both daily (`...topn_daily`) and monthly
+   (`...topn_monthly`) container keys. Distinct keys are
+   required to avoid Streamlit DuplicateWidgetID.
+   Verified testids against streamlit/streamlit @ 1.57.0:
+     - data-testid="stButtonGroup"           — outer group
+     - data-testid="stBaseButton-segmented_control"
+                                              — inactive option
+     - data-testid="stBaseButton-segmented_controlActive"
+                                              — active option
+   ═══════════════════════════════════════════════════════ */
+
+/* Wrapper (.st-key-...) — outer container around legend + group. */
+[class*="st-key-heatmap_legend_with_topn"] {
+    margin-bottom: 12px !important;
+}
+/* Inner stVerticalBlock — flatten to a single inline-flex line.
+   This is THE selector that makes "Showing top 10|20|30" appear
+   as a continuation of the legend sentence rather than stacked
+   below it. Targeting the nested stVerticalBlock (not the outer
+   .st-key-... wrapper) because st.container's key class lives on
+   the outer wrapper but the children stack inside a NESTED
+   stVerticalBlock that has the default theme.spacing.lg gap. */
+[class*="st-key-heatmap_legend_with_topn"] [data-testid="stVerticalBlock"] {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+    align-items: baseline !important;
+    gap: 4px !important;
+}
+[class*="st-key-heatmap_legend_with_topn"] [data-testid="stElementContainer"] {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: auto !important;
+}
+
+/* Legend prose — strip the boxed-look so it reads as plain inline
+   text continuing past the "Showing top" sentence-ender. */
+.heatmap-legend-inline {
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font-size: 12px;
+    color: rgba(0, 0, 0, 0.6);
+    display: inline;
+    line-height: 1.5;
+}
+
+/* stButtonGroup outer container — strip its background/border/padding
+   so the option buttons sit directly inline with the prose. */
+[class*="st-key-heatmap_legend_with_topn"] [data-testid="stButtonGroup"] {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    gap: 0 !important;
+    display: inline-flex !important;
+    align-items: baseline !important;
+}
+
+/* Inactive option buttons — strip chrome, match the legend's muted gray. */
+[class*="st-key-heatmap_legend_with_topn"]
+    [data-testid^="stBaseButton-segmented_control"] {
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    outline: none !important;
+    border-radius: 0 !important;
+    padding: 0 6px !important;
+    margin: 0 !important;
+    min-height: 0 !important;
+    height: auto !important;
+    font-size: 12px !important;
+    font-weight: 400 !important;
+    color: rgba(0, 0, 0, 0.55) !important;
+    text-decoration: none !important;
+    line-height: 1.4 !important;
+}
+
+/* Active option — cardinal red text with a gold underline. The
+   data-testid for the active button is segmented_controlActive
+   (verified in streamlit 1.57.0 BaseButton.tsx + ButtonGroup.tsx).
+   This rule comes AFTER the inactive rule so it wins by source order
+   on properties they share (color, font-weight). */
+[class*="st-key-heatmap_legend_with_topn"]
+    [data-testid="stBaseButton-segmented_controlActive"] {
+    color: #790A26 !important;
+    font-weight: 500 !important;
+    text-decoration: underline !important;
+    text-decoration-color: #F1AB1F !important;
+    text-decoration-thickness: 2px !important;
+    text-underline-offset: 3px !important;
+    background: transparent !important;
+}
+
+/* Pipe separators between options (skip last). Matches both
+   inactive AND active variants via the attribute-starts-with
+   selector. pointer-events: none so a click on the pipe doesn't
+   register as a click on the preceding button. */
+[class*="st-key-heatmap_legend_with_topn"]
+    [data-testid^="stBaseButton-segmented_control"]:not(:last-child)::after {
+    content: "|";
+    color: rgba(0, 0, 0, 0.30);
+    pointer-events: none;
+    padding-left: 6px;
+    font-weight: 400;
+    text-decoration: none;
+}
+
+/* Defensive — hide the WidgetLabel even though label_visibility
+   is set to "collapsed" at the call site. */
+[class*="st-key-heatmap_legend_with_topn"] [data-testid="stWidgetLabel"] {
+    display: none !important;
+}
 /* ═══════════════════════════════════════════════════════
    APP HEADER STRIPE — 2 px cardinal band that sits directly
    between the dark header bar and the light content area.
@@ -1268,7 +1438,7 @@ hr {
     height: 2px !important;
     background: #790A26 !important;
     margin-top: 0 !important;
-    margin-bottom: 20px !important;
+    margin-bottom: 40px !important;
     padding: 0 !important;
     border: none !important;
     position: relative !important;
