@@ -364,12 +364,21 @@ def render(params: dict, ss) -> None:
             _fig = _pgo.Figure(data=_pgo.Heatmap(**_heatmap_kwargs))
             _fig.update_traces(hoverongaps=False)
 
-            # Cell-row height multiplier matches analytics/dashboard.py:215
-            # (28 px/row, min 320 px) so cells render at the same visual
-            # density as Analytics. The previous 45 px/row + min 180 px
-            # made cells ≈1.6× larger than Analytics — same library +
-            # same Plotly config, just inflated row geometry.
-            _plot_h = max(320, len(_techs) * 28 + 100)
+            # Row-driven chart height — total height adapts to row count
+            # so that EACH CELL is uniformly 28 px tall regardless of the
+            # per-shift row count. The previous formula `max(320, n*28+100)`
+            # had a 320-px FLOOR that defeated this: for small shifts
+            # (Keck Early AM = 2 rows, Norris NS = 3 rows) the floor padded
+            # the chart up to 320 px, leaving Plotly to distribute that
+            # height across only 2-3 rows → ~73-110 px per cell. That made
+            # cells in small-shift sections appear ~3-4× larger than cells
+            # in larger sections (Keck AM ~8 rows, Norris AM many rows)
+            # where the formula already exceeded 320. Dropping the floor
+            # gives uniform 28 px/row across every shift. Matches the cell
+            # density of analytics/dashboard.py:215 (Analytics row counts
+            # are always ≥10 so the floor there never binds; this commit
+            # leaves the Analytics formula as-is).
+            _plot_h = len(_techs) * 28 + 100
             _fig.update_layout(
                 height=_plot_h,
                 margin=dict(l=10, r=10, t=10, b=10),
