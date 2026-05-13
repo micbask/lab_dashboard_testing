@@ -184,22 +184,8 @@ def render_sidebar(ss) -> dict:
 
         # ── Data Management (Issue 2A — shared with analytics). ─────
         # Same shared function as analytics; mirrors the dark expander
-        # with Export Raw Data button (Issue 2B) + admin-gated body.
-        # Compute the date range to pass for the export button:
-        # Daily → single date, Monthly → first-to-last of month.
+        # with the admin-gated body.
         if storage_is_configured():
-            if pa_view == "Daily":
-                _pa_dm_start = pa_date
-                _pa_dm_end   = pa_date
-                _pa_dm_label = "daily"
-            else:  # Monthly
-                _pa_dm_start = date(_pa_sel_year, _pa_sel_month, 1)
-                _pa_dm_end   = date(
-                    _pa_sel_year, _pa_sel_month,
-                    _cal.monthrange(_pa_sel_year, _pa_sel_month)[1],
-                )
-                _pa_dm_label = "monthly"
-
             _pa_dm_data_summary: dict = {"total_rows": 0, "partitions": 0}
             _pa_dm_load_err: Exception | None = None
             try:
@@ -209,9 +195,6 @@ def render_sidebar(ss) -> dict:
 
             render_data_management_sidebar(
                 ss,
-                start_date=_pa_dm_start,
-                end_date=_pa_dm_end,
-                view_label=_pa_dm_label,
                 data_exists=_pa_data_ok,
                 data_summary=_pa_dm_data_summary,
                 load_err=_pa_dm_load_err,
