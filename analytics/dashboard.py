@@ -1324,45 +1324,51 @@ def render(params: dict, ss) -> None:
         st.markdown(f'<div class="section-heading">{_heading_label}</div>',
                     unsafe_allow_html=True)
 
-        # Legend on the left + "Show top N" segmented control on the right.
-        # The control is rendered AFTER render_header() and inside each
-        # view branch (Daily + Monthly) using the shared session_state key
-        # `analytics_top_n` so the selection persists across view switches.
-        # The control is OUTSIDE the TAT early-return so it never appears
-        # on the TAT view. Default = 10 procedures. Pre-Analytics has its
-        # own structurally-separate render path; this widget never appears
-        # there.
-        _leg_col, _topn_col = st.columns([0.7, 0.3], vertical_alignment="center")
-        with _leg_col:
+        # Legend + INLINE Top-N selector. The legend prose ends with
+        # "Showing top" and the segmented_control (rendered immediately
+        # below, with label hidden + all chrome stripped via CSS in
+        # ui_components.py) appears to continue the sentence as "10 |
+        # 20 | 30". Both are wrapped in `st.container(key=...)` so the
+        # CSS scope (`.st-key-heatmap_legend_with_topn_daily ...`) can
+        # apply `display: flex` to the NESTED stVerticalBlock to put
+        # them on the same line. Distinct daily/monthly keys avoid
+        # Streamlit's DuplicateWidgetID for the container, while the
+        # segmented_control itself uses a shared `analytics_top_n` key
+        # so the selection persists across Daily↔Monthly view switches.
+        # Default = 10 procedures. Outside the TAT early-return; never
+        # appears on TAT. Pre-Analytics has its own render path; the
+        # widget never appears there.
+        with st.container(key="heatmap_legend_with_topn_daily"):
             if _is_forecast_view:
                 st.markdown(
-                    f'<div class="heatmap-legend">'
+                    f'<div class="heatmap-legend-inline">'
                     f'Colour scale: &nbsp;'
                     f'<strong style="color:{_ORANGES_LOW};">■</strong> low &nbsp;→&nbsp; '
                     f'<strong style="color:{_ORANGES_HIGH};">■</strong> high '
                     f'(hour columns only). &nbsp;'
                     f'<strong>Total</strong> column = forecasted full-day sum per procedure.'
+                    f'&nbsp;&nbsp;Showing top'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
             else:
                 st.markdown(
-                    f'<div class="heatmap-legend">'
+                    f'<div class="heatmap-legend-inline">'
                     f'Colour scale: &nbsp;'
                     f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
                     f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
                     f'(hour columns only). &nbsp;'
                     f'<strong>Total</strong> column = full-day sum per procedure.'
+                    f'&nbsp;&nbsp;Showing top'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
-        with _topn_col:
             st.segmented_control(
                 "Show top",
-                options=[5, 10, 15, 20, 25, 30, 35, 40],
+                options=[10, 20, 30],
                 default=10,
                 key="analytics_top_n",
-                label_visibility="visible",
+                label_visibility="collapsed",
             )
 
         # ── Plotly heatmap (replaces the prior st.dataframe HTML table) ─────
@@ -1634,29 +1640,31 @@ def render(params: dict, ss) -> None:
             f'</div>',
             unsafe_allow_html=True,
         )
-        # Legend on the left + "Show top N" segmented control on the right.
-        # Same widget instance as the Daily view (shared key=analytics_top_n)
-        # so the selection persists when switching between Daily and Monthly.
-        _m_leg_col, _m_topn_col = st.columns([0.7, 0.3], vertical_alignment="center")
-        with _m_leg_col:
+        # Legend + INLINE Top-N selector (Monthly view). Same widget
+        # instance as Daily (shared key="analytics_top_n") so the
+        # selection persists across view switches. Container key is
+        # distinct (`heatmap_legend_with_topn_monthly`) to avoid
+        # DuplicateWidgetID — both keys are matched by the same CSS
+        # block in ui_components.py via `[class*="st-key-heatmap_legend_with_topn"]`.
+        with st.container(key="heatmap_legend_with_topn_monthly"):
             st.markdown(
-                f'<div class="heatmap-legend">'
+                f'<div class="heatmap-legend-inline">'
                 f'Values = avg completed volume per day in hour. '
                 f'Colour scale: &nbsp;'
                 f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
                 f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
                 f'(hour columns only). &nbsp;'
                 f'<strong>Total</strong> column = avg daily total per procedure.'
+                f'&nbsp;&nbsp;Showing top'
                 f'</div>',
                 unsafe_allow_html=True,
             )
-        with _m_topn_col:
             st.segmented_control(
                 "Show top",
-                options=[5, 10, 15, 20, 25, 30, 35, 40],
+                options=[10, 20, 30],
                 default=10,
                 key="analytics_top_n",
-                label_visibility="visible",
+                label_visibility="collapsed",
             )
 
         _m_fig = _build_analytics_heatmap(
