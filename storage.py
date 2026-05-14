@@ -198,6 +198,13 @@ def _parquet_bytes_to_df(raw: bytes) -> pd.DataFrame:
             df["inlab_hour"] = pd.to_datetime(
                 df["Date/Time - In Lab"], errors="coerce"
             ).dt.hour.astype("Int64")
+    if "Date/Time - Drawn" in df.columns:
+        if "drawn_date" not in df.columns:
+            df["drawn_date"] = pd.to_datetime(df["Date/Time - Drawn"], errors="coerce").dt.date
+        if "drawn_hour" not in df.columns:
+            df["drawn_hour"] = pd.to_datetime(
+                df["Date/Time - Drawn"], errors="coerce"
+            ).dt.hour.astype("Int64")
     return df
 
 
@@ -255,6 +262,29 @@ def _migrate_legacy_parquet() -> bool:
     return True
 
 
+def _drawn_date_stats(group: pd.DataFrame) -> dict:
+    """Return {"min_drawn_date": str, "max_drawn_date": str} for the
+    Date/Time - Drawn values in `group`, or {} if no usable values.
+
+    Used by partition writers so the partition index can record the
+    range of draw dates each partition holds. pre-analytics queries
+    (which scope by `Date/Time - Drawn`) use these stats to prune
+    partitions; partitions written before this change won't have the
+    keys, so `load_filtered_data(date_basis="drawn")` conservatively
+    includes them.
+    """
+    if "Date/Time - Drawn" not in group.columns:
+        return {}
+    drawn = pd.to_datetime(group["Date/Time - Drawn"], errors="coerce").dt.date
+    drawn = drawn.dropna()
+    if drawn.empty:
+        return {}
+    return {
+        "min_drawn_date": str(drawn.min()),
+        "max_drawn_date": str(drawn.max()),
+    }
+
+
 def _write_partitions_from_df(df: pd.DataFrame) -> dict:
     """Split a DataFrame by month and write each partition to GitHub."""
     if "complete_date" not in df.columns:
@@ -283,6 +313,7 @@ def _write_partitions_from_df(df: pd.DataFrame) -> dict:
             "min_date": str(group["complete_date"].min()),
             "max_date": str(group["complete_date"].max()),
             "size_bytes": len(pq_bytes),
+            **_drawn_date_stats(group),
         }
 
     if "_partition_key" in df.columns:
@@ -329,6 +360,7 @@ def load_filtered_data(
     resources: tuple[str, ...],
     exclude_procs: tuple[str, ...],
     _index_hash: str = "",
+    date_basis: str = "complete",
 ) -> pd.DataFrame:
     """Load ONLY the data needed for a specific view.
 
@@ -339,16 +371,47 @@ def load_filtered_data(
 
     Parameters are tuples (not lists) so Streamlit can hash them for caching.
     _index_hash busts cache when partitions change.
+
+    `date_basis` selects which timestamp column governs both the
+    partition-pruning step and the SQL WHERE clause:
+      - "complete" (default) -> uses `complete_date` (Date/Time - Complete).
+        This is what Analytics + forecast queries use.
+      - "drawn" -> uses `drawn_date` (Date/Time - Drawn). Pre-Analytics
+        queries pass this so the heatmap groups draws by the day they were
+        actually performed, not the day the test completed.
+
+    For drawn-date queries, partition pruning uses the
+    `min_drawn_date`/`max_drawn_date` stats stored in the partition index
+    by `_write_partitions_from_df` / `ingest_new_data` /
+    `delete_date_range`. Partitions written before that tracking was
+    added lack those keys; we conservatively include them so no draws
+    are dropped during the gradual rollout (next time they're rewritten,
+    the stats get backfilled).
     """
     index = _load_partition_index()
     if not index:
         return pd.DataFrame()
 
-    # Find partitions overlapping the date range
+    # Choose which (min, max) per-partition stats to prune against.
+    # Partitions are physically keyed by complete_date month so
+    # date_basis="drawn" still walks the same partition set; we just
+    # use a different stats pair to decide which to actually read.
+    if date_basis == "drawn":
+        min_key, max_key = "min_drawn_date", "max_drawn_date"
+        date_col = "drawn_date"
+    else:
+        min_key, max_key = "min_date", "max_date"
+        date_col = "complete_date"
+
     needed_keys = []
     for key, meta in index.items():
-        p_min = date.fromisoformat(meta["min_date"])
-        p_max = date.fromisoformat(meta["max_date"])
+        # Partitions without drawn-date stats (written before that
+        # tracking was added) are included conservatively.
+        if min_key not in meta or max_key not in meta:
+            needed_keys.append(key)
+            continue
+        p_min = date.fromisoformat(meta[min_key])
+        p_max = date.fromisoformat(meta[max_key])
         if p_min <= end_date and p_max >= start_date:
             needed_keys.append(key)
 
@@ -374,25 +437,27 @@ def load_filtered_data(
     resource_list = list(resources)
     exclude_list = list(exclude_procs)
 
+    date_where = f'"{date_col}" >= ? AND "{date_col}" <= ?'
+
     if resource_list and exclude_list:
         result = con.execute(
-            "SELECT * FROM data "
-            "WHERE complete_date >= ? AND complete_date <= ? "
+            f"SELECT * FROM data "
+            f"WHERE {date_where} "
             "AND \"Performing Service Resource\" IN (SELECT UNNEST(?)) "
             "AND \"Order Procedure\" NOT IN (SELECT UNNEST(?))",
             [start_date, end_date, resource_list, exclude_list],
         ).fetchdf()
     elif resource_list:
         result = con.execute(
-            "SELECT * FROM data "
-            "WHERE complete_date >= ? AND complete_date <= ? "
+            f"SELECT * FROM data "
+            f"WHERE {date_where} "
             "AND \"Performing Service Resource\" IN (SELECT UNNEST(?))",
             [start_date, end_date, resource_list],
         ).fetchdf()
     else:
         result = con.execute(
-            "SELECT * FROM data "
-            "WHERE complete_date >= ? AND complete_date <= ?",
+            f"SELECT * FROM data "
+            f"WHERE {date_where}",
             [start_date, end_date],
         ).fetchdf()
 
@@ -413,6 +478,14 @@ def load_filtered_data(
     if "inlab_hour" in result.columns and not result.empty:
         result["inlab_hour"] = pd.to_numeric(
             result["inlab_hour"], errors="coerce"
+        ).astype("Int64")
+    if "drawn_date" in result.columns and not result.empty:
+        result["drawn_date"] = pd.to_datetime(
+            result["drawn_date"], errors="coerce"
+        ).dt.date
+    if "drawn_hour" in result.columns and not result.empty:
+        result["drawn_hour"] = pd.to_numeric(
+            result["drawn_hour"], errors="coerce"
         ).astype("Int64")
     return result
 
@@ -513,6 +586,7 @@ def ingest_new_data(new_df: pd.DataFrame) -> dict:
             "min_date": str(merged["complete_date"].min()),
             "max_date": str(merged["complete_date"].max()),
             "size_bytes": len(pq_bytes),
+            **_drawn_date_stats(merged),
         }
 
     if "_partition_key" in new_df.columns:
@@ -577,6 +651,7 @@ def delete_date_range(start: date, end: date) -> dict:
                 "min_date": str(df["complete_date"].min()),
                 "max_date": str(df["complete_date"].max()),
                 "size_bytes": len(pq_bytes),
+                **_drawn_date_stats(df),
             }
 
     _save_partition_index(index)
