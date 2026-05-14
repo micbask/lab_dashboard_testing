@@ -77,7 +77,15 @@ def load_phlebotomy_staff() -> dict:
 
 
 @st.cache_data(show_spinner=False, ttl=300)
-def load_draw_data(date_str: str, view: str) -> tuple:
+def load_draw_data(date_str: str, view: str, index_hash: str = "") -> tuple:
+    """Load phlebotomy draws scoped to the selected day/month.
+
+    `index_hash` is a plain (non-underscored) kwarg so Streamlit's
+    @cache_data hashes it into the cache key. Callers MUST pass
+    `get_index_hash()` so this function's cache busts when partitions
+    change (otherwise users would see stale draw data for up to 5 min
+    after an ingest from a separate session).
+    """
     import calendar as _cal2
 
     _empty = pd.DataFrame(
@@ -92,7 +100,6 @@ def load_draw_data(date_str: str, view: str) -> tuple:
         _start = date(_yr, _mo, 1)
         _end   = date(_yr, _mo, _cal2.monthrange(_yr, _mo)[1])
 
-    _idx_hash = get_index_hash() if storage_is_configured() else ""
     # Pre-Analytics scopes by Date/Time - Drawn (the column the heatmap's
     # hour axis is built from). Analytics uses the default
     # date_basis="complete" so its behavior is unchanged.
@@ -101,7 +108,7 @@ def load_draw_data(date_str: str, view: str) -> tuple:
         end_date=_end,
         resources=(),
         exclude_procs=(),
-        _index_hash=_idx_hash,
+        index_hash=index_hash,
         date_basis="drawn",
     )
 
@@ -160,7 +167,20 @@ def build_draw_pivot(
     location: str,
     shift: "str | None",
     view: str,
+    year: "int | None" = None,
+    month: "int | None" = None,
 ) -> pd.DataFrame:
+    """Pivot draws into a (tech × hour-of-day) matrix.
+
+    For Monthly view the values are average draws per CALENDAR day in
+    the selected month. Passing `year` + `month` lets the function use
+    the right denominator (days-in-month); without them, it falls back
+    to days-with-data, which OVERSTATES per-day averages in sparse
+    months (a 30-day month with 22 active days would inflate the avg
+    by ~36%).
+    """
+    import calendar as _calbdp
+
     _staff = load_phlebotomy_staff()
 
     _all_techs = sorted(
@@ -193,7 +213,13 @@ def build_draw_pivot(
     _pivot.index = _all_techs
 
     if view == "Monthly":
-        _n_days = max(int(_sub["draw_datetime"].dt.date.nunique()), 1)
-        _pivot = _pivot / _n_days
+        if year is not None and month is not None:
+            _n_days = _calbdp.monthrange(year, month)[1]
+        else:
+            # Fallback: days-with-data. Slightly overstates per-day
+            # averages in sparse months; only hit when caller didn't
+            # pass year/month (legacy / non-Monthly paths).
+            _n_days = max(int(_sub["draw_datetime"].dt.date.nunique()), 1)
+        _pivot = _pivot / max(_n_days, 1)
 
     return _pivot
