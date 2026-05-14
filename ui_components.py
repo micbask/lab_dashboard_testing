@@ -1390,8 +1390,11 @@ hr {
    block is below the maroon rule in the same _GLOBAL_CSS
    string — so this wins. */
 html body [class*="st-key-top_n_btn_"] button,
+html body [class*="st-key-top_n_btn_"] button:hover,
 html body [class*="st-key-top_n_btn_"] [data-testid="stBaseButton-secondary"],
-html body [class*="st-key-top_n_btn_"] [data-testid="stBaseButton-primary"] {
+html body [class*="st-key-top_n_btn_"] [data-testid="stBaseButton-secondary"]:hover,
+html body [class*="st-key-top_n_btn_"] [data-testid="stBaseButton-primary"],
+html body [class*="st-key-top_n_btn_"] [data-testid="stBaseButton-primary"]:hover {
     background: transparent !important;
     background-color: transparent !important;
     border: none !important;
@@ -1421,10 +1424,12 @@ html body [class*="st-key-top_n_btn_"] button div {
     line-height: 1.4 !important;
     text-shadow: none !important;
 }
-/* Hover state — slightly darker (unselected). */
+/* Hover state (unselected) — text color flips to cardinal, background
+   stays transparent. The :hover variants in the chrome-stripping rule
+   above keep the maroon site-wide hover background from leaking in. */
 html body [class*="st-key-top_n_btn_"] button:hover p,
 html body [class*="st-key-top_n_btn_"] button:hover div {
-    color: rgba(0, 0, 0, 0.85) !important;
+    color: #790A26 !important;
 }
 
 /* Primary (selected) variant — cardinal red text with gold
