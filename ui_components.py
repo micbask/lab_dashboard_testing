@@ -562,25 +562,6 @@ html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] svg {
     color: rgba(255, 255, 255, 0.7) !important;
 }
 
-/* Hide the text caret on sidebar selectbox triggers. baseweb renders
-   the displayed value inside an <input> element (the same <input>
-   that powers type-to-search filtering when the dropdown is open).
-   On initial render of conditionally-rendered branches — e.g. the
-   Month picker first appearing when the View toggle flips from
-   Daily → Monthly — that input receives focus and the blinking
-   caret becomes visible, making the trigger look editable when it
-   should read as a static label until the user clicks the chevron.
-   `caret-color: transparent` only hides the visible blinking caret;
-   the input still accepts focus and keystrokes, so click-and-type
-   filtering continues to work — users just don't see the caret
-   blink. Scoped to stSelectbox (NOT stMultiSelect) so the TAT view's
-   procedure-filter multiselect keeps its visible search caret —
-   multiselect users typing through long procedure lists genuinely
-   need to see where their text is going. */
-html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] input {
-    caret-color: transparent !important;
-}
-
 /* NOTE: previously we styled [data-baseweb="popover"] / [role="listbox"]
    / [role="option"] to dark-theme the selectbox dropdown panel. That
    global rule also matched the month / year selectors inside the
