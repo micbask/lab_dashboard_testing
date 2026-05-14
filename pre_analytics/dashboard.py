@@ -7,7 +7,7 @@ import streamlit as st
 from config import HOUR_LABELS
 from storage import (
     storage_is_configured, get_data_summary, ensure_partitioned_storage,
-    reset_all_data, delete_date_range,
+    reset_all_data, delete_date_range, get_index_hash,
 )
 from ui_components import (
     metric_card, render_header, render_data_management_sidebar,
@@ -90,10 +90,14 @@ def render_sidebar(ss) -> dict:
                 unsafe_allow_html=True,
             )
 
-            # Resolve / clamp the default date from any prior session
-            # state value (may be a date or an ISO string) into a date
-            # inside the valid [min, max] window.
-            _pa_date_default = ss.get("pa_date", _pa_max_d)
+            # Daily and Monthly views keep separate session-state keys
+            # (`pa_date_daily` vs `pa_date_monthly`) so toggling between
+            # them preserves each view's selection independently. A
+            # prior version used a single `pa_date` key shared by both
+            # views; switching Monthly -> Daily would then read back
+            # "YYYY-MM" and date.fromisoformat() would raise
+            # ValueError, silently resetting Daily to today.
+            _pa_date_default = ss.get("pa_date_daily", _pa_max_d)
             if isinstance(_pa_date_default, str):
                 try:
                     _pa_date_default = date.fromisoformat(_pa_date_default)
@@ -119,7 +123,7 @@ def render_sidebar(ss) -> dict:
                 label_visibility="collapsed",
                 key="pa_date_picker",
             )
-            ss["pa_date"] = pa_date
+            ss["pa_date_daily"] = pa_date
             _pa_date_str = pa_date.isoformat()
             # Date-range metadata caption — sits BELOW the date input,
             # styled small + muted via .sidebar-meta-caption.
@@ -156,7 +160,7 @@ def render_sidebar(ss) -> dict:
             _pa_sel_idx = _pa_month_labels.index(_pa_sel_label)
             _pa_sel_year, _pa_sel_month = _pa_avail_months[_pa_sel_idx]
             _pa_date_str = f"{_pa_sel_year:04d}-{_pa_sel_month:02d}"
-            ss["pa_date"] = _pa_date_str
+            ss["pa_date_monthly"] = _pa_date_str
 
         # ── Hour Range  (display-only filter; mirrors analytics styling) ──
         st.markdown(
@@ -218,16 +222,22 @@ def render(params: dict, ss) -> None:
         import plotly.graph_objects as _pgo
         import numpy as _np
 
+        # Parse the active date string into year/month so the
+        # Monthly-view per-day averaging in build_draw_pivot uses
+        # calendar days rather than days-with-data.
         if len(_pa_ds) == 7:
             import calendar as _calpa
             _pa_yr, _pa_mo = int(_pa_ds[:4]), int(_pa_ds[5:7])
             _pa_date_label = f"{_calpa.month_name[_pa_mo]} {_pa_yr}"
         else:
+            _pa_d = pd.Timestamp(_pa_ds).to_pydatetime().date()
+            _pa_yr, _pa_mo = _pa_d.year, _pa_d.month
             _pa_date_label = pd.Timestamp(_pa_ds).strftime("%B %d, %Y")
 
         render_header(pa_location, _pa_date_label)
 
-        _draw_df, _draw_debug = load_draw_data(_pa_ds, pa_view)
+        _idx_hash = get_index_hash() if storage_is_configured() else ""
+        _draw_df, _draw_debug = load_draw_data(_pa_ds, pa_view, index_hash=_idx_hash)
 
         # KPI cards reflect the selected hour range: filter both by
         # location and by hour ∈ [pa_h_start, pa_h_end].
@@ -277,7 +287,12 @@ def render(params: dict, ss) -> None:
             _hours_subset = list(range(_h_start, _h_end + 1))
 
             # Build the full 0..23 pivot then slice to the selected hours.
-            _pivot = build_draw_pivot(draw_df, location, shift, view)
+            # Pass year/month so Monthly view divides by calendar days
+            # (not days-with-data, which would overstate sparse months).
+            _pivot = build_draw_pivot(
+                draw_df, location, shift, view,
+                year=_pa_yr, month=_pa_mo,
+            )
             _pivot = _pivot[_hours_subset]
             _techs = _pivot.index.tolist()
             _x     = [HOUR_LABELS[h] for h in _hours_subset]
