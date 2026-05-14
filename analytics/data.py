@@ -7,6 +7,123 @@ import streamlit as st
 from config import HOUR_LABELS
 from storage import load_filtered_data, get_index_hash, storage_is_configured
 from forecasting import load_forecasts, build_forecast_pivot
+from analytics.filters import EXCLUDED_PROCEDURES
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# SHARED DATA LAYER
+# ════════════════════════════════════════════════════════════════════════════
+#
+# `load_analytics_data` is the single data-scope entry point for all three
+# Analytics views (Completed, In-Lab, TAT). It applies the bench-level
+# resource filter and the EXCLUDED_PROCEDURES exclusion uniformly, then
+# performs view-specific post-processing:
+#
+#   • time_basis="Completed": no extra transform.
+#   • time_basis="In-Lab":   drops rows with no In-Lab timestamp and
+#                            re-maps complete_date / hour to the in-lab
+#                            columns so downstream pivots key off in-lab
+#                            time.
+#   • time_basis="TAT":      parses Complete + Drawn timestamps, drops
+#                            rows with null Drawn, computes TAT_minutes.
+#
+# Volume aggregation (build_pivot, build_monthly_pivot, build_weekday_pivot)
+# and TAT tabulation (build_tat_table) live downstream — they receive
+# already-scoped DataFrames from this loader.
+#
+# Pre-refactor history: Completed/In-Lab called load_filtered_data
+# directly with an inline in-lab remap in analytics/dashboard.py; TAT
+# went through a separate `load_tat_data` that bypassed
+# EXCLUDED_PROCEDURES (passing exclude_procs=()) and applied an
+# accession-prefix facility filter. Both paths converged here so that
+# TAT reports turnaround on the same procedure universe Completed and
+# In-Lab show.
+
+@st.cache_data(show_spinner=False, ttl=300)
+def load_analytics_data(
+    *,
+    start_date: date,
+    end_date: date,
+    resources: tuple,
+    time_basis: str,
+    _index_hash: str = "",
+) -> pd.DataFrame:
+    """Load Analytics data scoped to a Testing Bench + date range, with
+    per-view post-processing applied.
+
+    Parameters
+    ----------
+    start_date, end_date : date
+        Inclusive date range. Partition-pruned at the parquet layer.
+    resources : tuple[str, ...]
+        Performing Service Resource values for the selected Testing
+        Bench (e.g. `DEFAULT_RESOURCES["Keck Core"]`).
+    time_basis : {"Completed", "In-Lab", "TAT"}
+        Drives the post-load transform; see module docstring.
+    _index_hash : str
+        Partition-index hash for cache invalidation. Passed through
+        from `storage.get_index_hash()`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Scoped DataFrame ready for downstream metric functions.
+        Returns an empty DataFrame when storage is not configured
+        or when the date/bench combination has no matching rows.
+    """
+    if not storage_is_configured():
+        return pd.DataFrame()
+
+    df = load_filtered_data(
+        start_date=start_date,
+        end_date=end_date,
+        resources=resources,
+        exclude_procs=tuple(sorted(EXCLUDED_PROCEDURES)),
+        _index_hash=_index_hash,
+    )
+    if df.empty:
+        return df
+
+    if time_basis == "In-Lab":
+        # Drop rows without an In-Lab timestamp, then re-map the
+        # complete_date / hour helper columns to the in-lab values.
+        # Downstream pivots key off complete_date / hour, so this
+        # effectively reports volume by in-lab time.
+        if (
+            "inlab_date" not in df.columns
+            or not df["inlab_date"].notna().any()
+        ):
+            # Preserve a non-empty DataFrame skeleton with the same
+            # columns so callers can distinguish "no In-Lab data" from
+            # "no rows at all" by checking df.empty after filtering.
+            return df.iloc[0:0]
+        df = df[df["inlab_date"].notna()].copy()
+        df["complete_date"] = df["inlab_date"]
+        df["hour"] = df["inlab_hour"].astype(int)
+        return df
+
+    if time_basis == "TAT":
+        # TAT needs the Drawn timestamp to compute (Complete - Drawn).
+        if "Date/Time - Drawn" not in df.columns:
+            return df.iloc[0:0]
+        df = df.copy()
+        df["Date/Time - Complete"] = pd.to_datetime(
+            df["Date/Time - Complete"], errors="coerce"
+        )
+        df["Date/Time - Drawn"] = pd.to_datetime(
+            df["Date/Time - Drawn"], errors="coerce"
+        )
+        df = df[df["Date/Time - Drawn"].notna()]
+        if df.empty:
+            return df
+        tat_seconds = (
+            df["Date/Time - Complete"] - df["Date/Time - Drawn"]
+        ).dt.total_seconds()
+        df = df.assign(TAT_minutes=(tat_seconds / 60.0).astype(float))
+        return df
+
+    # time_basis == "Completed" — return as-is.
+    return df
 
 
 def build_pivot(
@@ -156,7 +273,7 @@ def load_monthly_avg_for_comparison(
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# TAT DATA LAYER (Phase 1)
+# TAT METRIC LAYER
 # ════════════════════════════════════════════════════════════════════════════
 
 # Stat columns reported per priority group inside `build_tat_table`'s
@@ -165,98 +282,26 @@ def load_monthly_avg_for_comparison(
 _TAT_STAT_COLS = ["n", "Mean", "% <1h"]
 
 
-@st.cache_data(show_spinner=False, ttl=300)
-def load_tat_data(
-    date_str: str, view: str, resources: tuple,
-) -> pd.DataFrame:
-    """Load Turn-Around-Time data scoped to a Testing Bench for the given
-    date range from the partitioned Parquet store.
+def compute_tat_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """Project a `load_analytics_data(time_basis='TAT')` result down to
+    the 3-column shape that `build_tat_table` and the TAT KPI strip
+    consume.
 
-    Parameters
-    ----------
-    date_str : str
-        'YYYY-MM-DD' for `view='Daily'`; 'YYYY-MM' for `view='Monthly'`.
-    view : str
-        'Daily' or 'Monthly'.
-    resources : tuple[str, ...]
-        Performing Service Resource values for the selected Testing Bench
-        (e.g. the entries of `DEFAULT_RESOURCES["Keck Core"]`). The same
-        resource list used by the Completed and In-Lab views, so TAT
-        reports turnaround time for the bench that actually performed the
-        test rather than the patient's facility.
+    The shared loader has already:
+      • applied bench + EXCLUDED_PROCEDURES + date scoping,
+      • parsed Complete + Drawn timestamps,
+      • dropped rows with null Drawn,
+      • computed TAT_minutes = (Complete - Drawn) / 60.
 
-    Returns a DataFrame with columns
-        ['Order Procedure', 'Collection Priority', 'TAT_minutes']
-    where TAT_minutes is a float computed as
-    (Date/Time - Complete) − (Date/Time - Drawn) in minutes. Rows whose
-    Date/Time - Drawn is null are dropped before the computation.
-
-    Uses the same partition-aware loader (`load_filtered_data`) as the
-    Completed / In-Lab heatmaps — the bench-level resource filter is
-    applied inside the DuckDB query, so this function no longer needs a
-    post-load accession-prefix filter.
+    This function selects the three columns the TAT view needs.
+    Returns an empty 3-column DataFrame when the input is missing
+    the expected columns (e.g. storage not configured) so callers
+    can safely `.empty`-check the result.
     """
-    if view == "Daily":
-        target_date = date.fromisoformat(date_str)
-        start_d, end_d = target_date, target_date
-    else:  # Monthly — date_str is 'YYYY-MM'
-        year  = int(date_str[:4])
-        month = int(date_str[5:7])
-        start_d = date(year, month, 1)
-        end_d   = date(year, month, _cal.monthrange(year, month)[1])
-
-    _empty = pd.DataFrame(
-        columns=["Order Procedure", "Collection Priority", "TAT_minutes"]
-    )
-
-    if not storage_is_configured():
-        return _empty
-
-    df = load_filtered_data(
-        start_date=start_d,
-        end_date=end_d,
-        resources=resources,    # bench-level Performing Service Resource filter
-        exclude_procs=(),       # skip exclusion filter — TAT spans all procs
-        _index_hash=get_index_hash(),
-    )
-    if df.empty:
-        return _empty
-
-    needed = [
-        "Order Procedure", "Collection Priority",
-        "Date/Time - Complete", "Date/Time - Drawn",
-    ]
-    keep = [c for c in needed if c in df.columns]
-    if "Date/Time - Complete" not in keep or "Date/Time - Drawn" not in keep:
-        return _empty
-    df = df[keep].copy()
-
-    df["Date/Time - Complete"] = pd.to_datetime(
-        df["Date/Time - Complete"], errors="coerce"
-    )
-    df["Date/Time - Drawn"] = pd.to_datetime(
-        df["Date/Time - Drawn"], errors="coerce"
-    )
-
-    # Re-apply the date-range filter on the actual Complete timestamp (the
-    # partition loader filtered on the derived `complete_date` which is
-    # day-precision; this guard is cheap and keeps the contract precise).
-    cmpl = df["Date/Time - Complete"]
-    df = df[
-        cmpl.notna()
-        & (cmpl.dt.date >= start_d)
-        & (cmpl.dt.date <= end_d)
-    ]
-
-    df = df[df["Date/Time - Drawn"].notna()]
-    if df.empty:
-        return _empty
-
-    tat_seconds = (
-        df["Date/Time - Complete"] - df["Date/Time - Drawn"]
-    ).dt.total_seconds()
-    df = df.assign(TAT_minutes=(tat_seconds / 60.0).astype(float))
-
+    if df is None or df.empty or "TAT_minutes" not in df.columns:
+        return pd.DataFrame(
+            columns=["Order Procedure", "Collection Priority", "TAT_minutes"]
+        )
     return (
         df[["Order Procedure", "Collection Priority", "TAT_minutes"]]
         .reset_index(drop=True)
