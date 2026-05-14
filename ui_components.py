@@ -562,6 +562,57 @@ html body section[data-testid="stSidebar"] [data-testid="stSelectbox"] svg {
     color: rgba(255, 255, 255, 0.7) !important;
 }
 
+/* Sidebar Month picker — collapse the type-to-search <input> while
+   the dropdown is CLOSED.
+
+   baseui 12.2.0 (the Streamlit-pinned version) renders an
+   `<AutosizeInput role="combobox">` real <input> inside every
+   single-select trigger because `searchable` defaults to true
+   (source: uber/baseweb v12.2.0 src/select/default-props.ts:42
+   and src/select/select-component.tsx:510-535).
+   The input sits inside the StyledValueContainer as a sibling
+   AFTER the SingleValue <div> that holds the displayed value
+   text. With an empty value, baseui's AutosizeInput sizer
+   measures the content to scrollWidth + 2 px ≈ 2-7 px wide
+   (src/select/autosize-input.tsx:23,43). On the dark sidebar
+   fill (#262626), that thin 2-7 px column reads as a stray
+   vertical line right after the displayed value — and any
+   focus-related paint (caret, focus outline, browser-native
+   focus ring) lands inside that tiny visible box.
+
+   The previous attempt set `caret-color: transparent` on the
+   input but that only hides the blinking caret — it leaves
+   the input's box itself paintable. Streamlit also sets
+   `caretColor: theme.colors.bodyText` via overrides on the
+   same input (Selectbox.tsx:223-231), which competes for the
+   cascade. Setting the input's WIDTH to 0 while the dropdown
+   is closed eliminates the visible box entirely.
+
+   The scope is restricted to `input[aria-expanded="false"]` so
+   when the user clicks the chevron and the dropdown opens
+   (aria-expanded flips to "true" on the input — verified per
+   select-component.tsx render path), this rule no longer
+   applies and the input is full-width for type-to-search.
+   The displayed value remains visible because it lives in a
+   separate SingleValue <div>, NOT inside this <input>.
+
+   Sidebar-scoped only — the TAT procedure-filter multiselect
+   uses `stMultiSelect` (different testid) and main-panel
+   selectboxes (admin date-range editor lives in `stDateInput`,
+   not `stSelectbox`) are unaffected. */
+html body section[data-testid="stSidebar"] [data-testid="stSelectbox"]
+    input[aria-expanded="false"] {
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    outline: 0 !important;
+    box-shadow: none !important;
+    opacity: 0 !important;
+    caret-color: transparent !important;
+}
+
 /* NOTE: previously we styled [data-baseweb="popover"] / [role="listbox"]
    / [role="option"] to dark-theme the selectbox dropdown panel. That
    global rule also matched the month / year selectors inside the
