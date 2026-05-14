@@ -90,6 +90,16 @@ def render_sidebar(ss) -> dict:
                 unsafe_allow_html=True,
             )
 
+            # Prev/Next clicks (below) write `_pa_pending_date` and
+            # rerun; pull that into the date_input's session-state
+            # key BEFORE the widget renders so st.date_input picks it
+            # up as the new value on this render. Mirrors the
+            # analytics-dashboard pattern.
+            if "_pa_pending_date" in ss:
+                _pending = ss.pop("_pa_pending_date")
+                if _pa_min_d <= _pending <= _pa_max_d:
+                    ss["pa_date_picker"] = _pending
+
             # Daily and Monthly views keep separate session-state keys
             # (`pa_date_daily` vs `pa_date_monthly`) so toggling between
             # them preserves each view's selection independently. A
@@ -134,6 +144,35 @@ def render_sidebar(ss) -> dict:
                     f'</div>',
                     unsafe_allow_html=True,
                 )
+
+            # Prev / Next nav buttons. Equal-width columns with a
+            # medium (16 px) gap so the two buttons are visually
+            # balanced regardless of sidebar width. Each button
+            # stretches to fill its column. Keys are intentionally
+            # shared with the analytics dashboard so the CSS in
+            # ui_components.py (outline-only look, hover lift,
+            # disabled state, .st-key-nav_*_date) applies here too —
+            # both dashboards never render simultaneously, so the
+            # shared keys do not produce DuplicateWidgetID errors.
+            _pa_nc1, _pa_nc2 = st.columns([1, 1], gap="medium")
+            with _pa_nc1:
+                if st.button(
+                    "←",
+                    disabled=(pa_date <= _pa_min_d),
+                    key="nav_prev_date",
+                    width="stretch",
+                ):
+                    ss["_pa_pending_date"] = pa_date - timedelta(days=1)
+                    st.rerun()
+            with _pa_nc2:
+                if st.button(
+                    "→",
+                    disabled=(pa_date >= _pa_max_d),
+                    key="nav_next_date",
+                    width="stretch",
+                ):
+                    ss["_pa_pending_date"] = pa_date + timedelta(days=1)
+                    st.rerun()
         else:
             st.markdown(
                 '<div class="sidebar-section-label">MONTH</div>',
