@@ -57,11 +57,7 @@ ALL_RESOURCES:     list[str]       = sorted({r for v in SITE_CONFIG.values() for
 MAP_TYPES:         list[str]       = list(SITE_CONFIG.keys())
 
 # Procedures always excluded from Analytics data scope (Completed,
-# In-Lab, TAT). Canonical definition lives in analytics/filters.py;
-# this name is kept as a backwards-compat alias for `forecasting.py`,
-# which still imports `EXCLUDE_PROCS` from this module. New code
-# should import `EXCLUDED_PROCEDURES` from analytics/filters.py.
-from analytics.filters import EXCLUDED_PROCEDURES as EXCLUDE_PROCS
+# In-Lab, TAT) live in analytics/filters.py as EXCLUDED_PROCEDURES.
 
 # Resource remaps: {(order_procedure, old_resource): new_resource}
 RESOURCE_REMAPS: dict[tuple[str, str], str] = {
