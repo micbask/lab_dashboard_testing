@@ -344,7 +344,7 @@ def load_filtered_data(
     end_date: date,
     resources: tuple[str, ...],
     exclude_procs: tuple[str, ...],
-    _index_hash: str = "",
+    index_hash: str = "",
     date_basis: str = "complete",
 ) -> pd.DataFrame:
     """Load ONLY the data needed for a specific view.
@@ -355,7 +355,15 @@ def load_filtered_data(
       3. Returns a small DataFrame (typically 5K-20K rows, not 5M)
 
     Parameters are tuples (not lists) so Streamlit can hash them for caching.
-    _index_hash busts cache when partitions change.
+    `index_hash` MUST be passed as a regular kwarg (no leading underscore)
+    so Streamlit's @cache_data includes it in the cache key — when
+    partitions change the partition index hash changes and this
+    function's cache is correctly invalidated. (A previous version used
+    `_index_hash`; Streamlit skips any arg whose name starts with `_`,
+    so the cache was only ever busting via TTL or explicit clear, which
+    silently served stale data across sessions.)
+    `_` is consumed by st.cache_data only when the arg should be skipped
+    (e.g. an unhashable DataFrame).
 
     `date_basis` selects which timestamp column governs both the
     partition-pruning step and the SQL WHERE clause:
@@ -476,7 +484,7 @@ def load_filtered_data(
 def load_partition_for_month(
     year: int,
     month: int,
-    _index_hash: str = "",
+    index_hash: str = "",
 ) -> pd.DataFrame:
     """Load a single month's partition — no filtering applied.
 

@@ -46,7 +46,7 @@ def load_analytics_data(
     end_date: date,
     resources: tuple,
     time_basis: str,
-    _index_hash: str = "",
+    index_hash: str = "",
 ) -> pd.DataFrame:
     """Load Analytics data scoped to a Testing Bench + date range, with
     per-view post-processing applied.
@@ -60,9 +60,12 @@ def load_analytics_data(
         Bench (e.g. `DEFAULT_RESOURCES["Keck Core"]`).
     time_basis : {"Completed", "In-Lab", "TAT"}
         Drives the post-load transform; see module docstring.
-    _index_hash : str
+    index_hash : str
         Partition-index hash for cache invalidation. Passed through
-        from `storage.get_index_hash()`.
+        from `storage.get_index_hash()`. Plain name (no leading `_`) so
+        Streamlit's @cache_data hashes it into the cache key —
+        underscored names are skipped, which was silently serving stale
+        cross-session data in a prior version.
 
     Returns
     -------
@@ -79,7 +82,7 @@ def load_analytics_data(
         end_date=end_date,
         resources=resources,
         exclude_procs=tuple(sorted(EXCLUDED_PROCEDURES)),
-        _index_hash=_index_hash,
+        index_hash=index_hash,
     )
     if df.empty:
         return df
@@ -103,7 +106,10 @@ def load_analytics_data(
         return df
 
     if time_basis == "TAT":
-        # TAT needs the Drawn timestamp to compute (Complete - Drawn).
+        # TAT needs both timestamps to compute (Complete - Drawn). Filter
+        # rows missing either, and discard negative TATs (data-entry
+        # errors where Drawn > Complete) - those would otherwise drag
+        # the mean down and incorrectly count as "% under 1 hour".
         if "Date/Time - Drawn" not in df.columns:
             return df.iloc[0:0]
         df = df.copy()
@@ -113,13 +119,17 @@ def load_analytics_data(
         df["Date/Time - Drawn"] = pd.to_datetime(
             df["Date/Time - Drawn"], errors="coerce"
         )
-        df = df[df["Date/Time - Drawn"].notna()]
+        df = df[
+            df["Date/Time - Drawn"].notna()
+            & df["Date/Time - Complete"].notna()
+        ]
         if df.empty:
             return df
         tat_seconds = (
             df["Date/Time - Complete"] - df["Date/Time - Drawn"]
         ).dt.total_seconds()
         df = df.assign(TAT_minutes=(tat_seconds / 60.0).astype(float))
+        df = df[df["TAT_minutes"] >= 0]
         return df
 
     # time_basis == "Completed" — return as-is.
