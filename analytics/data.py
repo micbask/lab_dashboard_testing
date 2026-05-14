@@ -130,8 +130,14 @@ def build_pivot(
     df: pd.DataFrame,
     selected_date: date,
     hour_range: tuple,
-    top_n: int = 30,
+    top_n: int | None = 30,
 ) -> tuple:
+    """Build the Daily heatmap pivot.
+
+    `top_n` controls how many top-volume procedures the heatmap shows:
+        • int  — keep the top-N procedures by full-day total volume
+        • None — keep ALL procedures (the sidebar's "All" option)
+    """
     h_start, h_end = hour_range
     hours   = list(range(h_start, h_end + 1))
     df_date = df[df["complete_date"] == selected_date].copy()
@@ -140,13 +146,14 @@ def build_pivot(
     if df_dh.empty:
         return None, None, df_date, hours
 
-    top_procs = (
-        df_date.groupby("Order Procedure")["Complete Volume"]
-        .sum().sort_values(ascending=False).head(top_n).index.tolist()
-    )
-    df_dh = df_dh[df_dh["Order Procedure"].isin(top_procs)].copy()
-    if df_dh.empty:
-        return None, None, df_date, hours
+    if top_n is not None:
+        top_procs = (
+            df_date.groupby("Order Procedure")["Complete Volume"]
+            .sum().sort_values(ascending=False).head(top_n).index.tolist()
+        )
+        df_dh = df_dh[df_dh["Order Procedure"].isin(top_procs)].copy()
+        if df_dh.empty:
+            return None, None, df_date, hours
 
     pivot = (
         df_dh.pivot_table(
@@ -162,8 +169,14 @@ def build_pivot(
 
 def build_monthly_pivot(
     df: pd.DataFrame, year: int, month: int,
-    top_n: int = 30,
+    top_n: int | None = 30,
 ) -> tuple:
+    """Build the Monthly heatmap pivot.
+
+    `top_n` controls how many top-volume procedures the heatmap shows:
+        • int  — keep the top-N procedures by month total volume
+        • None — keep ALL procedures (the sidebar's "All" option)
+    """
     month_start = date(year, month, 1)
     month_end   = date(year, month, _cal.monthrange(year, month)[1])
     month_df    = df[
@@ -174,11 +187,12 @@ def build_monthly_pivot(
     if month_df.empty:
         return None, 0, month_df
 
-    top_procs = (
-        month_df.groupby("Order Procedure")["Complete Volume"]
-        .sum().sort_values(ascending=False).head(top_n).index.tolist()
-    )
-    month_df = month_df[month_df["Order Procedure"].isin(top_procs)].copy()
+    if top_n is not None:
+        top_procs = (
+            month_df.groupby("Order Procedure")["Complete Volume"]
+            .sum().sort_values(ascending=False).head(top_n).index.tolist()
+        )
+        month_df = month_df[month_df["Order Procedure"].isin(top_procs)].copy()
 
     pivot = (
         month_df.pivot_table(
