@@ -318,48 +318,6 @@ section[data-testid="stSidebar"]::after {
     pointer-events: auto !important;
     z-index: 99999 !important;
 }
-/* SIDEBAR SECTION LABELS — every section label is rendered as a
-   markdown h3 ("### Date" etc.). Streamlit's default theming gives
-   these a bold weight + saturated gold colour via emotion-cache
-   classes with high specificity, so override with `html body
-   section[data-testid="stSidebar"]` plus !important to beat them.
-   Includes h1/h2/h4/h5 + [data-testid="stHeading"] as fallbacks in
-   case the markdown render path changes in future Streamlit versions. */
-html body section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h1,
-html body section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h2,
-html body section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3,
-html body section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h4,
-html body section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h5,
-html body section[data-testid="stSidebar"] [data-testid="stHeading"] h1,
-html body section[data-testid="stSidebar"] [data-testid="stHeading"] h2,
-html body section[data-testid="stSidebar"] [data-testid="stHeading"] h3,
-html body section[data-testid="stSidebar"] [data-testid="stHeading"] h4,
-html body section[data-testid="stSidebar"] [data-testid="stHeading"] h5,
-html body section[data-testid="stSidebar"] h3 {
-    color: rgba(241, 171, 31, 0.75) !important;
-    font-size: 11px !important;
-    font-weight: 500 !important;
-    text-transform: uppercase !important;
-    letter-spacing: 0.08em !important;
-    margin-bottom: 6px !important;
-    margin-top: 16px !important;
-    line-height: 1.4 !important;
-    padding: 0 !important;
-}
-/* The first sidebar section label has no top margin so it sits flush
-   under the sidebar's own top padding rather than picking up a double
-   gap. */
-html body section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]
-    > [data-testid="stElementContainer"]:first-child
-    [data-testid="stMarkdownContainer"] h1,
-html body section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]
-    > [data-testid="stElementContainer"]:first-child
-    [data-testid="stMarkdownContainer"] h2,
-html body section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]
-    > [data-testid="stElementContainer"]:first-child
-    [data-testid="stMarkdownContainer"] h3 {
-    margin-top: 0 !important;
-}
 /* Small muted caption used for date ranges + hour-range readouts under
    their respective inputs. 10 px / 40 % white, no extra spacing.
    Higher specificity needed because Streamlit's
@@ -626,19 +584,6 @@ html body section[data-testid="stSidebar"] [data-testid="stSelectbox"]
 /* ═══════════════════════════════════════════════════════
    DATE INPUT
    ═══════════════════════════════════════════════════════ */
-/* Default styling for date inputs OUTSIDE the sidebar (admin date-
-   range editor lives inside its own expander where this still
-   applies). */
-[data-testid="stDateInput"] input {
-    background-color: #6F1828 !important;
-    color: #ffffff !important;
-    border: 1px solid #57121f !important;
-    border-radius: 5px !important;
-}
-[data-testid="stDateInput"] > div > div > div > svg {
-    fill: #ffffff !important;
-    color: #ffffff !important;
-}
 /* Sidebar date inputs get a much subtler treatment — no maroon fill,
    subtle outline, gold focus ring. The value text MUST be readable
    white (#ffffff) — the global `[data-testid=stTextInput] input`
@@ -1261,11 +1206,6 @@ hr {
     box-shadow: none;
     display: flex;
     flex-direction: column;
-}
-/* `.accent` legacy class is intentionally a no-op now — all cards
-   share the same neutral fill in the new design. */
-.metric-card.accent {
-    border-top-color: rgba(0, 0, 0, 0.08);
 }
 .metric-card .label {
     color: rgba(0, 0, 0, 0.55);
@@ -1975,7 +1915,7 @@ def render_data_management_sidebar(
                 level="ok",
             )
         else:
-            status_chip("No data yet — upload below", level="warn")
+            status_chip("No data yet - upload below", level="warn")
         st.caption("Storage: GitHub (partitioned)")
         st.markdown("---")
 
@@ -2063,7 +2003,7 @@ def render_data_management_sidebar(
 
             st.markdown("---")
 
-        st.markdown("**Step 1 — Select file(s)**")
+        st.markdown("**Step 1 - Select file(s)**")
         new_files = st.file_uploader(
             "Upload files", type=["xlsx", "xls", "csv"],
             key="admin_upload",
@@ -2078,7 +2018,7 @@ def render_data_management_sidebar(
             _names = ", ".join(f"**{s['name']}**" for s in _staged)
             st.caption(f"Ready: {_names}  ({len(_staged)} file(s))")
 
-            st.markdown("**Step 2 — Add to master dataset**")
+            st.markdown("**Step 2 - Add to master dataset**")
             if st.button(
                 "Process & add to master",
                 type="primary", width="stretch",
@@ -2090,7 +2030,7 @@ def render_data_management_sidebar(
         st.markdown("---")
         st.markdown("**Danger zone**")
         if st.button(
-            "Reset — delete all data", width="stretch",
+            "Reset - delete all data", width="stretch",
             key="btn_reset_all",
         ):
             ss["pending_reset"] = True
