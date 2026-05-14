@@ -93,12 +93,16 @@ def load_draw_data(date_str: str, view: str) -> tuple:
         _end   = date(_yr, _mo, _cal2.monthrange(_yr, _mo)[1])
 
     _idx_hash = get_index_hash() if storage_is_configured() else ""
+    # Pre-Analytics scopes by Date/Time - Drawn (the column the heatmap's
+    # hour axis is built from). Analytics uses the default
+    # date_basis="complete" so its behavior is unchanged.
     _raw = load_filtered_data(
         start_date=_start,
         end_date=_end,
         resources=(),
         exclude_procs=(),
         _index_hash=_idx_hash,
+        date_basis="drawn",
     )
 
     _debug: dict = {

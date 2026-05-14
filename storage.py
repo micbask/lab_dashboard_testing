@@ -22,7 +22,7 @@ import base64
 import io
 import json
 import time
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 import duckdb
@@ -198,6 +198,13 @@ def _parquet_bytes_to_df(raw: bytes) -> pd.DataFrame:
             df["inlab_hour"] = pd.to_datetime(
                 df["Date/Time - In Lab"], errors="coerce"
             ).dt.hour.astype("Int64")
+    if "Date/Time - Drawn" in df.columns:
+        if "drawn_date" not in df.columns:
+            df["drawn_date"] = pd.to_datetime(df["Date/Time - Drawn"], errors="coerce").dt.date
+        if "drawn_hour" not in df.columns:
+            df["drawn_hour"] = pd.to_datetime(
+                df["Date/Time - Drawn"], errors="coerce"
+            ).dt.hour.astype("Int64")
     return df
 
 
@@ -253,6 +260,15 @@ def _migrate_legacy_parquet() -> bool:
             pass
 
     return True
+
+
+# Maximum draw -> complete latency the pre-analytics partition pruner
+# assumes. Used as a slack term on the lower side of the complete-date
+# range when scoping queries by drawn_date — see load_filtered_data.
+# 30 days is generous for lab phlebotomy draws (typical latency is
+# hours to a few days); raising it just makes the pruner read one or
+# two extra partitions per query.
+_DRAWN_LAG_BUFFER = timedelta(days=30)
 
 
 def _write_partitions_from_df(df: pd.DataFrame) -> dict:
@@ -329,6 +345,7 @@ def load_filtered_data(
     resources: tuple[str, ...],
     exclude_procs: tuple[str, ...],
     _index_hash: str = "",
+    date_basis: str = "complete",
 ) -> pd.DataFrame:
     """Load ONLY the data needed for a specific view.
 
@@ -339,18 +356,46 @@ def load_filtered_data(
 
     Parameters are tuples (not lists) so Streamlit can hash them for caching.
     _index_hash busts cache when partitions change.
+
+    `date_basis` selects which timestamp column governs both the
+    partition-pruning step and the SQL WHERE clause:
+      - "complete" (default) -> uses `complete_date` (Date/Time - Complete).
+        This is what Analytics + forecast queries use.
+      - "drawn" -> uses `drawn_date` (Date/Time - Drawn). Pre-Analytics
+        queries pass this so the heatmap groups draws by the day they were
+        actually performed, not the day the test completed.
+
+    For drawn-date queries the partition pruner uses the partition's
+    complete-date range with a `_DRAWN_LAG_BUFFER` slack on the lower
+    side: since `drawn_date <= complete_date` always (you can't
+    complete before you draw), a partition with complete_date range
+    [c_min, c_max] can contain rows with drawn_date as far back as
+    c_min - lag. A 30-day buffer comfortably covers typical lab
+    draw -> complete latency (hours to a few days) plus rare slow
+    send-out tests, while keeping the typical query at 1-2 partitions.
     """
     index = _load_partition_index()
     if not index:
         return pd.DataFrame()
 
-    # Find partitions overlapping the date range
+    if date_basis == "drawn":
+        date_col = "drawn_date"
+    else:
+        date_col = "complete_date"
+
     needed_keys = []
     for key, meta in index.items():
-        p_min = date.fromisoformat(meta["min_date"])
-        p_max = date.fromisoformat(meta["max_date"])
-        if p_min <= end_date and p_max >= start_date:
-            needed_keys.append(key)
+        c_min = date.fromisoformat(meta["min_date"])
+        c_max = date.fromisoformat(meta["max_date"])
+        if date_basis == "drawn":
+            # Include if some drawn_date in this partition COULD overlap
+            # [start_date, end_date]. Drawn is upper-bounded by complete,
+            # lower-bounded conservatively by c_min - _DRAWN_LAG_BUFFER.
+            if c_min - _DRAWN_LAG_BUFFER <= end_date and c_max >= start_date:
+                needed_keys.append(key)
+        else:
+            if c_min <= end_date and c_max >= start_date:
+                needed_keys.append(key)
 
     if not needed_keys:
         return pd.DataFrame()
@@ -374,25 +419,27 @@ def load_filtered_data(
     resource_list = list(resources)
     exclude_list = list(exclude_procs)
 
+    date_where = f'"{date_col}" >= ? AND "{date_col}" <= ?'
+
     if resource_list and exclude_list:
         result = con.execute(
-            "SELECT * FROM data "
-            "WHERE complete_date >= ? AND complete_date <= ? "
+            f"SELECT * FROM data "
+            f"WHERE {date_where} "
             "AND \"Performing Service Resource\" IN (SELECT UNNEST(?)) "
             "AND \"Order Procedure\" NOT IN (SELECT UNNEST(?))",
             [start_date, end_date, resource_list, exclude_list],
         ).fetchdf()
     elif resource_list:
         result = con.execute(
-            "SELECT * FROM data "
-            "WHERE complete_date >= ? AND complete_date <= ? "
+            f"SELECT * FROM data "
+            f"WHERE {date_where} "
             "AND \"Performing Service Resource\" IN (SELECT UNNEST(?))",
             [start_date, end_date, resource_list],
         ).fetchdf()
     else:
         result = con.execute(
-            "SELECT * FROM data "
-            "WHERE complete_date >= ? AND complete_date <= ?",
+            f"SELECT * FROM data "
+            f"WHERE {date_where}",
             [start_date, end_date],
         ).fetchdf()
 
@@ -413,6 +460,14 @@ def load_filtered_data(
     if "inlab_hour" in result.columns and not result.empty:
         result["inlab_hour"] = pd.to_numeric(
             result["inlab_hour"], errors="coerce"
+        ).astype("Int64")
+    if "drawn_date" in result.columns and not result.empty:
+        result["drawn_date"] = pd.to_datetime(
+            result["drawn_date"], errors="coerce"
+        ).dt.date
+    if "drawn_hour" in result.columns and not result.empty:
+        result["drawn_hour"] = pd.to_numeric(
+            result["drawn_hour"], errors="coerce"
         ).astype("Int64")
     return result
 
