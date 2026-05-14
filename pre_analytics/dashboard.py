@@ -12,7 +12,7 @@ from storage import (
 from ui_components import (
     metric_card, render_header, render_data_management_sidebar,
 )
-from pre_analytics.data import load_phlebotomy_staff, load_draw_data, build_draw_pivot
+from pre_analytics.data import load_draw_data, build_draw_pivot
 
 
 def render_sidebar(ss) -> dict:
@@ -131,7 +131,6 @@ def render_sidebar(ss) -> dict:
                     unsafe_allow_html=True,
                 )
         else:
-            import calendar as _cal3
             st.markdown(
                 '<div class="sidebar-section-label">MONTH</div>',
                 unsafe_allow_html=True,
@@ -147,7 +146,7 @@ def render_sidebar(ss) -> dict:
                     _d = date(_d.year, _d.month + 1, 1)
             if not _pa_avail_months:
                 _pa_avail_months = [(_pa_max_d.year, _pa_max_d.month)]
-            _pa_month_labels = [f"{_cal3.month_name[m]} {y}" for y, m in _pa_avail_months]
+            _pa_month_labels = [f"{_cal.month_name[m]} {y}" for y, m in _pa_avail_months]
             _pa_sel_label = st.selectbox(
                 "Select month", _pa_month_labels,
                 index=len(_pa_avail_months) - 1,
@@ -247,7 +246,7 @@ def render(params: dict, ss) -> None:
             _peak_h_val   = int(_loc_df.groupby("hour").size().idxmax())
             _pa_peak_hour = HOUR_LABELS.get(_peak_h_val, str(_peak_h_val))
         else:
-            _pa_peak_hour = "—"
+            _pa_peak_hour = "-"
 
         _kc1, _kc2, _kc3, _kc4 = st.columns(4)
         with _kc1:
@@ -349,7 +348,7 @@ def render(params: dict, ss) -> None:
                             _t = pd.to_datetime(_r["draw_datetime"]).strftime("%H:%M")
                             _s = int(_r["samples"])
                             _lines.append(
-                                f"{_t} — {_s} sample{'s' if _s != 1 else ''}"
+                                f"{_t} - {_s} sample{'s' if _s != 1 else ''}"
                             )
                         _details[(_tech, int(_hour))] = "<br>".join(_lines)
 
@@ -459,7 +458,7 @@ def render(params: dict, ss) -> None:
                 # <h3> at Streamlit's default ~28 px — dominated the page
                 # visually and looked inconsistent with the rest of the app.
                 st.markdown(
-                    f'<div class="section-heading">{pa_location} — {_pa_shift}</div>',
+                    f'<div class="section-heading">{pa_location} - {_pa_shift}</div>',
                     unsafe_allow_html=True,
                 )
             _hkey = f"heatmap_{pa_location}_{_pa_shift or 'all'}"
