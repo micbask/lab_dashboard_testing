@@ -135,8 +135,8 @@ def build_pivot(
     """Build the Daily heatmap pivot.
 
     `top_n` controls how many top-volume procedures the heatmap shows:
-        • int  — keep the top-N procedures by full-day total volume
-        • None — keep ALL procedures (the sidebar's "All" option)
+        - int  -> keep the top-N procedures by full-day total volume
+        - None -> keep ALL procedures (the sidebar's "All" option)
     """
     h_start, h_end = hour_range
     hours   = list(range(h_start, h_end + 1))
@@ -209,13 +209,23 @@ def build_monthly_pivot(
     return avg, n_days, month_df
 
 
+@st.cache_data(show_spinner=False, ttl=300)
 def build_weekday_pivot(
-    month_df: pd.DataFrame, year: int, month: int,
+    _month_df: pd.DataFrame, year: int, month: int,
+    cache_key: str = "",
 ) -> tuple:
-    if month_df.empty:
+    """Build the Monthly weekday-pattern pivot.
+
+    `_month_df` is underscore-prefixed so Streamlit skips hashing the
+    DataFrame (would be expensive for a month-sized frame). `cache_key`
+    carries the (map_type, time_basis, idx_hash) fingerprint that
+    callers must supply so the cache busts when scope changes.
+    """
+    _ = cache_key  # consumed by st.cache_data for cache-key fingerprinting
+    if _month_df.empty:
         return None, {}
 
-    df = month_df.copy()
+    df = _month_df.copy()
     df["weekday"] = pd.to_datetime(df["complete_date"]).dt.dayofweek
 
     pivot = (
@@ -243,12 +253,14 @@ def build_weekday_pivot(
     return pivot, wd_counts
 
 
+@st.cache_data(show_spinner=False, ttl=300)
 def load_monthly_avg_for_comparison(
-    df: pd.DataFrame,
+    _df: pd.DataFrame,
     selected_date: date,
-    procedures: list,
+    procedures: tuple,
+    cache_key: str = "",
 ) -> pd.DataFrame:
-    """Build a procedure × hour-of-day average-per-day pivot for the month
+    """Build a procedure x hour-of-day average-per-day pivot for the month
     that contains `selected_date`, restricted to the given procedures.
 
     Used by the Daily heatmap's hover tooltip in analytics/dashboard.py to
@@ -258,20 +270,26 @@ def load_monthly_avg_for_comparison(
     the month-summed count for that procedure/hour divided by the number
     of distinct dates that have any data in the month.
 
-    Returns an empty DataFrame if `df` has no rows in the selected month or
-    no rows for any of the requested procedures.
+    Returns an empty DataFrame if `_df` has no rows in the selected month
+    or no rows for any of the requested procedures.
+
+    `_df` is underscore-prefixed so Streamlit skips hashing the DataFrame.
+    `procedures` is a tuple (hashable) and acts as part of the cache key.
+    `cache_key` carries the (map_type, time_basis, idx_hash) fingerprint.
     """
-    if df is None or df.empty or not procedures:
+    _ = cache_key  # consumed by st.cache_data for cache-key fingerprinting
+    if _df is None or _df.empty or not procedures:
         return pd.DataFrame()
 
     year, month = selected_date.year, selected_date.month
     month_start = date(year, month, 1)
     month_end   = date(year, month, _cal.monthrange(year, month)[1])
 
-    month_df = df[
-        (df["complete_date"] >= month_start) &
-        (df["complete_date"] <= month_end) &
-        (df["Order Procedure"].isin(procedures))
+    procedures_list = list(procedures)
+    month_df = _df[
+        (_df["complete_date"] >= month_start) &
+        (_df["complete_date"] <= month_end) &
+        (_df["Order Procedure"].isin(procedures_list))
     ]
     if month_df.empty:
         return pd.DataFrame()
@@ -280,7 +298,7 @@ def load_monthly_avg_for_comparison(
         month_df.pivot_table(
             index="Order Procedure", columns="hour",
             values="Complete Volume", aggfunc="sum", fill_value=0,
-        ).reindex(index=procedures, columns=list(range(24)), fill_value=0)
+        ).reindex(index=procedures_list, columns=list(range(24)), fill_value=0)
     )
     n_days = max(int(month_df["complete_date"].nunique()), 1)
     return pivot / n_days
@@ -355,7 +373,7 @@ def build_tat_table(
     Per group the function reports n, Mean, and % <1h (percentage of
     samples with TAT_minutes < 60). Procedures that have no rows in a
     given group get None for every stat column in that group; rendering
-    displays those as "—".
+    displays those as "-".
 
     The returned DataFrame has one row per procedure in
     `selected_procedures` and a pandas MultiIndex column structure:
