@@ -244,7 +244,12 @@ def _train_forecasts_streaming(map_type: str, resource_assignments: dict) -> Non
     # daily_agg_inlab   [(proc, hour)][date] = volume
     daily_agg_complete: dict[tuple[str, int], dict] = {}
     daily_agg_inlab: dict[tuple[str, int], dict] = {}
-    proc_totals: dict[str, float] = {}
+    # Per-basis totals. We rank top-30 separately for each basis (a
+    # procedure can be high-volume by Complete count but low by In-Lab
+    # count or vice versa) and then train on the UNION so neither view
+    # silently drops a procedure that's a top performer for its basis.
+    proc_totals_complete: dict[str, float] = {}
+    proc_totals_inlab: dict[str, float] = {}
     last_data_date_complete = None
     last_data_date_inlab = None
 
@@ -275,7 +280,7 @@ def _train_forecasts_streaming(map_type: str, resource_assignments: dict) -> Non
                 key = (proc, hour)
                 daily_agg_complete.setdefault(key, {})
                 daily_agg_complete[key][d] = daily_agg_complete[key].get(d, 0.0) + vol
-                proc_totals[proc] = proc_totals.get(proc, 0.0) + vol
+                proc_totals_complete[proc] = proc_totals_complete.get(proc, 0.0) + vol
             del grouped_c
 
         # ── In-Lab basis ────────────────────────────────────────────────
@@ -298,6 +303,7 @@ def _train_forecasts_streaming(map_type: str, resource_assignments: dict) -> Non
                     key = (proc, hour)
                     daily_agg_inlab.setdefault(key, {})
                     daily_agg_inlab[key][d] = daily_agg_inlab[key].get(d, 0.0) + vol
+                    proc_totals_inlab[proc] = proc_totals_inlab.get(proc, 0.0) + vol
                 del grouped_i
 
         del filt
@@ -305,15 +311,27 @@ def _train_forecasts_streaming(map_type: str, resource_assignments: dict) -> Non
     if last_data_date_complete is None and last_data_date_inlab is None:
         return
 
-    # Top-30 procedures ranked by Completed totals (same ranking for both bases)
-    top30 = sorted(proc_totals.keys(), key=lambda p: proc_totals[p], reverse=True)[:30]
+    # Top-30 by EACH basis, unioned. Without this, a procedure that's
+    # high-volume by In-Lab but low by Complete would be dropped from
+    # the In-Lab forecast view entirely.
+    top30_complete = sorted(
+        proc_totals_complete.keys(),
+        key=lambda p: proc_totals_complete[p],
+        reverse=True,
+    )[:30]
+    top30_inlab = sorted(
+        proc_totals_inlab.keys(),
+        key=lambda p: proc_totals_inlab[p],
+        reverse=True,
+    )[:30]
+    top_procs = sorted(set(top30_complete) | set(top30_inlab))
 
     predictions_complete = _train_models_for_basis(
-        top30, daily_agg_complete, last_data_date_complete
+        top_procs, daily_agg_complete, last_data_date_complete
     ) if last_data_date_complete is not None else {}
 
     predictions_inlab = _train_models_for_basis(
-        top30, daily_agg_inlab, last_data_date_inlab
+        top_procs, daily_agg_inlab, last_data_date_inlab
     ) if last_data_date_inlab is not None else {}
 
     # Use the later of the two as the "canonical" last/forecast-end date.
