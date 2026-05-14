@@ -21,12 +21,12 @@ def normalize_name(name) -> "str | None":
 
 
 @st.cache_data(show_spinner=False, ttl=3600)
-def load_phlebotomy_staff() -> tuple:
+def load_phlebotomy_staff() -> dict:
     """Read the phlebotomy staff roster from the bundled CSV and return
-    ({normalized_name: {display_name, location, shift}}, debug_raw_list).
+    {normalized_name: {display_name, location, shift}}.
 
     The CSV is read from the local filesystem (it is committed with the
-    application) — the previous GitHub-API approach hit the repository's
+    application); the previous GitHub-API approach hit the repository's
     default branch, which does not contain config/phlebotomy_staff.csv.
 
     Names contain an unquoted comma ("Last, First"), so a stock pandas
@@ -41,16 +41,15 @@ def load_phlebotomy_staff() -> tuple:
     )
 
     _lookup: dict = {}
-    _debug_raw: list = []
 
     if not _os.path.exists(_path):
-        return _lookup, _debug_raw
+        return _lookup
 
     with open(_path, "r", encoding="utf-8") as _fh:
         _lines = _fh.read().splitlines()
 
     if not _lines:
-        return _lookup, _debug_raw
+        return _lookup
 
     # Skip header row.
     for _line in _lines[1:]:
@@ -66,8 +65,6 @@ def load_phlebotomy_staff() -> tuple:
         _raw_name = ", ".join(p for p in _name_parts if p != "")
         if not _raw_name:
             continue
-        if len(_debug_raw) < 5:
-            _debug_raw.append(repr(_raw_name))
         _shift = _shift_raw if _shift_raw not in ("", "nan") else None
         _key = normalize_name(_raw_name)
         if _key:
@@ -76,7 +73,7 @@ def load_phlebotomy_staff() -> tuple:
                 "location": _loc,
                 "shift": _shift,
             }
-    return _lookup, _debug_raw
+    return _lookup
 
 
 @st.cache_data(show_spinner=False, ttl=300)
@@ -122,7 +119,7 @@ def load_draw_data(date_str: str, view: str) -> tuple:
     _df["_norm"] = _df["Drawn Tech"].apply(normalize_name)
     _df = _df[_df["_norm"].notna()].copy()
 
-    _staff, _ = load_phlebotomy_staff()
+    _staff = load_phlebotomy_staff()
     _debug["staff_keys"] = list(_staff.keys())[:10]
     _debug["rows_before"] = len(_df)
 
@@ -160,7 +157,7 @@ def build_draw_pivot(
     shift: "str | None",
     view: str,
 ) -> pd.DataFrame:
-    _staff, _ = load_phlebotomy_staff()
+    _staff = load_phlebotomy_staff()
 
     _all_techs = sorted(
         info["display_name"]
