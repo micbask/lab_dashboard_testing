@@ -9,11 +9,10 @@ import streamlit as st
 
 from config import (
     DEFAULT_RESOURCES, VMAX, ALL_RESOURCES, MAP_TYPES,
-    EXCLUDE_PROCS, HOUR_LABELS, LABEL_TO_HOUR,
+    HOUR_LABELS, LABEL_TO_HOUR,
 )
 from storage import (
     storage_is_configured, get_data_summary,
-    load_filtered_data,
     delete_date_range, reset_all_data,
     ensure_partitioned_storage, get_index_hash,
     count_rows_in_date_range,
@@ -27,10 +26,12 @@ from ui_components import (
     metric_card, render_header, status_chip,
     render_data_management_sidebar,
 )
+from analytics.filters import EXCLUDED_PROCEDURES
 from analytics.data import (
+    load_analytics_data,
     build_pivot, build_monthly_pivot, build_weekday_pivot,
     load_monthly_avg_for_comparison,
-    load_tat_data, get_top_procedures_by_volume, build_tat_table,
+    compute_tat_metrics, get_top_procedures_by_volume, build_tat_table,
 )
 
 
@@ -240,25 +241,6 @@ def _build_analytics_heatmap(
     return fig
 
 
-def _apply_in_lab_basis(filtered_df: pd.DataFrame) -> pd.DataFrame:
-    """Re-map `complete_date` / `hour` to the In-Lab columns.
-
-    Returns the rows that have In-Lab timestamps with `complete_date` /
-    `hour` overwritten to the In-Lab values, so downstream pivots key off
-    In-Lab time. Returns an empty DataFrame if no In-Lab data is present.
-    """
-    if (
-        filtered_df is None or filtered_df.empty
-        or "inlab_date" not in filtered_df.columns
-        or not filtered_df["inlab_date"].notna().any()
-    ):
-        return pd.DataFrame()
-    out = filtered_df[filtered_df["inlab_date"].notna()].copy()
-    out["complete_date"] = out["inlab_date"]
-    out["hour"] = out["inlab_hour"].astype(int)
-    return out
-
-
 def render_sidebar(ss) -> dict:
     """Render analytics sidebar widgets. Returns params dict for render()."""
     with st.sidebar:
@@ -363,7 +345,6 @@ def render_sidebar(ss) -> dict:
         _min_d = date.today()
         _max_d = date.today()
         _current_resources = ()
-        _current_excludes = ()
         _idx_hash = ""
         selected_date = date.today()
         selected_year = date.today().year
@@ -373,15 +354,11 @@ def render_sidebar(ss) -> dict:
         _is_forecast_date = False
 
         if _data_exists:
-            # TAT now uses the same bench-level resource filter as
-            # Completed / In-Lab. EXCLUDE_PROCS is still skipped on the
-            # TAT path because TAT spans every procedure performed at the
-            # bench, including the ones excluded from volume heatmaps.
+            # All three views (Completed / In-Lab / TAT) now share the
+            # same data scope: bench-level resources + EXCLUDED_PROCEDURES.
+            # The exclusion is applied inside `load_analytics_data`; the
+            # sidebar only needs to supply the bench resources here.
             _current_resources = tuple(sorted(ss.resource_assignments[map_type]))
-            if time_basis == "TAT":
-                _current_excludes = ()
-            else:
-                _current_excludes = tuple(sorted(EXCLUDE_PROCS))
             _idx_hash = get_index_hash() if storage_is_configured() else ""
 
             if storage_is_configured():
@@ -581,9 +558,10 @@ def render_sidebar(ss) -> dict:
                     _local_df, _ = deduplicate_and_merge(_parsed)
                     _data_exists = not _local_df.empty
 
-    # TAT view needs a single canonical date string for downstream
-    # `load_tat_data` calls — 'YYYY-MM-DD' for Daily, 'YYYY-MM' for
-    # Monthly. Empty string when not on the TAT path.
+    # TAT view needs a single canonical date string the renderer can
+    # convert to (start_date, end_date) for `load_analytics_data` —
+    # 'YYYY-MM-DD' for Daily, 'YYYY-MM' for Monthly. Empty string when
+    # not on the TAT path.
     _tat_date_str = ""
     if time_basis == "TAT" and _data_exists:
         if view_mode == "Daily":
@@ -601,7 +579,6 @@ def render_sidebar(ss) -> dict:
         "min_d": _min_d,
         "max_d": _max_d,
         "current_resources": _current_resources,
-        "current_excludes": _current_excludes,
         "idx_hash": _idx_hash,
         "selected_date": selected_date,
         "selected_year": selected_year,
@@ -683,7 +660,25 @@ def _render_tat_view(params: dict) -> None:
         st.warning("No date string supplied — cannot load TAT data.")
         return
 
-    tat_df = load_tat_data(_date_str, _view, _resources)
+    # Translate date_str + view → (start_date, end_date) for the shared
+    # loader. Daily: a single date; Monthly: first..last day of month.
+    if _view == "Daily":
+        _start_d = date.fromisoformat(_date_str)
+        _end_d   = _start_d
+    else:
+        _yr2 = int(_date_str[:4])
+        _mo2 = int(_date_str[5:7])
+        _start_d = date(_yr2, _mo2, 1)
+        _end_d   = date(_yr2, _mo2, _cal.monthrange(_yr2, _mo2)[1])
+
+    _raw_tat_df = load_analytics_data(
+        start_date=_start_d,
+        end_date=_end_d,
+        resources=_resources,
+        time_basis="TAT",
+        _index_hash=get_index_hash(),
+    )
+    tat_df = compute_tat_metrics(_raw_tat_df)
 
     # ── KPI strip ──────────────────────────────────────────────────────────
     if tat_df.empty:
@@ -981,7 +976,6 @@ def render(params: dict, ss) -> None:
     _local_df         = params["local_df"]
     _max_d            = params["max_d"]
     _current_resources = params["current_resources"]
-    _current_excludes  = params["current_excludes"]
     _idx_hash          = params["idx_hash"]
 
     # ── Pending upload ─────────────────────────────────────────────────────
@@ -1153,33 +1147,34 @@ def render(params: dict, ss) -> None:
             df_date      = pd.DataFrame()
         else:
             if storage_is_configured():
-                filtered_df = load_filtered_data(
+                filtered_df = load_analytics_data(
                     start_date=selected_date,
                     end_date=selected_date,
                     resources=_current_resources,
-                    exclude_procs=_current_excludes,
+                    time_basis=time_basis,
                     _index_hash=_idx_hash,
                 )
             else:
-                from config import EXCLUDE_PROCS as _EP
                 resources = ss.resource_assignments[map_type]
                 filtered_df = _local_df[
                     _local_df["Performing Service Resource"].isin(resources) &
-                    ~_local_df["Order Procedure"].isin(_EP)
+                    ~_local_df["Order Procedure"].isin(EXCLUDED_PROCEDURES)
                 ].copy()
+                if time_basis == "In-Lab":
+                    _has_inlab = (
+                        "inlab_date" in filtered_df.columns
+                        and filtered_df["inlab_date"].notna().any()
+                    )
+                    if _has_inlab:
+                        filtered_df = filtered_df[filtered_df["inlab_date"].notna()].copy()
+                        filtered_df["complete_date"] = filtered_df["inlab_date"]
+                        filtered_df["hour"] = filtered_df["inlab_hour"].astype(int)
+                    else:
+                        filtered_df = filtered_df.iloc[0:0]
 
-            if time_basis == "In-Lab":
-                _has_inlab = (
-                    "inlab_date" in filtered_df.columns
-                    and filtered_df["inlab_date"].notna().any()
-                )
-                if _has_inlab:
-                    filtered_df = filtered_df[filtered_df["inlab_date"].notna()].copy()
-                    filtered_df["complete_date"] = filtered_df["inlab_date"]
-                    filtered_df["hour"] = filtered_df["inlab_hour"].astype(int)
-                else:
-                    st.warning("No 'Date/Time - In Lab' data available.")
-                    return
+            if time_basis == "In-Lab" and filtered_df.empty:
+                st.warning("No 'Date/Time - In Lab' data available.")
+                return
 
             pivot, df_date_hour, df_date, hours = build_pivot(
                 filtered_df, selected_date, hour_range,
@@ -1305,17 +1300,15 @@ def render(params: dict, ss) -> None:
                         selected_date.year, selected_date.month,
                         _cal.monthrange(selected_date.year, selected_date.month)[1],
                     )
-                    _month_df = load_filtered_data(
+                    _month_df = load_analytics_data(
                         start_date=_m_start,
                         end_date=_m_end,
                         resources=_current_resources,
-                        exclude_procs=_current_excludes,
+                        time_basis=time_basis,
                         _index_hash=_idx_hash,
                     )
                 else:
                     _month_df = _local_df
-                if time_basis == "In-Lab":
-                    _month_df = _apply_in_lab_basis(_month_df)
             except Exception:
                 _month_df = pd.DataFrame()
             _monthly_avg = load_monthly_avg_for_comparison(
@@ -1433,32 +1426,34 @@ def render(params: dict, ss) -> None:
                             _cal.monthrange(selected_year, selected_month)[1])
 
         if storage_is_configured():
-            filtered_df = load_filtered_data(
+            filtered_df = load_analytics_data(
                 start_date=_month_start,
                 end_date=_month_end,
                 resources=_current_resources,
-                exclude_procs=_current_excludes,
+                time_basis=time_basis,
                 _index_hash=_idx_hash,
             )
         else:
             resources = ss.resource_assignments[map_type]
             filtered_df = _local_df[
                 _local_df["Performing Service Resource"].isin(resources) &
-                ~_local_df["Order Procedure"].isin(EXCLUDE_PROCS)
+                ~_local_df["Order Procedure"].isin(EXCLUDED_PROCEDURES)
             ].copy()
+            if time_basis == "In-Lab":
+                _has_inlab = (
+                    "inlab_date" in filtered_df.columns
+                    and filtered_df["inlab_date"].notna().any()
+                )
+                if _has_inlab:
+                    filtered_df = filtered_df[filtered_df["inlab_date"].notna()].copy()
+                    filtered_df["complete_date"] = filtered_df["inlab_date"]
+                    filtered_df["hour"] = filtered_df["inlab_hour"].astype(int)
+                else:
+                    filtered_df = filtered_df.iloc[0:0]
 
-        if time_basis == "In-Lab":
-            _has_inlab = (
-                "inlab_date" in filtered_df.columns
-                and filtered_df["inlab_date"].notna().any()
-            )
-            if _has_inlab:
-                filtered_df = filtered_df[filtered_df["inlab_date"].notna()].copy()
-                filtered_df["complete_date"] = filtered_df["inlab_date"]
-                filtered_df["hour"] = filtered_df["inlab_hour"].astype(int)
-            else:
-                st.warning("No 'Date/Time - In Lab' data available.")
-                return
+        if time_basis == "In-Lab" and filtered_df.empty:
+            st.warning("No 'Date/Time - In Lab' data available.")
+            return
 
         monthly_pivot, n_days, month_raw_df = build_monthly_pivot(
             filtered_df, selected_year, selected_month,
