@@ -322,38 +322,6 @@ def get_data_summary() -> dict:
     }
 
 
-def get_available_dates_for_resources(resources: list[str]) -> list:
-    """Get sorted list of unique dates that have data for given resources.
-
-    Reads only the partition index to determine which partitions to check,
-    then reads each partition and filters with DuckDB.  This is still
-    reading all partitions, but it's unavoidable for date-list discovery.
-    Results are cached.
-    """
-    index = _load_partition_index()
-    if not index:
-        return []
-
-    all_dates = set()
-    for key in sorted(index.keys()):
-        df = _read_partition(key)
-        if df is None or df.empty:
-            continue
-        # Filter by resources using DuckDB
-        con = duckdb.connect()
-        con.register("part", df)
-        result = con.execute(
-            "SELECT DISTINCT complete_date FROM part "
-            "WHERE \"Performing Service Resource\" IN (SELECT UNNEST(?))",
-            [resources],
-        ).fetchdf()
-        con.close()
-        if not result.empty:
-            all_dates.update(result["complete_date"].tolist())
-
-    return sorted(all_dates)
-
-
 @st.cache_data(show_spinner=False, ttl=300)
 def load_filtered_data(
     start_date: date,
@@ -471,7 +439,7 @@ def get_index_hash() -> str:
     return str(hash(json.dumps(index, sort_keys=True, default=str)))
 
 
-def count_rows_in_date_range(start: date, end: date) -> int:
+def count_rows_in_date_range(start_date: date, end_date: date) -> int:
     """Count rows in a date range using the partition index metadata.
 
     For exact counts, reads the affected partitions. For a quick estimate
@@ -485,12 +453,12 @@ def count_rows_in_date_range(start: date, end: date) -> int:
     for key, meta in index.items():
         p_min = date.fromisoformat(meta["min_date"])
         p_max = date.fromisoformat(meta["max_date"])
-        if p_min <= end and p_max >= start:
-            # Need exact count — read partition and filter
+        if p_min <= end_date and p_max >= start_date:
+            # Need exact count - read partition and filter
             df = _read_partition(key)
             if df is not None:
                 total += int(
-                    ((df["complete_date"] >= start) & (df["complete_date"] <= end)).sum()
+                    ((df["complete_date"] >= start_date) & (df["complete_date"] <= end_date)).sum()
                 )
     return total
 

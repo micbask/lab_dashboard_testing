@@ -56,13 +56,8 @@ VMAX:              dict[str, int]  = {k: v["vmax"]      for k, v in SITE_CONFIG.
 ALL_RESOURCES:     list[str]       = sorted({r for v in SITE_CONFIG.values() for r in v["resources"]})
 MAP_TYPES:         list[str]       = list(SITE_CONFIG.keys())
 
-# Procedures always excluded from heatmaps
-EXCLUDE_PROCS: set[str] = {
-    "Glomerular Filtration Rate Estimated",
-    ".Diff Auto",
-    ".Diff Auto -",
-    "Manual Diff-",
-}
+# Procedures always excluded from Analytics data scope (Completed,
+# In-Lab, TAT) live in analytics/filters.py as EXCLUDED_PROCEDURES.
 
 # Resource remaps: {(order_procedure, old_resource): new_resource}
 RESOURCE_REMAPS: dict[tuple[str, str], str] = {
