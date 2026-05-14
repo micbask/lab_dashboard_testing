@@ -277,6 +277,15 @@ def render_sidebar(ss) -> dict:
             key="time_basis",
         )
 
+        # Switching time_basis can leave the user on a date that has
+        # data for the previous basis but is empty for the new one
+        # (e.g. Completed has May 15, In-Lab doesn't). Pop the date
+        # picker so it re-clamps to the bench's _max_d on the next
+        # render, the same invalidation pattern as a bench change.
+        if ss.get("last_time_basis") != time_basis:
+            ss.pop("date_picker", None)
+            ss["last_time_basis"] = time_basis
+
         # ── 3. View ──
         st.markdown(
             '<div class="sidebar-section-label">VIEW</div>',
@@ -713,7 +722,7 @@ def _render_tat_view(params: dict) -> None:
         end_date=_end_d,
         resources=_resources,
         time_basis="TAT",
-        _index_hash=get_index_hash(),
+        index_hash=get_index_hash(),
     )
     tat_df = compute_tat_metrics(_raw_tat_df)
 
@@ -1161,7 +1170,7 @@ def _render_daily_view(params: dict, ss) -> None:
                 end_date=selected_date,
                 resources=_current_resources,
                 time_basis=time_basis,
-                _index_hash=_idx_hash,
+                index_hash=_idx_hash,
             )
         else:
             filtered_df = _apply_local_file_scope(
@@ -1296,7 +1305,7 @@ def _render_daily_view(params: dict, ss) -> None:
                     end_date=_m_end,
                     resources=_current_resources,
                     time_basis=time_basis,
-                    _index_hash=_idx_hash,
+                    index_hash=_idx_hash,
                 )
             else:
                 _month_df = _local_df
@@ -1436,7 +1445,7 @@ def _render_monthly_view(params: dict, ss) -> None:
             end_date=_month_end,
             resources=_current_resources,
             time_basis=time_basis,
-            _index_hash=_idx_hash,
+            index_hash=_idx_hash,
         )
     else:
         filtered_df = _apply_local_file_scope(
