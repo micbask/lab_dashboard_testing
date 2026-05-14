@@ -680,18 +680,17 @@ def _render_tat_view(params: dict) -> None:
     Layout:
       1. Priority legend  — RT/ST/TS with their service-level targets
          (one row, colored dots), sourced from TAT_TARGET_MINUTES.
-      2. Total-samples hero card — single KPI card with a per-priority
-         breakdown subtitle (RT n · ST n · TS n).
-      3. Summary by priority — Plotly go.Table with rows RT / ST / TS /
+      2. Summary by priority — Plotly go.Table with rows RT / ST / TS /
          All and columns n, Mean TAT, Target, % within target. Each
          row's % is evaluated against its own priority's target; the
-         All row uses a weighted aggregate across priorities.
-      4. Procedure filter (st.multiselect, defaults to top 5 by volume).
-      5. Turnaround time by procedure — Plotly go.Table, 13 columns
+         All row uses a weighted aggregate across priorities and is
+         the single source of truth for the total-sample count.
+      3. Procedure filter (st.multiselect, defaults to top 5 by volume).
+      4. Turnaround time by procedure — Plotly go.Table, 13 columns
          (procedure + 4 priority groups × n / Mean / % within target).
          The priority-specific threshold is named in the column header
          (RT % <2h, ST % <1h, TS % <1h, All % within target).
-      6. Mean TAT by procedure — horizontal grouped bar chart with 4
+      5. Mean TAT by procedure — horizontal grouped bar chart with 4
          series (RT, ST, TS, All) plus dashed vertical reference lines
          at each priority's target (60 min for ST/TS, 120 min for RT).
 
@@ -771,35 +770,6 @@ def _render_tat_view(params: dict) -> None:
         index_hash=get_index_hash(),
     )
     tat_df = compute_tat_metrics(_raw_tat_df)
-
-    # ── Total samples hero card ───────────────────────────────────────────
-    # Single KPI card occupying 1/4 of the row (left); leaves the
-    # remaining 3/4 empty so the layout breathes. The per-priority
-    # breakdown lives in the card subtitle ("RT 480 · ST 274 · TS xxx")
-    # so the headline n + breakdown are scannable at a glance without
-    # needing the summary table below.
-    if tat_df.empty:
-        _total_samples = 0
-        _rt_n_total = _st_n_total = _ts_n_total = 0
-    else:
-        _total_samples = int(len(tat_df))
-        _rt_n_total = int((tat_df["Collection Priority"] == "RT").sum())
-        _st_n_total = int((tat_df["Collection Priority"] == "ST").sum())
-        _ts_n_total = int((tat_df["Collection Priority"] == "TS").sum())
-
-    _hk1, _hk2, _hk3, _hk4 = st.columns(4)
-    with _hk1:
-        st.markdown(
-            metric_card(
-                "Total samples",
-                f"{_total_samples:,}",
-                sub=f"RT {_rt_n_total:,} · ST {_st_n_total:,} · TS {_ts_n_total:,}",
-                accent=True,
-            ),
-            unsafe_allow_html=True,
-        )
-
-    st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
 
     if tat_df.empty:
         st.warning(
