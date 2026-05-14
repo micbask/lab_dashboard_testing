@@ -22,7 +22,7 @@ import base64
 import io
 import json
 import time
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 import duckdb
@@ -262,27 +262,13 @@ def _migrate_legacy_parquet() -> bool:
     return True
 
 
-def _drawn_date_stats(group: pd.DataFrame) -> dict:
-    """Return {"min_drawn_date": str, "max_drawn_date": str} for the
-    Date/Time - Drawn values in `group`, or {} if no usable values.
-
-    Used by partition writers so the partition index can record the
-    range of draw dates each partition holds. pre-analytics queries
-    (which scope by `Date/Time - Drawn`) use these stats to prune
-    partitions; partitions written before this change won't have the
-    keys, so `load_filtered_data(date_basis="drawn")` conservatively
-    includes them.
-    """
-    if "Date/Time - Drawn" not in group.columns:
-        return {}
-    drawn = pd.to_datetime(group["Date/Time - Drawn"], errors="coerce").dt.date
-    drawn = drawn.dropna()
-    if drawn.empty:
-        return {}
-    return {
-        "min_drawn_date": str(drawn.min()),
-        "max_drawn_date": str(drawn.max()),
-    }
+# Maximum draw -> complete latency the pre-analytics partition pruner
+# assumes. Used as a slack term on the lower side of the complete-date
+# range when scoping queries by drawn_date — see load_filtered_data.
+# 30 days is generous for lab phlebotomy draws (typical latency is
+# hours to a few days); raising it just makes the pruner read one or
+# two extra partitions per query.
+_DRAWN_LAG_BUFFER = timedelta(days=30)
 
 
 def _write_partitions_from_df(df: pd.DataFrame) -> dict:
@@ -313,7 +299,6 @@ def _write_partitions_from_df(df: pd.DataFrame) -> dict:
             "min_date": str(group["complete_date"].min()),
             "max_date": str(group["complete_date"].max()),
             "size_bytes": len(pq_bytes),
-            **_drawn_date_stats(group),
         }
 
     if "_partition_key" in df.columns:
@@ -380,40 +365,37 @@ def load_filtered_data(
         queries pass this so the heatmap groups draws by the day they were
         actually performed, not the day the test completed.
 
-    For drawn-date queries, partition pruning uses the
-    `min_drawn_date`/`max_drawn_date` stats stored in the partition index
-    by `_write_partitions_from_df` / `ingest_new_data` /
-    `delete_date_range`. Partitions written before that tracking was
-    added lack those keys; we conservatively include them so no draws
-    are dropped during the gradual rollout (next time they're rewritten,
-    the stats get backfilled).
+    For drawn-date queries the partition pruner uses the partition's
+    complete-date range with a `_DRAWN_LAG_BUFFER` slack on the lower
+    side: since `drawn_date <= complete_date` always (you can't
+    complete before you draw), a partition with complete_date range
+    [c_min, c_max] can contain rows with drawn_date as far back as
+    c_min - lag. A 30-day buffer comfortably covers typical lab
+    draw -> complete latency (hours to a few days) plus rare slow
+    send-out tests, while keeping the typical query at 1-2 partitions.
     """
     index = _load_partition_index()
     if not index:
         return pd.DataFrame()
 
-    # Choose which (min, max) per-partition stats to prune against.
-    # Partitions are physically keyed by complete_date month so
-    # date_basis="drawn" still walks the same partition set; we just
-    # use a different stats pair to decide which to actually read.
     if date_basis == "drawn":
-        min_key, max_key = "min_drawn_date", "max_drawn_date"
         date_col = "drawn_date"
     else:
-        min_key, max_key = "min_date", "max_date"
         date_col = "complete_date"
 
     needed_keys = []
     for key, meta in index.items():
-        # Partitions without drawn-date stats (written before that
-        # tracking was added) are included conservatively.
-        if min_key not in meta or max_key not in meta:
-            needed_keys.append(key)
-            continue
-        p_min = date.fromisoformat(meta[min_key])
-        p_max = date.fromisoformat(meta[max_key])
-        if p_min <= end_date and p_max >= start_date:
-            needed_keys.append(key)
+        c_min = date.fromisoformat(meta["min_date"])
+        c_max = date.fromisoformat(meta["max_date"])
+        if date_basis == "drawn":
+            # Include if some drawn_date in this partition COULD overlap
+            # [start_date, end_date]. Drawn is upper-bounded by complete,
+            # lower-bounded conservatively by c_min - _DRAWN_LAG_BUFFER.
+            if c_min - _DRAWN_LAG_BUFFER <= end_date and c_max >= start_date:
+                needed_keys.append(key)
+        else:
+            if c_min <= end_date and c_max >= start_date:
+                needed_keys.append(key)
 
     if not needed_keys:
         return pd.DataFrame()
@@ -586,7 +568,6 @@ def ingest_new_data(new_df: pd.DataFrame) -> dict:
             "min_date": str(merged["complete_date"].min()),
             "max_date": str(merged["complete_date"].max()),
             "size_bytes": len(pq_bytes),
-            **_drawn_date_stats(merged),
         }
 
     if "_partition_key" in new_df.columns:
@@ -651,7 +632,6 @@ def delete_date_range(start: date, end: date) -> dict:
                 "min_date": str(df["complete_date"].min()),
                 "max_date": str(df["complete_date"].max()),
                 "size_bytes": len(pq_bytes),
-                **_drawn_date_stats(df),
             }
 
     _save_partition_index(index)
