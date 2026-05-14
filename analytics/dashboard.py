@@ -1079,8 +1079,16 @@ def render(params: dict, ss) -> None:
     # top_n_btn_"]` so they look like minimal inline text instead of pill
     # buttons. type="primary" marks the selected option; CSS gives the
     # primary variant cardinal red text + gold underline.
-    _VALID_TOP_N = (10, 20, 30)
-    if st.session_state.get("analytics_top_n") not in _VALID_TOP_N:
+    # Top-N selector options. Each entry is (button-label, top-N value).
+    # The top-N value flows downstream to build_pivot / build_monthly_pivot
+    # / build_forecast_pivot — `None` means "no top-N filter, return every
+    # procedure", which is what the "All" button does.
+    _TOP_N_OPTIONS = [("10", 10), ("20", 20), ("30", 30), ("All", None)]
+    _VALID_TOP_N = tuple(v for _, v in _TOP_N_OPTIONS)
+    if (
+        "analytics_top_n" not in st.session_state
+        or st.session_state["analytics_top_n"] not in _VALID_TOP_N
+    ):
         st.session_state["analytics_top_n"] = 10
 
     def _render_top_n_legend(prefix_html: str) -> None:
@@ -1088,9 +1096,10 @@ def render(params: dict, ss) -> None:
 
         prefix_html is the legend prose (e.g. "Colour scale: ... full-day
         sum per procedure."). The function appends a "Showing top" label
-        column and three st.button columns in the same row. Selected
-        button is rendered with type="primary" so CSS can target it for
-        cardinal+gold styling; the others are type="secondary".
+        column and four st.button columns in the same row (10 / 20 / 30
+        / All). Selected button is rendered with type="primary" so CSS
+        can target it for cardinal+gold styling; the others are
+        type="secondary".
 
         Critically uses native Streamlit widgets — clicks trigger script
         reruns (which preserve session_state including auth) rather than
@@ -1098,8 +1107,10 @@ def render(params: dict, ss) -> None:
         prior implementation.
         """
         current_n = st.session_state.get("analytics_top_n", 10)
+        # 4 button columns (10 / 20 / 30 / All); "All" gets a slightly
+        # wider slot because it's a 3-char word vs the 2-digit numerics.
         _cols = st.columns(
-            [6, 0.7, 0.3, 0.3, 0.3],
+            [6, 0.7, 0.3, 0.3, 0.3, 0.4],
             vertical_alignment="center",
         )
         with _cols[0]:
@@ -1112,16 +1123,16 @@ def render(params: dict, ss) -> None:
                 '<div class="top-n-label">Showing top</div>',
                 unsafe_allow_html=True,
             )
-        for _col, _n in zip(_cols[2:], (10, 20, 30)):
+        for _col, (_label, _value) in zip(_cols[2:], _TOP_N_OPTIONS):
             with _col:
-                _is_sel = (_n == current_n)
+                _is_sel = (_value == current_n)
                 if st.button(
-                    str(_n),
-                    key=f"top_n_btn_{_n}",
+                    _label,
+                    key=f"top_n_btn_{_label}",
                     type="primary" if _is_sel else "secondary",
                     use_container_width=True,
                 ):
-                    st.session_state["analytics_top_n"] = _n
+                    st.session_state["analytics_top_n"] = _value
                     st.rerun()
 
     # ── Daily view ─────────────────────────────────────────────────────────
