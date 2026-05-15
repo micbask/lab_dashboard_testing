@@ -346,33 +346,40 @@ def render(params: dict, ss) -> None:
                 for row in _z_arr
             ]
 
-            # Mask zero cells to NaN so hoverongaps=False can suppress the
-            # tooltip on empty cells.
-            _z = _np.where(_z_arr == 0, _np.nan, _z_arr).tolist()
+            # Use uniform numeric z (no NaN masking). NaN cells trigger
+            # plotly's heatmap `findBin` hit-test to early-exit via the
+            # `hoverongaps:false` branch, and on short charts (1-3 tech
+            # rows = 56-84 px plot area) sub-pixel rounding in
+            # `xaxis.c2p` / `p2c` can snap the cursor's logical position
+            # into a NaN neighbour even when it's visibly over a coloured
+            # brick — producing the "I see the cell, hover doesn't fire"
+            # symptom users reported on Early-AM / NS shifts. Replacing
+            # the NaN mask with a numeric 0 + per-cell `hovertext = ""`
+            # for empty cells keeps tooltip suppression but eliminates
+            # the findBin trap. See plotly.js
+            # src/traces/heatmap/hover.js: `if (zVal === undefined &&
+            # !trace.hoverongaps) return;`
+            _z = _z_arr.tolist()
 
-            _heatmap_kwargs = dict(
-                z=_z,
-                x=_x,
-                y=_techs,
-                text=_text_vals,
-                texttemplate="%{text}",
-                hoverinfo="text",
-                colorscale="YlOrBr",
-                zmin=0,
-                zmax=_vmax_pa,
-                xgap=1,
-                ygap=1,
-                showscale=False,
-            )
-
+            # Build per-cell hovertext: formatted string for cells with
+            # draws, empty string for empty cells. Plotly suppresses the
+            # tooltip entirely when hovertext == "" and hoverinfo ==
+            # "text" — no tooltip box rendered at all.
             if view == "Monthly":
-                # Monthly cells are per-day averages — show only the average,
-                # no per-draw breakdown.
-                _heatmap_kwargs["hovertemplate"] = (
-                    "<b>%{y} @ %{x}</b><br>Avg draws: %{z:.1f}<extra></extra>"
-                )
+                _hovertext = [
+                    [
+                        (
+                            f"<b>{_tech} @ {_x[_j]}</b><br>"
+                            f"Avg draws: {_z_arr[_i, _j]:.1f}"
+                        )
+                        if _z_arr[_i, _j] > 0 else ""
+                        for _j in range(len(_hours_subset))
+                    ]
+                    for _i, _tech in enumerate(_techs)
+                ]
             else:
-                # Daily — build per-cell draw breakdown for the customdata tooltip.
+                # Daily — build per-cell draw breakdown then format the
+                # full tooltip string per cell.
                 if shift is None:
                     _sub = (
                         draw_df[draw_df["location"] == location]
@@ -395,8 +402,9 @@ def render(params: dict, ss) -> None:
                         _n_d = len(_grp_sorted)
                         _n_s = int(_grp_sorted["samples"].sum())
                         _lines = [
+                            f"<b>{_tech} @ {HOUR_LABELS[int(_hour)]}</b>",
                             f"{_n_d} draw{'s' if _n_d != 1 else ''} · "
-                            f"{_n_s} total sample{'s' if _n_s != 1 else ''}"
+                            f"{_n_s} total sample{'s' if _n_s != 1 else ''}",
                         ]
                         for _, _r in _grp_sorted.iterrows():
                             _t = pd.to_datetime(_r["draw_datetime"]).strftime("%H:%M")
@@ -406,16 +414,32 @@ def render(params: dict, ss) -> None:
                             )
                         _details[(_tech, int(_hour))] = "<br>".join(_lines)
 
-                _heatmap_kwargs["customdata"] = [
-                    [_details.get((_tech, _h), None) for _h in _hours_subset]
+                _hovertext = [
+                    [_details.get((_tech, _h), "") for _h in _hours_subset]
                     for _tech in _techs
                 ]
-                _heatmap_kwargs["hovertemplate"] = (
-                    "<b>%{y} @ %{x}</b><br>%{customdata}<extra></extra>"
-                )
+
+            _heatmap_kwargs = dict(
+                z=_z,
+                x=_x,
+                y=_techs,
+                text=_text_vals,
+                texttemplate="%{text}",
+                hovertext=_hovertext,
+                hoverinfo="text",
+                colorscale="YlOrBr",
+                zmin=0,
+                zmax=_vmax_pa,
+                xgap=1,
+                ygap=1,
+                showscale=False,
+                # zsmooth=False disables rendering interpolation, which
+                # otherwise can amplify sub-pixel hit-test errors on
+                # short charts.
+                zsmooth=False,
+            )
 
             _fig = _pgo.Figure(data=_pgo.Heatmap(**_heatmap_kwargs))
-            _fig.update_traces(hoverongaps=False)
 
             # Row-driven chart height — TARGET: each cell is exactly
             # 28 px tall, regardless of how many tech rows the section
@@ -454,6 +478,21 @@ def render(params: dict, ss) -> None:
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
                 dragmode=False,
+                # Hover hit-test tuning for short charts. Default
+                # `hoverdistance=20` lets axis spike points and other
+                # candidates outrank the heatmap's pointData (which uses
+                # the maximum-distance sentinel — see plotly.js
+                # src/traces/heatmap/hover.js:117-121). On a 56-84 px
+                # plot, that 20-px radius covers the entire chart and
+                # produces sporadic hover failures. Setting
+                # `hoverdistance=1` restricts hit-testing to the cell
+                # directly under the cursor; `spikedistance=-1` disables
+                # spike-line competition entirely; `hovermode="closest"`
+                # is explicit (matches the default but pins it against
+                # any future Streamlit / plotly-template override).
+                hovermode="closest",
+                hoverdistance=1,
+                spikedistance=-1,
                 xaxis=dict(
                     tickfont=dict(size=10), side="bottom", fixedrange=True,
                 ),
