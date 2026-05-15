@@ -318,10 +318,21 @@ def load_monthly_avg_for_comparison(
 # TAT METRIC LAYER
 # ════════════════════════════════════════════════════════════════════════════
 
+# Per-priority service-level targets in minutes. The "% within target"
+# stat in the TAT view is computed against the row's own priority
+# target: RT samples vs the 2h SLA, ST/TS vs 1h. To change a target,
+# edit this dict — the summary stats, per-procedure table, bar-chart
+# reference lines, and the dashboard legend all read from here.
+TAT_TARGET_MINUTES: dict[str, int] = {
+    "RT": 120,  # Routine — 2-hour service level
+    "ST": 60,   # Stat — 1-hour
+    "TS": 60,   # Time Study — 1-hour
+}
+
 # Stat columns reported per priority group inside `build_tat_table`'s
 # MultiIndex output. The order here is the order they appear in the
 # rendered table.
-_TAT_STAT_COLS = ["n", "Mean", "% <1h"]
+_TAT_STAT_COLS = ["n", "Mean", "% within target"]
 
 
 def compute_tat_metrics(df: pd.DataFrame) -> pd.DataFrame:
@@ -374,64 +385,94 @@ def build_tat_table(
     """Build a per-procedure TAT statistics table with priority-grouped
     MultiIndex columns.
 
-    Three groups are computed for each procedure:
-      • Routine  — rows where Collection Priority == 'RT'
-      • Stat     — rows where Collection Priority is 'ST' or 'TS'
-                   (TS = Time Study, treated as stat / urgent)
-      • Combined — every row for that procedure regardless of priority
+    Four groups are computed for each procedure:
+      • RT  — Collection Priority == 'RT'   (Routine, target < 2h)
+      • ST  — Collection Priority == 'ST'   (Stat,    target < 1h)
+      • TS  — Collection Priority == 'TS'   (Time Study, target < 1h)
+      • All — every row regardless of priority (weighted % within
+              target: each sample evaluated against its own priority's
+              threshold from TAT_TARGET_MINUTES)
 
-    Per group the function reports n, Mean, and % <1h (percentage of
-    samples with TAT_minutes < 60). Procedures that have no rows in a
-    given group get None for every stat column in that group; rendering
-    displays those as "-".
+    Each group reports n, Mean, and % within target. Procedures with
+    no rows in a given group get None for every stat column in that
+    group; rendering displays those as "-".
 
     The returned DataFrame has one row per procedure in
     `selected_procedures` and a pandas MultiIndex column structure:
 
-        Level 0:  ['Procedure',  'Routine', 'Stat', 'Combined']
-        Level 1:  ['Procedure', then 'n','Mean','% <1h' x 3]
+        Level 0:  ['Procedure', 'RT', 'ST', 'TS', 'All']
+        Level 1:  ['Procedure', then 'n', 'Mean', '% within target' x 4]
 
-    Rows are sorted by Combined n descending; procedures with no
-    Combined samples sort to the bottom.
+    Rows are sorted by All n descending; procedures with no samples
+    sort to the bottom.
     """
     columns = pd.MultiIndex.from_tuples(
         [("Procedure", "Procedure")]
-        + [("Routine",  c) for c in _TAT_STAT_COLS]
-        + [("Stat",     c) for c in _TAT_STAT_COLS]
-        + [("Combined", c) for c in _TAT_STAT_COLS]
+        + [("RT",  c) for c in _TAT_STAT_COLS]
+        + [("ST",  c) for c in _TAT_STAT_COLS]
+        + [("TS",  c) for c in _TAT_STAT_COLS]
+        + [("All", c) for c in _TAT_STAT_COLS]
     )
 
     if tat_df is None or tat_df.empty or not selected_procedures:
         return pd.DataFrame(columns=columns)
 
-    def _group_stats(group_df: pd.DataFrame) -> list:
-        """Return [n, Mean, % <1h] or 3 Nones for an empty group."""
+    def _group_stats(group_df: pd.DataFrame, threshold_minutes: int) -> list:
+        """Return [n, Mean, % within target] for a single-priority
+        subset evaluated against `threshold_minutes`. Three Nones for
+        an empty subset."""
         if group_df.empty:
             return [None, None, None]
         tats = group_df["TAT_minutes"].astype(float)
         return [
             int(len(tats)),
             float(tats.mean()),
-            float((tats < 60).mean() * 100.0),
+            float((tats < threshold_minutes).mean() * 100.0),
         ]
+
+    def _all_stats(proc_rows: pd.DataFrame) -> list:
+        """Return [n, Mean, % within target] for the All aggregate.
+
+        % within target uses each sample's priority-specific threshold
+        (RT vs <2h, ST/TS vs <1h) via vectorized lookup against
+        TAT_TARGET_MINUTES, so the result is the weighted
+        service-level rate across all priorities for this procedure.
+        Samples whose Collection Priority isn't in TAT_TARGET_MINUTES
+        (shouldn't happen post-loader) get NaN thresholds, and
+        `tats < NaN` evaluates False — those count as "not within
+        target" via .fillna(False).
+        """
+        if proc_rows.empty:
+            return [None, None, None]
+        tats = proc_rows["TAT_minutes"].astype(float)
+        n = int(len(proc_rows))
+        mean = float(tats.mean())
+        thresholds = proc_rows["Collection Priority"].map(TAT_TARGET_MINUTES).astype(float)
+        meets = int((tats < thresholds).fillna(False).sum())
+        return [n, mean, float(meets / n * 100.0)]
 
     sel = tat_df[tat_df["Order Procedure"].isin(selected_procedures)]
 
     rows = []
     for proc in selected_procedures:
         proc_rows = sel[sel["Order Procedure"] == proc]
-        rt   = proc_rows[proc_rows["Collection Priority"] == "RT"]
-        stat = proc_rows[proc_rows["Collection Priority"].isin(["ST", "TS"])]
-        comb = proc_rows
+        rt = proc_rows[proc_rows["Collection Priority"] == "RT"]
+        st = proc_rows[proc_rows["Collection Priority"] == "ST"]
+        ts = proc_rows[proc_rows["Collection Priority"] == "TS"]
+
         rows.append(
-            [proc] + _group_stats(rt) + _group_stats(stat) + _group_stats(comb)
+            [proc]
+            + _group_stats(rt, TAT_TARGET_MINUTES["RT"])
+            + _group_stats(st, TAT_TARGET_MINUTES["ST"])
+            + _group_stats(ts, TAT_TARGET_MINUTES["TS"])
+            + _all_stats(proc_rows)
         )
 
     out = pd.DataFrame(rows, columns=columns)
 
-    # Sort by Combined n descending; rows with None n drop to the bottom.
+    # Sort by All n descending; rows with None n drop to the bottom.
     out = (
-        out.sort_values(("Combined", "n"), ascending=False, na_position="last")
+        out.sort_values(("All", "n"), ascending=False, na_position="last")
         .reset_index(drop=True)
     )
     return out

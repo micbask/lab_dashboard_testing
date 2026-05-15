@@ -32,6 +32,7 @@ from analytics.data import (
     build_pivot, build_monthly_pivot, build_weekday_pivot,
     load_monthly_avg_for_comparison,
     compute_tat_metrics, get_top_procedures_by_volume, build_tat_table,
+    TAT_TARGET_MINUTES,
 )
 
 
@@ -644,13 +645,15 @@ def _apply_local_file_scope(
 # TAT VIEW (Phase 2)
 # ════════════════════════════════════════════════════════════════════════════
 
-# Per-priority colours used across the TAT table headers and bar chart so
-# Routine/Stat/All stay visually grouped end-to-end. The "All" column
-# is the union of Routine + Stat/Time-Study (internally still keyed on
-# the "Combined" MultiIndex label coming out of analytics/data.py).
-_TAT_ROUTINE_COLOR  = "#0066cc"
-_TAT_STAT_COLOR     = "#cc6600"
-_TAT_COMBINED_COLOR = "#444444"
+# Per-priority colours used across the TAT legend, summary table,
+# per-procedure table headers, and bar chart so RT/ST/TS/All stay
+# visually grouped end-to-end. TS gets teal — visually distinct from
+# RT's blue and ST's warm orange, no overlap with the urgency-warm
+# range used elsewhere in the dashboard. All stays neutral gray.
+_TAT_ROUTINE_COLOR  = "#0066cc"   # RT (Routine)
+_TAT_STAT_COLOR     = "#cc6600"   # ST (Stat)
+_TAT_TS_COLOR       = "#0a9396"   # TS (Time Study)
+_TAT_COMBINED_COLOR = "#444444"   # All
 
 
 def format_tat(minutes) -> str:
@@ -672,14 +675,28 @@ def format_pct(pct) -> str:
 
 
 def _render_tat_view(params: dict) -> None:
-    """Render the TAT analytics page: KPI strip, procedure filter,
-    Plotly go.Table of priority-grouped statistics, and a horizontal
-    grouped bar chart of mean TAT per procedure.
+    """Render the TAT analytics page.
 
-    The TAT view is now scoped by Performing Service Resource (i.e.
-    Testing Bench) — the same scope used by the Completed and In-Lab
-    views — so the reported turnaround is for the bench that actually
-    ran the test rather than the patient's facility.
+    Layout:
+      1. Priority legend  — RT/ST/TS with their service-level targets
+         (one row, colored dots), sourced from TAT_TARGET_MINUTES.
+      2. Summary by priority — Plotly go.Table with rows RT / ST / TS /
+         All and columns n, Mean TAT, Target, % within target. Each
+         row's % is evaluated against its own priority's target; the
+         All row uses a weighted aggregate across priorities and is
+         the single source of truth for the total-sample count.
+      3. Procedure filter (st.multiselect, defaults to top 5 by volume).
+      4. Turnaround time by procedure — Plotly go.Table, 13 columns
+         (procedure + 4 priority groups × n / Mean / % within target).
+         The priority-specific threshold is named in the column header
+         (RT % <2h, ST % <1h, TS % <1h, All % within target).
+      5. Mean TAT by procedure — horizontal grouped bar chart with 4
+         series (RT, ST, TS, All) plus dashed vertical reference lines
+         at each priority's target (60 min for ST/TS, 120 min for RT).
+
+    The view is scoped by Performing Service Resource (Testing Bench)
+    — same scope as Completed / In-Lab — so the reported turnaround
+    is for the bench that actually ran the test.
     """
     _bench     = params.get("tat_bench") or params["map_type"]
     _date_str  = params.get("tat_date_str") or ""
@@ -701,6 +718,34 @@ def _render_tat_view(params: dict) -> None:
         _date_label = _date_str or "-"
 
     render_header(_bench, f"{_date_label} · TAT")
+
+    # ── Priority legend ────────────────────────────────────────────────────
+    # Colored dot + abbreviation + target, one row under the dashboard
+    # subtitle. Targets are read from TAT_TARGET_MINUTES (analytics/data.py)
+    # so changing a threshold in one place updates the legend, the
+    # summary table, the per-procedure column headers, and the bar
+    # chart reference lines together.
+    _rt_target_h = TAT_TARGET_MINUTES["RT"] // 60
+    _st_target_h = TAT_TARGET_MINUTES["ST"] // 60
+    _ts_target_h = TAT_TARGET_MINUTES["TS"] // 60
+
+    def _legend_chip(color: str, label: str) -> str:
+        return (
+            '<span style="display:inline-flex;align-items:center;">'
+            f'<span style="display:inline-block;width:10px;height:10px;'
+            f'border-radius:50%;background:{color};margin-right:6px;"></span>'
+            f'{label}</span>'
+        )
+
+    st.markdown(
+        '<div style="display:flex;flex-wrap:wrap;gap:18px;align-items:center;'
+        'font-size:12px;color:rgba(0,0,0,0.6);margin-bottom:16px;">'
+        f'{_legend_chip(_TAT_ROUTINE_COLOR, f"RT (Routine, target &lt; {_rt_target_h}h)")}'
+        f'{_legend_chip(_TAT_STAT_COLOR,    f"ST (Stat, target &lt; {_st_target_h}h)")}'
+        f'{_legend_chip(_TAT_TS_COLOR,      f"TS (Time Study, target &lt; {_ts_target_h}h)")}'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
     if not _date_str:
         st.warning("No date string supplied - cannot load TAT data.")
@@ -726,58 +771,144 @@ def _render_tat_view(params: dict) -> None:
     )
     tat_df = compute_tat_metrics(_raw_tat_df)
 
-    # ── KPI strip ──────────────────────────────────────────────────────────
-    if tat_df.empty:
-        _total_samples  = 0
-        _routine_mean   = None
-        _stat_mean      = None
-        _combined_under = None
-    else:
-        _total_samples = int(len(tat_df))
-        _routine = tat_df[tat_df["Collection Priority"] == "RT"]
-        _stat    = tat_df[tat_df["Collection Priority"].isin(["ST", "TS"])]
-        _routine_mean = (
-            float(_routine["TAT_minutes"].mean()) if not _routine.empty else None
-        )
-        _stat_mean = (
-            float(_stat["TAT_minutes"].mean()) if not _stat.empty else None
-        )
-        _combined_under = float(
-            (tat_df["TAT_minutes"] < 60).mean() * 100.0
-        )
-
-    _k1, _k2, _k3, _k4 = st.columns(4)
-    with _k1:
-        st.markdown(
-            metric_card("Total samples", f"{_total_samples:,}", accent=True),
-            unsafe_allow_html=True,
-        )
-    with _k2:
-        st.markdown(
-            metric_card("Avg TAT - routine", format_tat(_routine_mean),
-                        sub="RT samples"),
-            unsafe_allow_html=True,
-        )
-    with _k3:
-        st.markdown(
-            metric_card("Avg TAT - stat", format_tat(_stat_mean),
-                        sub="ST + TS samples"),
-            unsafe_allow_html=True,
-        )
-    with _k4:
-        st.markdown(
-            metric_card("% under 1 hour - combined", format_pct(_combined_under),
-                        sub="all priorities"),
-            unsafe_allow_html=True,
-        )
-
-    st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
-
     if tat_df.empty:
         st.warning(
             f"No TAT data found for **{_bench}** on **{_date_label}**."
         )
         return
+
+    # ── Summary by priority (Plotly go.Table) ─────────────────────────────
+    # Four rows (RT, ST, TS, All), five columns (Priority, n, Mean TAT,
+    # Target, % within target). RT's % is computed against its 2h SLA,
+    # ST/TS against 1h, and the All row aggregates with per-sample
+    # threshold lookup. The Target cell for All shows "-" since the
+    # aggregate has no single scalar threshold.
+    st.markdown(
+        '<div class="section-heading">Summary by priority</div>',
+        unsafe_allow_html=True,
+    )
+
+    _priorities_order = ["RT", "ST", "TS", "All"]
+    _priority_colors_map = {
+        "RT":  _TAT_ROUTINE_COLOR,
+        "ST":  _TAT_STAT_COLOR,
+        "TS":  _TAT_TS_COLOR,
+        "All": _TAT_COMBINED_COLOR,
+    }
+    _priority_fills_map = {
+        "RT":  "rgba(0, 102, 204, 0.10)",
+        "ST":  "rgba(204, 102, 0, 0.10)",
+        "TS":  "rgba(10, 147, 150, 0.10)",
+        "All": "rgba(68, 68, 68, 0.10)",
+    }
+    _priority_target_labels = {
+        "RT":  f"&lt; {_rt_target_h}h",
+        "ST":  f"&lt; {_st_target_h}h",
+        "TS":  f"&lt; {_ts_target_h}h",
+        "All": "-",
+    }
+
+    def _fmt_n_table(v) -> str:
+        if v is None or pd.isna(v):
+            return "-"
+        return f"{int(v):,}"
+
+    # Compute per-priority + All stats. The All row uses the same
+    # weighted threshold logic as build_tat_table._all_stats.
+    _summary_rows: list[tuple] = []
+    for _prio in _priorities_order:
+        if _prio == "All":
+            _subset = tat_df
+        else:
+            _subset = tat_df[tat_df["Collection Priority"] == _prio]
+        if _subset.empty:
+            _summary_rows.append((_prio, None, None, None))
+            continue
+        _n = int(len(_subset))
+        _mean = float(_subset["TAT_minutes"].mean())
+        if _prio == "All":
+            _thresholds = _subset["Collection Priority"].map(
+                TAT_TARGET_MINUTES
+            ).astype(float)
+            _meets = int(
+                (_subset["TAT_minutes"].astype(float) < _thresholds)
+                .fillna(False)
+                .sum()
+            )
+            _pct = float(_meets / _n * 100.0)
+        else:
+            _threshold = TAT_TARGET_MINUTES[_prio]
+            _pct = float((_subset["TAT_minutes"] < _threshold).mean() * 100.0)
+        _summary_rows.append((_prio, _n, _mean, _pct))
+
+    _summary_priority_col = [
+        f"<b><span style='color:{_priority_colors_map[p]}'>{p}</span></b>"
+        for p, _, _, _ in _summary_rows
+    ]
+    _summary_n_col    = [_fmt_n_table(n) for _, n, _, _ in _summary_rows]
+    _summary_mean_col = [format_tat(m) for _, _, m, _ in _summary_rows]
+    _summary_targ_col = [_priority_target_labels[p] for p, _, _, _ in _summary_rows]
+    _summary_pct_col  = [format_pct(pct) for _, _, _, pct in _summary_rows]
+
+    # Tint the Priority cell per row; other cells white. Plotly's
+    # cells.fill_color expects column-major 2D arrays.
+    _summary_priority_fills_list = [
+        _priority_fills_map[p] for p, _, _, _ in _summary_rows
+    ]
+    _summary_cell_fills = [
+        _summary_priority_fills_list,
+        ["#ffffff"] * len(_summary_rows),
+        ["#ffffff"] * len(_summary_rows),
+        ["#ffffff"] * len(_summary_rows),
+        ["#ffffff"] * len(_summary_rows),
+    ]
+
+    _summary_fig = go.Figure(
+        data=go.Table(
+            columnwidth=[1.2, 0.7, 1.0, 0.8, 1.4],
+            header=dict(
+                values=["Priority", "n", "Mean TAT", "Target", "% within target"],
+                fill_color="#ffffff",
+                line_color="#e2e8f0",
+                align="center",
+                font=dict(
+                    family="Inter, system-ui, sans-serif",
+                    size=12,
+                    color="#6F1828",
+                ),
+                height=40,
+            ),
+            cells=dict(
+                values=[
+                    _summary_priority_col,
+                    _summary_n_col,
+                    _summary_mean_col,
+                    _summary_targ_col,
+                    _summary_pct_col,
+                ],
+                fill_color=_summary_cell_fills,
+                line_color="#eef0f3",
+                align=["center", "right", "right", "center", "right"],
+                font=dict(
+                    family="Inter, system-ui, sans-serif",
+                    size=12,
+                    color="#1a1a1a",
+                ),
+                height=32,
+            ),
+        )
+    )
+    _summary_fig.update_layout(
+        height=40 + len(_summary_rows) * 32 + 16,
+        margin=dict(l=4, r=4, t=4, b=4),
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
+    st.plotly_chart(
+        _summary_fig,
+        use_container_width=True,
+        config={"displayModeBar": False},
+        key="tat_summary_table",
+    )
 
     # ── Procedure filter ───────────────────────────────────────────────────
     _all_procs   = sorted(tat_df["Order Procedure"].dropna().unique().tolist())
@@ -802,6 +933,12 @@ def _render_tat_view(params: dict) -> None:
     table_df = build_tat_table(tat_df, _selected)
 
     # ── TAT table (Plotly go.Table) ────────────────────────────────────────
+    # 13 columns: Procedure + 4 priority groups × (n, Mean, % within
+    # target). Each priority group's threshold is named explicitly in
+    # its % column header (RT % <2h, ST % <1h, TS % <1h), so users
+    # never need to guess which target a percentage was measured
+    # against. The All group uses "% within target" because its
+    # per-row aggregate has no single scalar threshold.
     st.markdown(
         '<div class="section-heading">Turnaround time by procedure</div>',
         unsafe_allow_html=True,
@@ -809,15 +946,22 @@ def _render_tat_view(params: dict) -> None:
 
     _tat_headers = [
         "Procedure",
-        f"<span style='color:{_TAT_ROUTINE_COLOR}'>Routine</span><br>n",
-        f"<span style='color:{_TAT_ROUTINE_COLOR}'>Routine</span><br>Mean",
-        f"<span style='color:{_TAT_ROUTINE_COLOR}'>Routine</span><br>% <1h",
-        f"<span style='color:{_TAT_STAT_COLOR}'>Stat</span><br>n",
-        f"<span style='color:{_TAT_STAT_COLOR}'>Stat</span><br>Mean",
-        f"<span style='color:{_TAT_STAT_COLOR}'>Stat</span><br>% <1h",
+        # RT group (target < 2h)
+        f"<span style='color:{_TAT_ROUTINE_COLOR}'>RT</span><br>n",
+        f"<span style='color:{_TAT_ROUTINE_COLOR}'>RT</span><br>Mean",
+        f"<span style='color:{_TAT_ROUTINE_COLOR}'>RT</span><br>% &lt;{_rt_target_h}h",
+        # ST group (target < 1h)
+        f"<span style='color:{_TAT_STAT_COLOR}'>ST</span><br>n",
+        f"<span style='color:{_TAT_STAT_COLOR}'>ST</span><br>Mean",
+        f"<span style='color:{_TAT_STAT_COLOR}'>ST</span><br>% &lt;{_st_target_h}h",
+        # TS group (target < 1h)
+        f"<span style='color:{_TAT_TS_COLOR}'>TS</span><br>n",
+        f"<span style='color:{_TAT_TS_COLOR}'>TS</span><br>Mean",
+        f"<span style='color:{_TAT_TS_COLOR}'>TS</span><br>% &lt;{_ts_target_h}h",
+        # All group (weighted per-sample target)
         f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>n",
         f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>Mean",
-        f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>% <1h",
+        f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>% within target",
     ]
 
     # Column-tinted header / cell fills so the priority groups read as
@@ -825,47 +969,51 @@ def _render_tat_view(params: dict) -> None:
     # dominates the eye.
     _hdr_fill_cells = (
         ["#ffffff"]
-        + ["rgba(0, 102, 204, 0.10)"]   * 3
-        + ["rgba(204, 102, 0, 0.10)"]   * 3
-        + ["rgba(68, 68, 68, 0.10)"]    * 3
+        + ["rgba(0, 102, 204, 0.10)"]   * 3   # RT
+        + ["rgba(204, 102, 0, 0.10)"]   * 3   # ST
+        + ["rgba(10, 147, 150, 0.10)"]  * 3   # TS
+        + ["rgba(68, 68, 68, 0.10)"]    * 3   # All
     )
     _cell_fill_cols = (
         ["#ffffff"]
         + ["rgba(0, 102, 204, 0.04)"]   * 3
         + ["rgba(204, 102, 0, 0.04)"]   * 3
+        + ["rgba(10, 147, 150, 0.04)"]  * 3
         + ["rgba(68, 68, 68, 0.04)"]    * 3
     )
 
-    # Build per-column value lists. n columns are integers (or "-");
-    # Mean uses format_tat; %<1h uses format_pct.
     def _fmt_n(v):
         if v is None or pd.isna(v):
             return "-"
         return f"{int(v):,}"
 
-    _proc_col      = table_df[("Procedure", "Procedure")].tolist()
-    _routine_n     = [_fmt_n(v)      for v in table_df[("Routine",  "n")]]
-    _routine_mean_ = [format_tat(v)  for v in table_df[("Routine",  "Mean")]]
-    _routine_pct   = [format_pct(v)  for v in table_df[("Routine",  "% <1h")]]
-    _stat_n        = [_fmt_n(v)      for v in table_df[("Stat",     "n")]]
-    _stat_mean_    = [format_tat(v)  for v in table_df[("Stat",     "Mean")]]
-    _stat_pct      = [format_pct(v)  for v in table_df[("Stat",     "% <1h")]]
-    _comb_n        = [_fmt_n(v)      for v in table_df[("Combined", "n")]]
-    _comb_mean     = [format_tat(v)  for v in table_df[("Combined", "Mean")]]
-    _comb_pct      = [format_pct(v)  for v in table_df[("Combined", "% <1h")]]
+    _proc_col   = table_df[("Procedure", "Procedure")].tolist()
+    _rt_n_col   = [_fmt_n(v)     for v in table_df[("RT",  "n")]]
+    _rt_mean    = [format_tat(v) for v in table_df[("RT",  "Mean")]]
+    _rt_pct     = [format_pct(v) for v in table_df[("RT",  "% within target")]]
+    _st_n_col   = [_fmt_n(v)     for v in table_df[("ST",  "n")]]
+    _st_mean    = [format_tat(v) for v in table_df[("ST",  "Mean")]]
+    _st_pct     = [format_pct(v) for v in table_df[("ST",  "% within target")]]
+    _ts_n_col   = [_fmt_n(v)     for v in table_df[("TS",  "n")]]
+    _ts_mean    = [format_tat(v) for v in table_df[("TS",  "Mean")]]
+    _ts_pct     = [format_pct(v) for v in table_df[("TS",  "% within target")]]
+    _all_n_col  = [_fmt_n(v)     for v in table_df[("All", "n")]]
+    _all_mean   = [format_tat(v) for v in table_df[("All", "Mean")]]
+    _all_pct    = [format_pct(v) for v in table_df[("All", "% within target")]]
 
     _cell_values = [
         _proc_col,
-        _routine_n, _routine_mean_, _routine_pct,
-        _stat_n,    _stat_mean_,    _stat_pct,
-        _comb_n,    _comb_mean,     _comb_pct,
+        _rt_n_col,  _rt_mean,  _rt_pct,
+        _st_n_col,  _st_mean,  _st_pct,
+        _ts_n_col,  _ts_mean,  _ts_pct,
+        _all_n_col, _all_mean, _all_pct,
     ]
-    _aligns = ["left"] + ["right"] * 9
-    _header_font_colors = ["#6F1828"] + ["#1a1a1a"] * 9
+    _aligns = ["left"] + ["right"] * 12
+    _header_font_colors = ["#6F1828"] + ["#1a1a1a"] * 12
 
     _tat_table_fig = go.Figure(
         data=go.Table(
-            columnwidth=[3] + [1] * 9,
+            columnwidth=[3] + [1] * 12,
             header=dict(
                 values=_tat_headers,
                 fill_color=_hdr_fill_cells,
@@ -876,7 +1024,10 @@ def _render_tat_view(params: dict) -> None:
                     size=12,
                     color=_header_font_colors,
                 ),
-                height=48,
+                # Slightly taller than the original 48 px so the
+                # "% within target" header on the All column wraps to
+                # two lines without clipping.
+                height=56,
             ),
             cells=dict(
                 values=_cell_values,
@@ -895,7 +1046,7 @@ def _render_tat_view(params: dict) -> None:
 
     # Total height = header + n_rows × row_height + small bottom buffer.
     _n_rows = max(1, len(table_df))
-    _table_h = 48 + _n_rows * 32 + 24
+    _table_h = 56 + _n_rows * 32 + 24
     _tat_table_fig.update_layout(
         height=_table_h,
         margin=dict(l=4, r=4, t=4, b=4),
@@ -910,21 +1061,21 @@ def _render_tat_view(params: dict) -> None:
     )
 
     # ── Mean-TAT bar chart ─────────────────────────────────────────────────
+    # 4 series (RT, ST, TS, All), horizontal grouped bars. Vertical
+    # dashed reference lines at each priority's target give a visual
+    # "missing SLA?" cue: any bar that extends past its target line is
+    # over-target. Two distinct lines because ST and TS share the same
+    # 60-min threshold while RT sits at 120.
     st.markdown(
         '<div class="section-heading">Mean TAT by procedure</div>',
         unsafe_allow_html=True,
     )
 
     _bar_procs = list(_proc_col)
-    _routine_means_raw = [
-        v for v in table_df[("Routine",  "Mean")]
-    ]
-    _stat_means_raw = [
-        v for v in table_df[("Stat",     "Mean")]
-    ]
-    _comb_means_raw = [
-        v for v in table_df[("Combined", "Mean")]
-    ]
+    _rt_means_raw  = list(table_df[("RT",  "Mean")])
+    _st_means_raw  = list(table_df[("ST",  "Mean")])
+    _ts_means_raw  = list(table_df[("TS",  "Mean")])
+    _all_means_raw = list(table_df[("All", "Mean")])
 
     def _bar_xs(values):
         # None / NaN means a missing bar; Plotly accepts None to skip.
@@ -939,30 +1090,61 @@ def _render_tat_view(params: dict) -> None:
     _bar_fig = go.Figure()
     _bar_fig.add_trace(go.Bar(
         y=_bar_procs,
-        x=_bar_xs(_routine_means_raw),
-        name="Routine",
+        x=_bar_xs(_rt_means_raw),
+        name="RT",
         orientation="h",
         marker_color=_TAT_ROUTINE_COLOR,
-        hovertemplate=_bar_hover(_routine_means_raw, "Routine"),
+        hovertemplate=_bar_hover(_rt_means_raw, "RT"),
     ))
     _bar_fig.add_trace(go.Bar(
         y=_bar_procs,
-        x=_bar_xs(_stat_means_raw),
-        name="Stat",
+        x=_bar_xs(_st_means_raw),
+        name="ST",
         orientation="h",
         marker_color=_TAT_STAT_COLOR,
-        hovertemplate=_bar_hover(_stat_means_raw, "Stat"),
+        hovertemplate=_bar_hover(_st_means_raw, "ST"),
     ))
     _bar_fig.add_trace(go.Bar(
         y=_bar_procs,
-        x=_bar_xs(_comb_means_raw),
+        x=_bar_xs(_ts_means_raw),
+        name="TS",
+        orientation="h",
+        marker_color=_TAT_TS_COLOR,
+        hovertemplate=_bar_hover(_ts_means_raw, "TS"),
+    ))
+    _bar_fig.add_trace(go.Bar(
+        y=_bar_procs,
+        x=_bar_xs(_all_means_raw),
         name="All",
         orientation="h",
         marker_color=_TAT_COMBINED_COLOR,
-        hovertemplate=_bar_hover(_comb_means_raw, "All"),
+        hovertemplate=_bar_hover(_all_means_raw, "All"),
     ))
 
-    _bar_h = max(300, len(_bar_procs) * 50 + 100)
+    # Reference lines at each priority's target. Annotations sit at
+    # the top of the plot so they don't overlap bars.
+    _bar_fig.add_vline(
+        x=TAT_TARGET_MINUTES["ST"],
+        line_dash="dash",
+        line_color="#aaaaaa",
+        line_width=1,
+        annotation_text=f"ST/TS target ({TAT_TARGET_MINUTES['ST']}m)",
+        annotation_position="top",
+        annotation_font=dict(size=10, color="#666666"),
+    )
+    _bar_fig.add_vline(
+        x=TAT_TARGET_MINUTES["RT"],
+        line_dash="dash",
+        line_color="#aaaaaa",
+        line_width=1,
+        annotation_text=f"RT target ({TAT_TARGET_MINUTES['RT']}m)",
+        annotation_position="top",
+        annotation_font=dict(size=10, color="#666666"),
+    )
+
+    # 60 px per procedure group accommodates 4 bars + group gap; the
+    # +100 covers the legend + axis labels chrome.
+    _bar_h = max(320, len(_bar_procs) * 60 + 100)
     _bar_fig.update_layout(
         height=_bar_h,
         barmode="group",
@@ -971,7 +1153,7 @@ def _render_tat_view(params: dict) -> None:
         dragmode=False,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=10, r=10, t=40, b=30),
+        margin=dict(l=10, r=10, t=50, b=30),
         legend=dict(
             orientation="h",
             yanchor="bottom", y=1.02,
