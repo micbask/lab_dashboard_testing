@@ -213,7 +213,7 @@ html, body,
    FULL-BLEED OVERFLOW SAFETY NET
    ═══════════════════════════════════════════════════════
    The dashboard's dark banner + cardinal stripe use
-   `width: calc(100vw - 320px)` with negative-margin shifting
+   `width: calc(100vw - 18rem)` with negative-margin shifting
    (see render_header below) to bleed past block-container's
    max-width: 1480px and reach stMain's full content area.
    If any wrapper has `overflow-x: hidden` (Streamlit
@@ -230,11 +230,12 @@ html, body,
 }
 
 /* ═══════════════════════════════════════════════════════
-   SIDEBAR — dark background, light text, locked to 320 px
+   SIDEBAR — dark background, light text, locked to 18 rem
    ═══════════════════════════════════════════════════════
    Width is fixed so the user can't drag-resize the sidebar.
-   320 px gives enough room for the section labels and the
-   date input on a single line without wrapping. The resize
+   18 rem (~288 px at the default 16 px root font size) gives
+   enough room for the section labels and the date input on a
+   single line without wrapping. The resize
    handle (split into [data-testid=stSidebarResizer] in some
    Streamlit versions and a bare role="separator" in others)
    is hidden via both selectors so the right edge has no
@@ -242,9 +243,9 @@ html, body,
 /* Sidebar — ALWAYS dark, but width-locked + in-flow only on
    desktop. On mobile (≤768 px) Streamlit's native CSS turns the
    sidebar into a position:absolute overlay; our previous ungated
-   `width: 320px !important; position: relative !important;` rules
+   `width: 18rem !important; position: relative !important;` rules
    were beating that overlay rule (via !important) and pinning the
-   sidebar at 320 px of in-flow column even on a 390 px phone —
+   sidebar at full desktop width even on a 390 px phone —
    which is THE root cause of the screenshot the user submitted.
    Gating width + position to `@media (min-width: 768.01px)` lets
    Streamlit's mobile-overlay behavior take over below the
@@ -261,13 +262,13 @@ section[data-testid="stSidebar"] {
 @media (min-width: 768.01px) {
     [data-testid="stSidebar"],
     section[data-testid="stSidebar"] {
-        width: 320px !important;
-        min-width: 320px !important;
-        max-width: 320px !important;
+        width: 18rem !important;
+        min-width: 18rem !important;
+        max-width: 18rem !important;
         position: relative !important;
     }
     section[data-testid="stSidebar"] > div:first-child {
-        width: 320px !important;
+        width: 18rem !important;
     }
 }
 section[data-testid="stSidebar"] [data-testid="stSidebarResizer"],
@@ -689,8 +690,8 @@ html body section[data-testid="stSidebar"] [data-testid="stSlider"] [data-testid
    ═══════════════════════════════════════════════════════
    Arrow-only icon buttons (← and →) that fill their
    parent st.column. Each column is half-sidebar-width so
-   on the locked 320 px sidebar the buttons are roughly
-   ~140 px wide and visually balanced; the column gap
+   on the locked 18 rem (~288 px) sidebar the buttons are roughly
+   ~125 px wide and visually balanced; the column gap
    ("medium" = 16 px) is the spacing between them.
    Transparent fill + subtle white outline; functionality
    stays identical. */
@@ -1463,7 +1464,8 @@ html body [class*="st-key-top_n_btn_"] button div {
    APP HEADER STRIPE — 2 px cardinal band that sits directly
    between the dark header bar and the light content area.
    Uses the same full-bleed-minus-sidebar margin formula as
-   the bar above (50% - 50vw + 160 px on each side), so the
+   the bar above (50% - 50vw + 9rem on each side, where 9rem
+   is half the 18 rem sidebar width), so the
    stripe runs edge-to-edge with the bar across the full
    content area regardless of block-container's max-width
    1480 px constraint. The cardinal stripe is the only place
@@ -1480,15 +1482,18 @@ html body [class*="st-key-top_n_btn_"] button div {
     position: relative !important;
 }
 /* Desktop full-bleed-minus-sidebar geometry: explicit width = stMain
-   (100vw - 320 px sidebar), shifted left via calc margin so the left
-   edge sits at the sidebar's right edge. On mobile (≤768 px) the
-   sidebar is overlay (not a 320 px column), so this calc geometry
-   becomes wrong — see mobile override below. */
+   (100vw - 18rem sidebar), shifted left via calc margin so the left
+   edge sits at the sidebar's right edge. The +9rem in margin-left is
+   exactly half the sidebar width (sidebar_width / 2), which is how the
+   formula re-centers the bar within stMain after the (50% - 50vw)
+   shift. On mobile (≤768 px) the sidebar is overlay (not an 18 rem
+   column), so this calc geometry becomes wrong — see mobile override
+   below. */
 @media (min-width: 768.01px) {
     .app-header-stripe {
-        width: calc(100vw - 320px) !important;
-        max-width: calc(100vw - 320px) !important;
-        margin-left: calc(50% - 50vw + 160px) !important;
+        width: calc(100vw - 18rem) !important;
+        max-width: calc(100vw - 18rem) !important;
+        margin-left: calc(50% - 50vw + 9rem) !important;
         margin-right: 0 !important;
     }
 }
@@ -1625,9 +1630,10 @@ def render_header(map_type: str, date_str: str) -> None:
     the chrome/content boundary.
 
     Both the bar and the stripe use a full-bleed-minus-sidebar margin
-    formula (`50% - 50vw + 160 px` on each side) so they extend past
-    block-container's max-width 1480 px to reach stMain's full content
-    area (sidebar's right edge → viewport's right edge).
+    formula (`50% - 50vw + 9rem` on each side; 9rem = half the 18rem
+    sidebar width) so they extend past block-container's max-width
+    1480 px to reach stMain's full content area (sidebar's right edge
+    → viewport's right edge).
     """
     _active = st.session_state.get(
         "_nav_dashboard",
@@ -1665,13 +1671,13 @@ def render_header(map_type: str, date_str: str) -> None:
             calc() margins so it spans past block-container's max-width
             1480 px to stMain's edges (sidebar right → viewport right). */
       /* Banner — DESKTOP layout uses full-bleed-minus-sidebar calc()
-         geometry: width = stMain (100vw - 320px sidebar), margin-left
-         calc shift to pin the bar to the sidebar's right edge. On
-         MOBILE (≤768 px) the sidebar is an overlay (not a 320 px
-         column), so the calc() margins shift the banner LEFT 160 px
-         off-screen and the width is `100vw - 320px` which on a 390 px
-         phone = 70 px — producing the 1-char-wide vertical title
-         column in the user's screenshot. The geometry is gated to
+         geometry: width = stMain (100vw - 18rem sidebar), margin-left
+         calc shift to pin the bar to the sidebar's right edge (+9rem
+         is exactly half the sidebar width). On MOBILE (≤768 px) the
+         sidebar is an overlay (not an 18 rem column), so the calc()
+         margins shift the banner off-screen and the width is wrong on
+         a phone-sized viewport — producing the 1-char-wide vertical
+         title column we previously saw. The geometry is gated to
          desktop and a mobile counterpart resets margins to 0 and
          width to 100%.
          The unconditional properties (background, padding, position,
@@ -1690,10 +1696,10 @@ def render_header(map_type: str, date_str: str) -> None:
       }}
       @media (min-width: 768.01px) {{
           {_banner_sel} {{
-              margin-left: calc(50% - 50vw + 160px) !important;
+              margin-left: calc(50% - 50vw + 9rem) !important;
               margin-right: 0 !important;
-              width: calc(100vw - 320px) !important;
-              max-width: calc(100vw - 320px) !important;
+              width: calc(100vw - 18rem) !important;
+              max-width: calc(100vw - 18rem) !important;
           }}
       }}
       @media (max-width: 768px) {{
