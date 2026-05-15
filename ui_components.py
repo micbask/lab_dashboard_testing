@@ -44,6 +44,24 @@ html, body,
     background-color: #f4f4f4 !important;
 }
 
+/* Clip horizontal overflow at the html/body level. The dark header
+   banner and cardinal stripe use `width: calc(100vw - 320px)` for
+   the full-bleed-minus-sidebar effect, but `100vw` includes the
+   vertical-scrollbar gutter (~15-17 px on macOS Chrome / Windows),
+   while the actual visible viewport area is `100vw - scrollbar_width`.
+   On any page tall enough to need a vertical scrollbar, the banner
+   ends up ~17 px wider than visible — combined with the
+   `overflow-x: visible` rule on stMain/block-container below (which
+   we need so the banner isn't clipped from the LEFT), that overflow
+   propagates up to body and produces an unwanted horizontal page
+   scrollbar. Clipping at html/body keeps the banner edge-to-edge
+   visually while preventing the page itself from scrolling sideways.
+   The 17 px of clipped area is only scrollbar-gutter air; no real
+   content lives there. */
+html, body {
+    overflow-x: hidden !important;
+}
+
 /* ═══════════════════════════════════════════════════════
    TOP-OF-PAGE LAYOUT — eliminate the empty strip above
    the dashboard's dark banner
