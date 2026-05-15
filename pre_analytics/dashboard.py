@@ -346,39 +346,33 @@ def render(params: dict, ss) -> None:
                 for row in _z_arr
             ]
 
-            # Use the raw numeric grid (no NaN masking). The previous
-            # approach replaced zeros with NaN so `hoverongaps=False`
-            # would suppress empty-cell tooltips, but on sparse charts
-            # (low-tech shifts with most cells empty) the NaN/value
-            # boundaries created plotly hover dead zones — cursor a
-            # pixel or two off-center on a valid cell would fall into
-            # the NaN region and the tooltip wouldn't fire. Switching
-            # to a per-cell `hovertext` array (empty string for cells
-            # with no draws) suppresses empty-cell tooltips without
-            # introducing any NaN boundaries, so hit-testing works
-            # reliably regardless of how few rows the chart has — and
-            # every cell stays at the uniform 28-px height.
-            _z = _z_arr.tolist()
+            # Mask zero cells to NaN so hoverongaps=False can suppress the
+            # tooltip on empty cells.
+            _z = _np.where(_z_arr == 0, _np.nan, _z_arr).tolist()
+
+            _heatmap_kwargs = dict(
+                z=_z,
+                x=_x,
+                y=_techs,
+                text=_text_vals,
+                texttemplate="%{text}",
+                hoverinfo="text",
+                colorscale="YlOrBr",
+                zmin=0,
+                zmax=_vmax_pa,
+                xgap=1,
+                ygap=1,
+                showscale=False,
+            )
 
             if view == "Monthly":
-                # Monthly cells are per-day averages — pre-format the
-                # tooltip string per cell. Empty string for cells with
-                # zero draws so plotly suppresses the tooltip entirely.
-                _hovertext = [
-                    [
-                        (
-                            f"<b>{_tech} @ {_x[_j]}</b><br>"
-                            f"Avg draws: {_z_arr[_i, _j]:.1f}"
-                        )
-                        if _z_arr[_i, _j] > 0 else ""
-                        for _j in range(len(_hours_subset))
-                    ]
-                    for _i, _tech in enumerate(_techs)
-                ]
+                # Monthly cells are per-day averages — show only the average,
+                # no per-draw breakdown.
+                _heatmap_kwargs["hovertemplate"] = (
+                    "<b>%{y} @ %{x}</b><br>Avg draws: %{z:.1f}<extra></extra>"
+                )
             else:
-                # Daily — build per-cell draw breakdown then format the
-                # full tooltip string per cell. Empty string for cells
-                # without a details entry (no draws that hour).
+                # Daily — build per-cell draw breakdown for the customdata tooltip.
                 if shift is None:
                     _sub = (
                         draw_df[draw_df["location"] == location]
@@ -401,9 +395,8 @@ def render(params: dict, ss) -> None:
                         _n_d = len(_grp_sorted)
                         _n_s = int(_grp_sorted["samples"].sum())
                         _lines = [
-                            f"<b>{_tech} @ {HOUR_LABELS[int(_hour)]}</b>",
                             f"{_n_d} draw{'s' if _n_d != 1 else ''} · "
-                            f"{_n_s} total sample{'s' if _n_s != 1 else ''}",
+                            f"{_n_s} total sample{'s' if _n_s != 1 else ''}"
                         ]
                         for _, _r in _grp_sorted.iterrows():
                             _t = pd.to_datetime(_r["draw_datetime"]).strftime("%H:%M")
@@ -413,28 +406,16 @@ def render(params: dict, ss) -> None:
                             )
                         _details[(_tech, int(_hour))] = "<br>".join(_lines)
 
-                _hovertext = [
-                    [_details.get((_tech, _h), "") for _h in _hours_subset]
+                _heatmap_kwargs["customdata"] = [
+                    [_details.get((_tech, _h), None) for _h in _hours_subset]
                     for _tech in _techs
                 ]
-
-            _heatmap_kwargs = dict(
-                z=_z,
-                x=_x,
-                y=_techs,
-                text=_text_vals,
-                texttemplate="%{text}",
-                hovertext=_hovertext,
-                hoverinfo="text",
-                colorscale="YlOrBr",
-                zmin=0,
-                zmax=_vmax_pa,
-                xgap=1,
-                ygap=1,
-                showscale=False,
-            )
+                _heatmap_kwargs["hovertemplate"] = (
+                    "<b>%{y} @ %{x}</b><br>%{customdata}<extra></extra>"
+                )
 
             _fig = _pgo.Figure(data=_pgo.Heatmap(**_heatmap_kwargs))
+            _fig.update_traces(hoverongaps=False)
 
             # Row-driven chart height — TARGET: each cell is exactly
             # 28 px tall, regardless of how many tech rows the section
