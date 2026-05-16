@@ -883,11 +883,12 @@ def render(params: dict, ss) -> None:
             plus a right-side Total column.
 
             Hour cell value = avg draws per occurrence of that
-            (weekday, hour) slot. Total cell value = avg DAILY total
-            draws for that weekday (sum across all hours / occurrence
-            count). Both traces use the YlOrBr colorscale, each with
-            their own zmin/zmax so the Total column's larger
-            magnitudes don't compress the hour-cell gradient.
+            (weekday, hour) slot, rendered on the YlOrBr gradient.
+            Total cell value = avg DAILY total draws for that weekday
+            (sum across all hours / occurrence count), rendered FLAT
+            NEUTRAL GREY so users don't compare its larger-magnitude
+            daily totals against the hour-cell averages (different
+            scales). Matches the per-shift heatmap's Total column.
 
             Hover surfaces AVERAGES (not totals):
               - Hour cells: avg draws / avg samples / avg active tech
@@ -945,9 +946,12 @@ def render(params: dict, ss) -> None:
             )
             st.markdown(
                 '<div class="heatmap-legend">'
-                'Hour cell = avg draws per occurrence of that '
-                'weekday + hour slot. Total column = avg daily total '
-                'draws for that weekday. Hover shows average figures.'
+                'Values = avg draws per occurrence of that weekday. '
+                'Colour scale: &nbsp;'
+                '<strong style="color:#fff7bc;">■</strong> low &nbsp;→&nbsp; '
+                '<strong style="color:#8c2d04;">■</strong> high '
+                '(hour columns only). &nbsp;'
+                '<strong>Total</strong> column = avg daily total for that weekday.'
                 '</div>',
                 unsafe_allow_html=True,
             )
@@ -1089,15 +1093,15 @@ def render(params: dict, ss) -> None:
             )
 
             # ─── Total column trace ───────────────────────────────────
-            # Same YlOrBr gradient, but its own zmin/zmax based on
-            # Total values so the wide range doesn't compress the hour
-            # gradient. Total cells use the same y-axis (same labels).
+            # Flat neutral grey — the Total column is intentionally
+            # NOT on the YlOrBr gradient so users don't compare its
+            # daily-total magnitudes against the hour-cell averages
+            # (different scales). Matches the per-shift heatmap's
+            # Total column style.
             _x_total_coord = _n_hours
-            _z_totals = [
-                [_avg_draws_wd[_wd]] for _wd in _weekdays
-            ]
+            _z_totals = [[0] for _ in _weekdays]  # flat colorscale; value irrelevant
             _text_totals = [
-                [f"{_avg_draws_wd[_wd]:.0f}"
+                [f"<b>{_avg_draws_wd[_wd]:.0f}</b>"
                  if _avg_draws_wd[_wd] > 0 else ""]
                 for _wd in _weekdays
             ]
@@ -1108,9 +1112,6 @@ def render(params: dict, ss) -> None:
                   _avg_techs_wd[_wd]]]
                 for _wd in _weekdays
             ]
-            _vmax_total = max(
-                [_avg_draws_wd[_wd] for _wd in _weekdays] + [1.0]
-            )
 
             _fig.add_trace(
                 _pgo.Heatmap(
@@ -1120,9 +1121,9 @@ def render(params: dict, ss) -> None:
                     text=_text_totals,
                     texttemplate="%{text}",
                     hoverinfo="text",
-                    colorscale="YlOrBr",
+                    colorscale=[[0.0, "#ececec"], [1.0, "#ececec"]],
                     zmin=0,
-                    zmax=_vmax_total,
+                    zmax=1,
                     xgap=1,
                     ygap=1,
                     showscale=False,
@@ -1188,8 +1189,19 @@ def render(params: dict, ss) -> None:
         # "Completed Volume by Procedure & Hour" header / legend pair).
         # The YlOrBr swatch colours are the actual low/high stops of the
         # Plotly built-in colorscale used on the heatmaps below.
+        # Monthly view appends "· N = X days" to expose the divisor used
+        # to compute the per-cell per-day averages (calendar days in the
+        # month — matches build_draw_pivot's divisor).
+        if pa_view == "Monthly":
+            _n_days_month = _cal.monthrange(_pa_yr, _pa_mo)[1]
+            _draws_heading = (
+                f"Draws by tech &amp; hour · N = {_n_days_month} days"
+            )
+        else:
+            _draws_heading = "Draws by tech &amp; hour"
+
         st.markdown(
-            '<div class="section-heading">Draws by tech &amp; hour</div>',
+            f'<div class="section-heading">{_draws_heading}</div>',
             unsafe_allow_html=True,
         )
         st.markdown(
