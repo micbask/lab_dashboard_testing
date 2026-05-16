@@ -327,14 +327,10 @@ def render(params: dict, ss) -> None:
             All techs from all shifts are laid out in one Plotly figure
             ordered by `_PA_SHIFT_ORDER[location]`. Shifts are demarcated
             visually with:
-              • subtle alternating background bands (low-opacity rect
-                shapes drawn `layer='below'` so they don't compete with
-                the cell colours)
               • thin horizontal divider lines between shift sections
-              • a USC-maroon shift-name annotation in the left margin,
-                vertically centered on each shift's tech rows
-              • a small "{n} draws · {m} techs" summary annotation in the
-                right margin, also vertically centered
+              • a USC-maroon shift-name annotation rendered vertically
+                at the figure's left edge, with the per-shift summary
+                (draws · samples · tech count) surfaced on hover
 
             A right-side "Total" column shows the per-tech daily total
             (Daily view) or per-day average (Monthly view). Like the
@@ -600,22 +596,12 @@ def render(params: dict, ss) -> None:
             _tick_vals = list(_x_hours_coords) + [_x_total_coord]
             _tick_text = [HOUR_LABELS[h] for h in _hours_subset] + ["Total"]
 
-            # Shapes — alternating background bands per shift + 1 px
-            # dividers between shifts. layer='below' keeps them under
-            # the cell colours; they only show through the inter-cell
-            # gaps and the surrounding margin.
+            # Shapes — thin 1 px divider lines between shift sections.
+            # The alternating low-opacity background bands per shift
+            # were removed per design feedback; the dividers alone give
+            # enough visual separation.
             _shapes = []
             for _idx, _info in enumerate(_shift_info):
-                if _idx % 2 == 1:
-                    _shapes.append(dict(
-                        type="rect", layer="below",
-                        xref="x", x0=-0.5, x1=_x_total_coord + 0.5,
-                        yref="y",
-                        y0=_info["start_idx"] - 0.5,
-                        y1=_info["end_idx"] - 0.5,
-                        fillcolor="rgba(0, 0, 0, 0.025)",
-                        line=dict(width=0),
-                    ))
                 if _idx < len(_shift_info) - 1:
                     _shapes.append(dict(
                         type="line",
@@ -626,42 +612,48 @@ def render(params: dict, ss) -> None:
                         line=dict(color="rgba(0, 0, 0, 0.18)", width=1),
                     ))
 
-            # Annotations — shift label (left margin) + per-shift summary
-            # (right margin). HC3's None-shift is rendered without
-            # annotations since there's nothing to label.
+            # Annotations — vertical shift label on the LEFT edge of
+            # the figure container, with the per-shift summary
+            # (draws · samples · tech count) surfaced on hover.
+            # xref="container" pins the annotation to the figure's
+            # left edge, independent of the plot's automargin-expanded
+            # left margin, so the rotated label can never collide with
+            # the tech-name tick labels (which live in the automargin
+            # zone between the plot area and the figure edge).
+            # HC3's None-shift skips the annotation.
             _annotations = []
             for _info in _shift_info:
                 if _info["shift"] is None:
                     continue
                 _mid_y = (_info["start_idx"] + _info["end_idx"] - 1) / 2.0
-
-                # Left: shift name in USC maroon.
                 _annotations.append(dict(
-                    xref="paper", x=-0.005, xanchor="right",
+                    xref="container", x=0.01, xanchor="left",
                     yref="y", y=_mid_y, yanchor="middle",
                     text=f"<b>{_info['shift']}</b>",
+                    textangle=-90,
                     showarrow=False,
-                    align="right",
                     font=dict(
-                        size=11, color="#6F1828",
+                        size=12, color="#6F1828",
                         family="Inter, system-ui, sans-serif",
                     ),
-                ))
-
-                # Right: small per-shift tally, muted grey.
-                _annotations.append(dict(
-                    xref="paper", x=1.005, xanchor="left",
-                    yref="y", y=_mid_y, yanchor="middle",
-                    text=(
-                        f"{_info['n_draws']:,} draws<br>"
-                        f"{_info['n_techs']} tech{'s' if _info['n_techs'] != 1 else ''}"
+                    hovertext=(
+                        f"<b>{_info['shift']}</b><br>"
+                        f"{_info['n_draws']:,} draws · "
+                        f"{_info['n_samples']:,} samples<br>"
+                        f"{_info['n_techs']} tech"
+                        f"{'s' if _info['n_techs'] != 1 else ''}"
                     ),
-                    showarrow=False,
-                    align="left",
-                    font=dict(
-                        size=10, color="rgba(0, 0, 0, 0.55)",
-                        family="Inter, system-ui, sans-serif",
+                    hoverlabel=dict(
+                        bgcolor="white",
+                        bordercolor="#6F1828",
+                        font=dict(
+                            size=12,
+                            family="Inter, system-ui, sans-serif",
+                            color="#1a1a1a",
+                        ),
+                        align="left",
                     ),
+                    captureevents=True,
                 ))
 
             # Chart height — grows with total tech count, comfortably
@@ -671,9 +663,14 @@ def render(params: dict, ss) -> None:
             _plot_h = _n_tot_techs * 28 + 80
             _fig.update_layout(
                 height=_plot_h,
-                # Extra l/r margin for the shift-label and per-shift-
-                # tally annotations that live outside the plot area.
-                margin=dict(l=110, r=110, t=20, b=40),
+                # l=30 leaves a thin strip at the figure's left edge
+                # for the rotated shift-label annotation (xref="container"),
+                # then yaxis automargin expands the margin further to fit
+                # the tech-name tick labels — the annotation sits in the
+                # safe zone outside automargin's range. r=20 since the
+                # per-shift tally has been moved into the shift label's
+                # hover tooltip.
+                margin=dict(l=30, r=20, t=20, b=40),
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
                 dragmode=False,
