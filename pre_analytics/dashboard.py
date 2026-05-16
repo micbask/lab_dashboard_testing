@@ -460,14 +460,25 @@ def render(params: dict, ss) -> None:
                 [1.0,     "#662506"],   # YlOrBr stop 8  (darkest)
             ]
 
+            # Heatmap renders the colored cells with `hoverinfo='skip'`
+            # so the heatmap trace contributes NOTHING to plotly's hover
+            # pipeline. All previous fixes failed because plotly's
+            # heatmap hover (src/traces/heatmap/hover.js) uses a
+            # `findBin` hit-test that misbehaves on short charts — and
+            # tweaking heatmap config alone has not worked. v5 routes
+            # AROUND the buggy code path entirely by layering a scatter
+            # trace on top that carries the actual hover events.
+            # Scatter's hover (src/traces/scatter/hover.js) uses
+            # Euclidean distance from each marker to the cursor — a
+            # completely separate algorithm — and is known to be
+            # reliable on short charts where heatmap hover is not.
             _heatmap_kwargs = dict(
                 z=_z,
                 x=_x,
                 y=_techs,
                 text=_text_vals,
                 texttemplate="%{text}",
-                hovertext=_hovertext,
-                hoverinfo="text",
+                hoverinfo="skip",  # No hover from heatmap — scatter handles it
                 colorscale=_pa_colorscale,
                 zmin=0,
                 zmax=_vmax_pa,
@@ -480,7 +491,43 @@ def render(params: dict, ss) -> None:
                 zsmooth=False,
             )
 
-            _fig = _pgo.Figure(data=_pgo.Heatmap(**_heatmap_kwargs))
+            # Scatter overlay — one invisible marker per cell, sized to
+            # cover the cell so hovering anywhere inside it hits the
+            # marker. Plotly's scatter hover uses Euclidean distance
+            # (distance from cursor to marker centre, minus marker
+            # radius), then compares against the layout `hoverdistance`.
+            # With marker_size=50 (radius 25) and the default
+            # `hoverdistance=20`, hover fires within 45 px of any
+            # marker centre — easily covering the ~50 px-wide × 28 px-
+            # tall cells. Adjacent markers overlap but `hovermode=
+            # "closest"` picks the nearest centre, so each cursor
+            # position resolves to exactly one cell.
+            _scatter_x = []
+            _scatter_y = []
+            _scatter_hover = []
+            for _i, _tech in enumerate(_techs):
+                for _j in range(len(_hours_subset)):
+                    _scatter_x.append(_x[_j])
+                    _scatter_y.append(_tech)
+                    _scatter_hover.append(_hovertext[_i][_j])
+
+            _fig = _pgo.Figure()
+            _fig.add_trace(_pgo.Heatmap(**_heatmap_kwargs))
+            _fig.add_trace(_pgo.Scatter(
+                x=_scatter_x,
+                y=_scatter_y,
+                mode="markers",
+                marker=dict(
+                    size=50,
+                    color="rgba(0,0,0,0)",
+                    line=dict(width=0),
+                    opacity=0,
+                ),
+                hovertext=_scatter_hover,
+                hoverinfo="text",
+                showlegend=False,
+                name="",
+            ))
 
             # Row-driven chart height — TARGET: each cell is exactly
             # 28 px tall, regardless of how many tech rows the section
