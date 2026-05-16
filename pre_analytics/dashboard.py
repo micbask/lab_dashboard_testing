@@ -761,6 +761,320 @@ def render(params: dict, ss) -> None:
                 },
             )
 
+        def _render_pa_hourly_bar(draw_df, location, hour_range,
+                                  date_label, key):
+            """Render the Daily-view hourly draws bar chart.
+
+            X-axis = hours in the selected range, Y-axis = total draws
+            for that hour at the selected location. Bars are USC maroon
+            (#790A26) — matches the analytics dashboard's hourly chart.
+            Hover surfaces total draws, total samples, and the distinct
+            active-tech count for each hour.
+            """
+            _h_start, _h_end = hour_range
+            _hours = list(range(_h_start, _h_end + 1))
+
+            _df = (
+                draw_df[
+                    (draw_df["location"] == location)
+                    & (draw_df["hour"] >= _h_start)
+                    & (draw_df["hour"] <= _h_end)
+                ]
+                if not draw_df.empty else draw_df
+            )
+
+            st.markdown(
+                f'<div class="section-heading">'
+                f'Hourly draws · {date_label}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            if _df.empty:
+                st.info(
+                    f"No draws to chart for **{location}** on "
+                    f"**{date_label}** in the selected hour range."
+                )
+                return
+
+            # Aggregate per hour: total draws, total samples, distinct techs.
+            _agg = _df.groupby("hour").agg(
+                draws=("display_name", "count"),
+                samples=("samples", "sum"),
+                techs=("display_name", "nunique"),
+            )
+            # Reindex to include every hour in the range (zero-fill hours
+            # with no draws) so the bar chart shows the full axis.
+            _agg = _agg.reindex(_hours, fill_value=0)
+
+            _x_labels = [HOUR_LABELS[h] for h in _hours]
+            _y_draws  = _agg["draws"].tolist()
+            _samples  = _agg["samples"].astype(int).tolist()
+            _techs    = _agg["techs"].astype(int).tolist()
+
+            _customdata = [
+                [int(_samples[_i]), int(_techs[_i])]
+                for _i in range(len(_hours))
+            ]
+
+            _fig = _pgo.Figure()
+            _fig.add_trace(
+                _pgo.Bar(
+                    x=_x_labels,
+                    y=_y_draws,
+                    marker_color="#790A26",
+                    customdata=_customdata,
+                    hovertemplate=(
+                        "<b>%{x}</b><br>"
+                        "%{y:,} total draws<br>"
+                        "%{customdata[0]:,} total samples<br>"
+                        "%{customdata[1]} active tech"
+                        "<extra></extra>"
+                    ),
+                )
+            )
+            _fig.update_layout(
+                height=280,
+                margin=dict(l=10, r=10, t=10, b=40),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                dragmode=False,
+                xaxis=dict(
+                    tickfont=dict(size=10),
+                    title=None,
+                    fixedrange=True,
+                    categoryorder="array",
+                    categoryarray=_x_labels,
+                ),
+                yaxis=dict(
+                    tickfont=dict(size=10),
+                    title="Total draws",
+                    fixedrange=True,
+                    automargin=True,
+                ),
+                hoverlabel=dict(
+                    bgcolor="white",
+                    bordercolor="#6F1828",
+                    font=dict(
+                        size=12,
+                        family="Inter, system-ui, sans-serif",
+                        color="#1a1a1a",
+                    ),
+                ),
+            )
+
+            st.plotly_chart(
+                _fig,
+                use_container_width=True,
+                key=key,
+                config={
+                    "staticPlot": False,
+                    "scrollZoom": False,
+                    "displayModeBar": False,
+                },
+            )
+
+        def _render_pa_weekday_pattern(draw_df, location, hour_range,
+                                       year, month, month_label, key):
+            """Render the Monthly-view weekday × hour heatmap.
+
+            Rows = Mon-Sun, columns = hours in the selected range.
+            Cell value = avg draws per occurrence of that (weekday, hour)
+            slot (totals divided by the number of times that weekday
+            appears in the month) — matches the analytics dashboard's
+            weekday-pattern semantics. Hover surfaces the MONTH-TOTAL
+            draws, total samples, and distinct active tech count for
+            the slot (i.e. summed across every occurrence of that
+            weekday in the month).
+            """
+            import calendar as _calwd
+
+            _h_start, _h_end = hour_range
+            _hours = list(range(_h_start, _h_end + 1))
+            _n_hours = len(_hours)
+
+            _weekdays = [
+                "Monday", "Tuesday", "Wednesday", "Thursday",
+                "Friday", "Saturday", "Sunday",
+            ]
+
+            _df = (
+                draw_df[
+                    (draw_df["location"] == location)
+                    & (draw_df["hour"] >= _h_start)
+                    & (draw_df["hour"] <= _h_end)
+                ].copy()
+                if not draw_df.empty else draw_df.copy()
+            )
+
+            st.markdown(
+                f'<div class="section-heading">'
+                f'Weekday pattern · {month_label}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<div class="heatmap-legend">'
+                'Cell value = avg draws per occurrence of that '
+                'weekday + hour slot. Hover shows month totals.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+            if _df.empty:
+                st.info(
+                    f"No draws to chart for **{location}** in "
+                    f"**{month_label}**."
+                )
+                return
+
+            _df["weekday"] = pd.to_datetime(
+                _df["draw_datetime"]
+            ).dt.day_name()
+
+            # Per-(weekday, hour) totals: draws, samples, distinct techs.
+            _agg = _df.groupby(["weekday", "hour"]).agg(
+                draws=("display_name", "count"),
+                samples=("samples", "sum"),
+                techs=("display_name", "nunique"),
+            ).reset_index()
+
+            # Build totals pivots, reindexed to the full weekday × hour grid
+            # so missing slots render as 0.
+            def _pivot(col):
+                return _agg.pivot_table(
+                    index="weekday", columns="hour",
+                    values=col, aggfunc="sum", fill_value=0,
+                ).reindex(
+                    index=_weekdays, columns=_hours, fill_value=0,
+                )
+
+            _tot_draws_pv   = _pivot("draws")
+            _tot_samples_pv = _pivot("samples")
+            _tot_techs_pv   = _pivot("techs")
+
+            # Count occurrences of each weekday in the month (e.g. 4 or 5
+            # Mondays). Used to convert totals to averages for the cell
+            # gradient.
+            _wd_counts = {wd: 0 for wd in _weekdays}
+            _n_days_in_month = _calwd.monthrange(year, month)[1]
+            for _day in range(1, _n_days_in_month + 1):
+                _wd_name = _calwd.day_name[
+                    _calwd.weekday(year, month, _day)
+                ]
+                _wd_counts[_wd_name] += 1
+
+            # Avg draws per occurrence pivot (cell value).
+            _avg_draws_pv = _tot_draws_pv.copy().astype(float)
+            for _wd in _weekdays:
+                _occ = _wd_counts[_wd]
+                if _occ > 0:
+                    _avg_draws_pv.loc[_wd] = (
+                        _avg_draws_pv.loc[_wd] / _occ
+                    )
+
+            _z_arr = _avg_draws_pv.values
+            _flat_nonzero = [v for row in _z_arr for v in row if v > 0]
+            _vmax = (
+                float(_np.percentile(_flat_nonzero, 95))
+                if _flat_nonzero else 1.0
+            )
+            _vmax = max(_vmax, 1.0)
+
+            # Mask zero cells to NaN so empty slots don't show a hover
+            # tooltip (matches the main heatmap's behaviour).
+            _z_masked = _np.where(_z_arr == 0, _np.nan, _z_arr).tolist()
+
+            # Cell text = avg value formatted to 1 decimal.
+            _text_cells = [
+                [f"{v:.1f}" if v > 0 else "" for v in row]
+                for row in _z_arr
+            ]
+
+            # customdata per cell: [hour_label, total_draws,
+            # total_samples, active_techs]. The hover surfaces totals
+            # across the month for the slot.
+            _cd = []
+            for _wd in _weekdays:
+                _row = []
+                for _j, _h in enumerate(_hours):
+                    _label = HOUR_LABELS[_h]
+                    _t_d = int(_tot_draws_pv.loc[_wd].iloc[_j])
+                    _t_s = int(_tot_samples_pv.loc[_wd].iloc[_j])
+                    _t_t = int(_tot_techs_pv.loc[_wd].iloc[_j])
+                    _row.append([_label, _t_d, _t_s, _t_t])
+                _cd.append(_row)
+
+            _fig = _pgo.Figure()
+            _fig.add_trace(
+                _pgo.Heatmap(
+                    z=_z_masked,
+                    x=list(range(_n_hours)),
+                    y=_weekdays,
+                    text=_text_cells,
+                    texttemplate="%{text}",
+                    hoverinfo="text",
+                    colorscale="YlOrBr",
+                    zmin=0,
+                    zmax=_vmax,
+                    xgap=1,
+                    ygap=1,
+                    showscale=False,
+                    customdata=_cd,
+                    hovertemplate=(
+                        "<b>%{y} @ %{customdata[0]}</b><br>"
+                        "%{customdata[1]:,} total draws<br>"
+                        "%{customdata[2]:,} total samples<br>"
+                        "%{customdata[3]} active tech"
+                        "<extra></extra>"
+                    ),
+                    hoverongaps=False,
+                )
+            )
+
+            _fig.update_layout(
+                height=len(_weekdays) * 32 + 50,
+                margin=dict(l=10, r=10, t=10, b=40),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                dragmode=False,
+                xaxis=dict(
+                    tickmode="array",
+                    tickvals=list(range(_n_hours)),
+                    ticktext=[HOUR_LABELS[h] for h in _hours],
+                    tickfont=dict(size=10),
+                    side="bottom",
+                    fixedrange=True,
+                ),
+                yaxis=dict(
+                    tickfont=dict(size=10),
+                    autorange="reversed",
+                    fixedrange=True,
+                    automargin=True,
+                ),
+                hoverlabel=dict(
+                    bgcolor="white",
+                    bordercolor="#6F1828",
+                    font=dict(
+                        size=12,
+                        family="Inter, system-ui, sans-serif",
+                        color="#1a1a1a",
+                    ),
+                    align="left",
+                ),
+            )
+
+            st.plotly_chart(
+                _fig,
+                use_container_width=True,
+                key=key,
+                config={
+                    "staticPlot": False,
+                    "scrollZoom": False,
+                    "displayModeBar": False,
+                },
+            )
+
         # Shared section header + colourscale legend, rendered ONCE above
         # all the per-shift heatmaps (matches the analytics dashboard's
         # "Completed Volume by Procedure & Hour" header / legend pair).
@@ -791,6 +1105,29 @@ def render(params: dict, ss) -> None:
             (pa_h_start, pa_h_end),
             f"subplot_heatmaps_{pa_location}",
         )
+
+        # ── Volume patterns section ──────────────────────────────────
+        # Second chart group, sits below the heatmap. Daily view shows
+        # an hourly bar chart of total draws; Monthly view shows a
+        # weekday × hour heatmap with avg-draws-per-occurrence cells.
+        # Both restrict to the selected location and hour range, and
+        # surface total active techs / draws / samples on hover.
+        st.markdown("---")
+
+        if pa_view == "Daily":
+            _render_pa_hourly_bar(
+                _draw_df, pa_location,
+                (pa_h_start, pa_h_end),
+                _pa_date_label,
+                key=f"pa_hourly_bar_{pa_location}",
+            )
+        else:
+            _render_pa_weekday_pattern(
+                _draw_df, pa_location,
+                (pa_h_start, pa_h_end),
+                _pa_yr, _pa_mo, _pa_date_label,
+                key=f"pa_weekday_pattern_{pa_location}",
+            )
 
     except Exception as e:
         st.exception(e)
