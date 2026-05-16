@@ -620,7 +620,9 @@ def render(params: dict, ss) -> None:
             # left margin, so the rotated label can never collide with
             # the tech-name tick labels (which live in the automargin
             # zone between the plot area and the figure edge).
-            # HC3's None-shift skips the annotation.
+            # HC3's None-shift skips the annotation. NOTE: annotation
+            # hoverlabel only supports bgcolor / bordercolor / font —
+            # no `align` (unlike trace hoverlabel), so it's omitted.
             _annotations = []
             for _info in _shift_info:
                 if _info["shift"] is None:
@@ -651,7 +653,6 @@ def render(params: dict, ss) -> None:
                             family="Inter, system-ui, sans-serif",
                             color="#1a1a1a",
                         ),
-                        align="left",
                     ),
                     captureevents=True,
                 ))
