@@ -327,10 +327,9 @@ def render(params: dict, ss) -> None:
 
             Each shift gets its own subplot, vertically stacked, with the
             shift name as a Plotly subplot title (USC maroon, left-aligned).
-            Two extra "Draws" / "Samples" columns to the right of every
-            hour grid show each tech's total counts (or per-day average in
-            Monthly view) on a flat-neutral colorscale that's independent
-            of the YlOrBr hour gradient.
+            A right-side "Total" column on each subplot shows each tech's
+            total draws (or per-day average in Monthly view); hover on the
+            Total cell surfaces both total draws AND total samples.
 
             Each subplot title carries hover-only metadata (active techs,
             total draws, total samples for the shift). Hover fires through
@@ -341,12 +340,17 @@ def render(params: dict, ss) -> None:
             across the location — a "5" cell means the same draw count
             on every shift.
 
-            Each subplot's row weight is `max(n_techs, MIN_TECHS)`, and
-            total figure height is `sum(weights) * 28 + chrome`. The
-            MIN_TECHS floor (6) ensures every subplot's plot area is
-            ≥168 px, comfortably above plotly's findBin ~120 px
-            hover-precision threshold. Trade-off: cells in low-tech
-            shifts stretch vertically to fill the subplot.
+            Sizing: every subplot's plot area is exactly `n_techs * 28`
+            px, giving uniform 28-px cells across shifts regardless of
+            tech count. Implemented by overriding `yaxis.domain` per
+            subplot in paper coords computed from absolute pixel targets
+            (the native way to pin absolute plot-area heights — Plotly's
+            `row_heights` is relative AND includes chrome, so it can't
+            give exact cell heights).
+
+            Caveat: shifts with 1-2 techs have plot areas below plotly's
+            findBin hover-precision threshold (~120 px), so cell tooltips
+            may be flaky on those — trade-off for uniform cell sizing.
             """
             import calendar as _calp
 
@@ -427,12 +431,10 @@ def render(params: dict, ss) -> None:
             )
             _vmax = max(_vmax, 1.0)
 
-            # Row weights with a floor so short shifts get enough plot
-            # area for reliable hover hit-testing.
-            _MIN_TECHS = 6
-            _row_weights = [
-                max(_d["n_techs"], _MIN_TECHS) for _d in _shift_data
-            ]
+            # Row weights are NOT used — we override yaxis.domain per
+            # subplot below to get absolute pixel control over plot-area
+            # heights, which `row_heights` (relative + includes chrome)
+            # can't give us.
             _n_rows = len(_shift_data)
 
             # Subplot titles — None shift (HC3) renders as empty string,
@@ -441,25 +443,22 @@ def render(params: dict, ss) -> None:
                 _d["shift"] if _d["shift"] else "" for _d in _shift_data
             ]
 
-            # X-axis tick layout — hour labels + two Total column labels.
+            # X-axis tick layout — hour labels + single Total column label.
             # Numeric x-coords (0..n-1) avoid the categorical heatmap
             # half-width rendering bug; tick labels are mapped back via
             # tickvals/ticktext.
-            _x_hour_coords  = list(range(_n_hours))
-            _x_draws_coord  = _n_hours
-            _x_samples_coord = _n_hours + 1
-            _tick_vals = _x_hour_coords + [_x_draws_coord, _x_samples_coord]
+            _x_hour_coords = list(range(_n_hours))
+            _x_total_coord = _n_hours
+            _tick_vals = _x_hour_coords + [_x_total_coord]
             _tick_text = (
-                [HOUR_LABELS[h] for h in _hours_subset]
-                + ["Draws", "Samples"]
+                [HOUR_LABELS[h] for h in _hours_subset] + ["Total"]
             )
 
             _fig = _psub.make_subplots(
                 rows=_n_rows, cols=1,
                 shared_xaxes=False,   # hour labels show on every subplot
-                vertical_spacing=0.06,
+                vertical_spacing=0.02,  # ignored (domains overridden below)
                 subplot_titles=_titles,
-                row_heights=_row_weights,
             )
 
             # Pass 2 — add hours + totals traces per shift.
@@ -543,9 +542,9 @@ def render(params: dict, ss) -> None:
                     row=_i, col=1,
                 )
 
-                # Totals trace — two cells per tech (Draws + Samples),
-                # flat neutral grey so wide-range totals don't compress
-                # the per-hour gradient.
+                # Totals trace — one cell per tech showing total draws,
+                # flat neutral grey. Hover surfaces both total draws AND
+                # total samples for the tech.
                 _z_totals = []
                 _text_totals = []
                 _cd_totals = []
@@ -565,33 +564,32 @@ def render(params: dict, ss) -> None:
                     if view == "Monthly":
                         _d_val = _n_d_tech / max(_n_days, 1)
                         _s_val = _n_s_tech / max(_n_days, 1)
-                        _d_txt = f"{_d_val:.1f}" if _n_d_tech > 0 else ""
-                        _s_txt = f"{_s_val:.1f}" if _n_s_tech > 0 else ""
-                        _d_hover = f"Avg draws/day: {_d_val:.1f}"
-                        _s_hover = f"Avg samples/day: {_s_val:.1f}"
-                    else:
-                        _d_txt = str(_n_d_tech) if _n_d_tech > 0 else ""
-                        _s_txt = str(_n_s_tech) if _n_s_tech > 0 else ""
-                        _d_hover = (
-                            f"{_n_d_tech:,} total draw"
-                            f"{'s' if _n_d_tech != 1 else ''}"
+                        _cell_txt = (
+                            f"{_d_val:.1f}" if _n_d_tech > 0 else ""
                         )
-                        _s_hover = (
+                        _hover = (
+                            f"{_d_val:.1f} avg draws/day · "
+                            f"{_s_val:.1f} avg samples/day"
+                        )
+                    else:
+                        _cell_txt = (
+                            str(_n_d_tech) if _n_d_tech > 0 else ""
+                        )
+                        _hover = (
+                            f"{_n_d_tech:,} total draw"
+                            f"{'s' if _n_d_tech != 1 else ''} · "
                             f"{_n_s_tech:,} total sample"
                             f"{'s' if _n_s_tech != 1 else ''}"
                         )
 
-                    _z_totals.append([0, 0])  # flat colorscale, value irrelevant
-                    _text_totals.append([_d_txt, _s_txt])
-                    _cd_totals.append([
-                        ["Total Draws",   _d_hover],
-                        ["Total Samples", _s_hover],
-                    ])
+                    _z_totals.append([0])  # flat colorscale, value irrelevant
+                    _text_totals.append([_cell_txt])
+                    _cd_totals.append([["Total", _hover]])
 
                 _fig.add_trace(
                     _pgo.Heatmap(
                         z=_z_totals,
-                        x=[_x_draws_coord, _x_samples_coord],
+                        x=[_x_total_coord],
                         y=_d["techs"],
                         text=_text_totals,
                         texttemplate="%{text}",
@@ -632,18 +630,74 @@ def render(params: dict, ss) -> None:
                     row=_i, col=1,
                 )
 
+            # Absolute pixel sizing — every subplot's plot area is
+            # exactly `n_techs * 28` px, giving uniform 28-px cells
+            # across shifts regardless of how many techs each one has.
+            # Implemented by overriding `yaxis.domain` per subplot in
+            # paper coords (computed from pixel targets). `row_heights`
+            # was rejected because it's relative AND includes chrome,
+            # so it can't pin absolute cell heights.
+            #
+            # Caveat: shifts with 1-2 techs get plot areas under
+            # plotly's findBin hover threshold (~120 px); cell tooltips
+            # may be flaky on those. Trade-off the user accepted in
+            # exchange for uniform cells across the location.
+            _PX_PER_TECH    = 28
+            _PX_TITLE_H     = 28
+            _PX_XAXIS_H     = 30
+            _PX_INTER_GAP   = 18
+            _PX_MARGIN_T    = 20
+            _PX_MARGIN_B    = 20
+
+            _plot_areas = [
+                _d["n_techs"] * _PX_PER_TECH for _d in _shift_data
+            ]
+            _total_h = (
+                _PX_MARGIN_T
+                + sum(_PX_TITLE_H + p + _PX_XAXIS_H for p in _plot_areas)
+                + (_n_rows - 1) * _PX_INTER_GAP
+                + _PX_MARGIN_B
+            )
+
+            # Compute each subplot's y-axis domain in paper coords.
+            # Working top-down from the figure top.
+            _y_domains = []
+            _y_px_top = _total_h - _PX_MARGIN_T
+            for _plot_h in _plot_areas:
+                _title_top_px = _y_px_top
+                _plot_top_px  = _title_top_px - _PX_TITLE_H
+                _plot_bot_px  = _plot_top_px - _plot_h
+                _xax_bot_px   = _plot_bot_px - _PX_XAXIS_H
+
+                _y_domains.append([
+                    _plot_bot_px / _total_h,
+                    _plot_top_px / _total_h,
+                ])
+
+                _y_px_top = _xax_bot_px - _PX_INTER_GAP
+
+            # Override each subplot's y-axis domain. X-axis is anchored
+            # to its paired y-axis so x ticks follow automatically.
+            for _i in range(_n_rows):
+                _yax_key = f"yaxis{_i + 1}" if _i > 0 else "yaxis"
+                _fig.layout[_yax_key].domain = _y_domains[_i]
+
             # Restyle the subplot title annotations + attach per-shift
             # hover (active techs / draws / samples). `make_subplots`
             # creates one annotation per row with `xref="x{i} domain"`,
             # x=0.5, centered above the subplot — restyle to USC maroon
-            # bold, left-aligned. NOTE: annotation hoverlabel only
-            # accepts bgcolor/bordercolor/font (not `align`).
+            # bold, left-aligned. Also reposition y to match the
+            # overridden y-axis domains (default y is based on the
+            # auto-computed domain which we replaced above). NOTE:
+            # annotation hoverlabel only accepts
+            # bgcolor/bordercolor/font (not `align`).
             for _i, _ann in enumerate(_fig.layout.annotations):
                 if _i >= len(_shift_data):
                     continue
                 _d = _shift_data[_i]
                 if _d["shift"] is None:
                     continue
+                _dom_top = _y_domains[_i][1]
                 _ann.update(
                     text=f"<b>{_d['shift']}</b>",
                     font=dict(
@@ -652,6 +706,8 @@ def render(params: dict, ss) -> None:
                     ),
                     x=0,
                     xanchor="left",
+                    y=_dom_top + 4 / _total_h,
+                    yanchor="bottom",
                     hovertext=(
                         f"<b>{_d['shift']}</b><br>"
                         f"{_d['n_techs']} active tech"
@@ -673,21 +729,12 @@ def render(params: dict, ss) -> None:
                     ),
                 )
 
-            # Total figure height: sum(weights) * 28 + chrome per row.
-            # Chrome budget per row (~60 px) covers subplot title + x-axis
-            # ticks + vertical spacing.
-            _PX_PER_TECH = 28
-            _PX_CHROME_PER_ROW = 60
-            _total_h = (
-                sum(_row_weights) * _PX_PER_TECH
-                + _PX_CHROME_PER_ROW * _n_rows
-                + 40
-            )
-            _total_h = max(_total_h, 320)
-
             _fig.update_layout(
                 height=_total_h,
-                margin=dict(l=10, r=10, t=20, b=20),
+                margin=dict(
+                    l=10, r=10,
+                    t=_PX_MARGIN_T, b=_PX_MARGIN_B,
+                ),
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
                 dragmode=False,
@@ -736,8 +783,9 @@ def render(params: dict, ss) -> None:
         # Single subplots figure for the whole location — all shifts in
         # one chart, with shift sections demarcated by Plotly subplot
         # titles (USC maroon, hover-only summary). Replaces the previous
-        # per-shift `st.plotly_chart` loop; sized via row_heights so each
-        # shift's subplot has enough plot area for reliable hover.
+        # per-shift `st.plotly_chart` loop; sized via absolute pixel
+        # yaxis.domain overrides so every subplot's plot area is exactly
+        # n_techs * 28 px (uniform cells across shifts).
         _render_pa_subplot_heatmaps(
             _draw_df, pa_location, pa_view,
             (pa_h_start, pa_h_end),
