@@ -529,37 +529,25 @@ def render(params: dict, ss) -> None:
                 name="",
             ))
 
-            # Row-driven chart height — TARGET: each cell is exactly
-            # 28 px tall, regardless of how many tech rows the section
-            # has. Achieved by `total_height = n * 28 + chrome` where
-            # chrome is the EXACT vertical space Plotly subtracts from
-            # `layout.height` to render the surrounding axes.
-            #
-            # Chrome breakdown (verified against plotly.js source —
-            # `src/plots/plots.js::initMargins()` does
-            # `plot_h = layout.height - margin.t - margin.b`):
-            #   • margin.t = 10
-            #   • margin.b = 30  (enough for the 10-pt x-axis tick
-            #     labels + descender + small padding; previously was
-            #     10 which forced labels to render outside the
-            #     reserved margin — invisible/clipped — but the chrome
-            #     SUBTRACTED from layout.height stayed at 20 px,
-            #     causing the prior `+100` budget to LEAK 80 px into
-            #     the plot area; those 80 px got distributed across
-            #     cells, producing `28 + 80/n` per cell — i.e. 68 px
-            #     in a 2-row chart vs 37 px in a 9-row chart, the
-            #     ~2× ratio the user reported)
-            #   • Total chrome = 40 px
-            #
-            # automargin=True is on the y-axis only — Plotly's
-            # MARGIN_MAPPING.height ties t/b to x-axes (NOT y), so
-            # yaxis automargin only affects L/R margins. The x-axis
-            # has no automargin, so chrome is constant at exactly
-            # 40 px regardless of label content.
-            #
-            # Per-cell after this change:  (n*28 + 40 - 40) / n = 28
-            # for ALL n. Uniform.
-            _plot_h = len(_techs) * 28 + 40
+            # Chart height with analytics-style floor:
+            # `max(320, n * 28 + 40)`. Previously this was strict
+            # `n * 28 + 40` so cells rendered at exactly 28 px on every
+            # shift regardless of tech count. That uniform-cell design
+            # produced very short charts on 1-3 tech shifts (96 px or
+            # less of total height, ~56 px of plot area), and every
+            # plotly hover hit-test workaround we tried still failed
+            # to make the tooltip fire reliably on those short charts.
+            # Hypothesis being tested: the uniform-cell sizing IS the
+            # root cause, because below ~120 px of plot area plotly's
+            # heatmap `findBin` algorithm loses sub-pixel precision in
+            # the c2p / p2c round-trip and snaps the cursor to wrong
+            # cells. Analytics never hits the bug because of its 320 px
+            # floor; pre-analytics had no floor. Trading uniform cells
+            # on low-tech shifts (cells stretch to fill the 280 px plot
+            # area) for reliable hover. Shifts with ≥10 techs are
+            # unchanged from before — chart grows past 320 px and per-
+            # cell height stays at 28 px.
+            _plot_h = max(320, len(_techs) * 28 + 40)
             _fig.update_layout(
                 height=_plot_h,
                 margin=dict(l=10, r=10, t=10, b=30),
