@@ -580,12 +580,30 @@ def render(params: dict, ss) -> None:
                 # charts.
                 hovermode="closest",
                 spikedistance=-1,
+                # Explicit axis ranges — disable autorange. The scatter
+                # overlay's markers extend ±25 px (radius) beyond each
+                # marker centre; with `autorange=True`, plotly inflates
+                # the y-axis range by that radius / pixels-per-unit
+                # ratio to fit the markers, which compresses the cells
+                # to ~half their intended height. Locking the axis to
+                # the categorical cell extents (one half-unit beyond
+                # the first/last category) keeps each cell exactly
+                # 28 px tall regardless of marker size.
                 xaxis=dict(
-                    tickfont=dict(size=10), side="bottom", fixedrange=True,
+                    tickfont=dict(size=10),
+                    side="bottom",
+                    fixedrange=True,
+                    autorange=False,
+                    range=[-0.5, len(_x) - 0.5],
                 ),
                 yaxis=dict(
-                    tickfont=dict(size=10), autorange="reversed",
-                    fixedrange=True, automargin=True,
+                    tickfont=dict(size=10),
+                    fixedrange=True,
+                    automargin=True,
+                    autorange=False,
+                    # range start > end → reversed axis (top-to-bottom
+                    # row ordering matches the _techs list order).
+                    range=[len(_techs) - 0.5, -0.5],
                 ),
                 hoverlabel=dict(
                     bgcolor="white",
