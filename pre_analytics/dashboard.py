@@ -346,52 +346,33 @@ def render(params: dict, ss) -> None:
                 for row in _z_arr
             ]
 
-            # Use uniform numeric z (no NaN masking). NaN cells trigger
-            # plotly's heatmap `findBin` hit-test to early-exit via the
-            # `hoverongaps:false` branch, and on short charts (1-3 tech
-            # rows = 56-84 px plot area) sub-pixel rounding in
-            # `xaxis.c2p` / `p2c` can snap the cursor's logical position
-            # into a NaN neighbour even when it's visibly over a coloured
-            # brick — producing the "I see the cell, hover doesn't fire"
-            # symptom users reported on Early-AM / NS shifts. Replacing
-            # the NaN mask with a numeric 0 + per-cell `hovertext = ""`
-            # for empty cells keeps tooltip suppression but eliminates
-            # the findBin trap. See plotly.js
-            # src/traces/heatmap/hover.js: `if (zVal === undefined &&
-            # !trace.hoverongaps) return;`
-            _z = _z_arr.tolist()
+            # Mask zero cells to NaN so hoverongaps=False can suppress the
+            # tooltip on empty cells.
+            _z = _np.where(_z_arr == 0, _np.nan, _z_arr).tolist()
 
-            # Build per-cell hovertext: EVERY cell gets a non-empty
-            # string. Both prior fixes (v1: NaN mask + hoverongaps=False,
-            # v2: numeric z + empty hovertext on empty cells) failed
-            # because plotly's `findBin` hit-test can snap the cursor to
-            # an adjacent cell when sub-pixel rounding in c2p/p2c
-            # produces a 1-pixel error — and if that adjacent cell's
-            # tooltip is "suppressed" (either via the hoverongaps
-            # early-exit or via empty hovertext), no tooltip fires even
-            # though the cursor is visually over a coloured brick. By
-            # giving every cell non-empty text, the snap is harmless:
-            # whichever cell findBin lands on, a tooltip fires. Non-
-            # empty cells get the full draw breakdown; empty cells get
-            # a minimal "no draws this hour" tooltip so the user gets
-            # consistent feedback when moving the cursor across the
-            # chart.
+            _heatmap_kwargs = dict(
+                z=_z,
+                x=_x,
+                y=_techs,
+                text=_text_vals,
+                texttemplate="%{text}",
+                hoverinfo="text",
+                colorscale="YlOrBr",
+                zmin=0,
+                zmax=_vmax_pa,
+                xgap=1,
+                ygap=1,
+                showscale=False,
+            )
+
             if view == "Monthly":
-                _hovertext = [
-                    [
-                        (
-                            f"<b>{_tech} @ {_x[_j]}</b><br>"
-                            f"Avg draws: {_z_arr[_i, _j]:.1f}"
-                        )
-                        if _z_arr[_i, _j] > 0
-                        else f"<b>{_tech} @ {_x[_j]}</b><br>No draws this hour"
-                        for _j in range(len(_hours_subset))
-                    ]
-                    for _i, _tech in enumerate(_techs)
-                ]
+                # Monthly cells are per-day averages — show only the average,
+                # no per-draw breakdown.
+                _heatmap_kwargs["hovertemplate"] = (
+                    "<b>%{y} @ %{x}</b><br>Avg draws: %{z:.1f}<extra></extra>"
+                )
             else:
-                # Daily — build per-cell draw breakdown then format the
-                # full tooltip string per cell.
+                # Daily — build per-cell draw breakdown for the customdata tooltip.
                 if shift is None:
                     _sub = (
                         draw_df[draw_df["location"] == location]
@@ -414,9 +395,8 @@ def render(params: dict, ss) -> None:
                         _n_d = len(_grp_sorted)
                         _n_s = int(_grp_sorted["samples"].sum())
                         _lines = [
-                            f"<b>{_tech} @ {HOUR_LABELS[int(_hour)]}</b>",
                             f"{_n_d} draw{'s' if _n_d != 1 else ''} · "
-                            f"{_n_s} total sample{'s' if _n_s != 1 else ''}",
+                            f"{_n_s} total sample{'s' if _n_s != 1 else ''}"
                         ]
                         for _, _r in _grp_sorted.iterrows():
                             _t = pd.to_datetime(_r["draw_datetime"]).strftime("%H:%M")
@@ -426,127 +406,33 @@ def render(params: dict, ss) -> None:
                             )
                         _details[(_tech, int(_hour))] = "<br>".join(_lines)
 
-                _hovertext = [
-                    [
-                        _details.get(
-                            (_tech, _h),
-                            f"<b>{_tech} @ {HOUR_LABELS[_h]}</b>"
-                            f"<br>No draws this hour",
-                        )
-                        for _h in _hours_subset
-                    ]
+                _heatmap_kwargs["customdata"] = [
+                    [_details.get((_tech, _h), None) for _h in _hours_subset]
                     for _tech in _techs
                 ]
+                _heatmap_kwargs["hovertemplate"] = (
+                    "<b>%{y} @ %{x}</b><br>%{customdata}<extra></extra>"
+                )
 
-            # Custom colorscale: z=0 renders pure white so empty cells
-            # don't show a coloured tint (now that we no longer NaN-
-            # mask). For z > 0 we use the FULL 9-stop ColorBrewer
-            # YlOrBr palette so the gradient matches the original
-            # `colorscale="YlOrBr"` look — a 3-stop white→cream→brown
-            # shortcut (used in v3 first cut) compressed every mid-
-            # range cell into a flat blend and changed the visual
-            # appearance noticeably. These hex codes are the
-            # ColorBrewer YlOrBr-9 sequential ramp.
-            _pa_colorscale = [
-                [0.0,     "#ffffff"],   # z = 0 → pure white
-                [0.0001,  "#ffffe5"],   # YlOrBr stop 0  (palest)
-                [0.125,   "#fff7bc"],   # YlOrBr stop 1
-                [0.25,    "#fee391"],   # YlOrBr stop 2
-                [0.375,   "#fec44f"],   # YlOrBr stop 3
-                [0.5,     "#fe9929"],   # YlOrBr stop 4
-                [0.625,   "#ec7014"],   # YlOrBr stop 5
-                [0.75,    "#cc4c02"],   # YlOrBr stop 6
-                [0.875,   "#993404"],   # YlOrBr stop 7
-                [1.0,     "#662506"],   # YlOrBr stop 8  (darkest)
-            ]
-
-            # Heatmap renders the colored cells with `hoverinfo='skip'`
-            # so the heatmap trace contributes NOTHING to plotly's hover
-            # pipeline. All previous fixes failed because plotly's
-            # heatmap hover (src/traces/heatmap/hover.js) uses a
-            # `findBin` hit-test that misbehaves on short charts — and
-            # tweaking heatmap config alone has not worked. v5 routes
-            # AROUND the buggy code path entirely by layering a scatter
-            # trace on top that carries the actual hover events.
-            # Scatter's hover (src/traces/scatter/hover.js) uses
-            # Euclidean distance from each marker to the cursor — a
-            # completely separate algorithm — and is known to be
-            # reliable on short charts where heatmap hover is not.
-            _heatmap_kwargs = dict(
-                z=_z,
-                x=_x,
-                y=_techs,
-                text=_text_vals,
-                texttemplate="%{text}",
-                hoverinfo="skip",  # No hover from heatmap — scatter handles it
-                colorscale=_pa_colorscale,
-                zmin=0,
-                zmax=_vmax_pa,
-                xgap=1,
-                ygap=1,
-                showscale=False,
-                # zsmooth=False disables rendering interpolation, which
-                # otherwise can amplify sub-pixel hit-test errors on
-                # short charts.
-                zsmooth=False,
-            )
-
-            # Scatter overlay — one invisible marker per cell, sized to
-            # cover the cell so hovering anywhere inside it hits the
-            # marker. Plotly's scatter hover uses Euclidean distance
-            # (distance from cursor to marker centre, minus marker
-            # radius), then compares against the layout `hoverdistance`.
-            # With marker_size=50 (radius 25) and the default
-            # `hoverdistance=20`, hover fires within 45 px of any
-            # marker centre — easily covering the ~50 px-wide × 28 px-
-            # tall cells. Adjacent markers overlap but `hovermode=
-            # "closest"` picks the nearest centre, so each cursor
-            # position resolves to exactly one cell.
-            _scatter_x = []
-            _scatter_y = []
-            _scatter_hover = []
-            for _i, _tech in enumerate(_techs):
-                for _j in range(len(_hours_subset)):
-                    _scatter_x.append(_x[_j])
-                    _scatter_y.append(_tech)
-                    _scatter_hover.append(_hovertext[_i][_j])
-
-            _fig = _pgo.Figure()
-            _fig.add_trace(_pgo.Heatmap(**_heatmap_kwargs))
-            _fig.add_trace(_pgo.Scatter(
-                x=_scatter_x,
-                y=_scatter_y,
-                mode="markers",
-                marker=dict(
-                    size=50,
-                    color="rgba(0,0,0,0)",
-                    line=dict(width=0),
-                    opacity=0,
-                ),
-                hovertext=_scatter_hover,
-                hoverinfo="text",
-                showlegend=False,
-                name="",
-            ))
+            _fig = _pgo.Figure(data=_pgo.Heatmap(**_heatmap_kwargs))
+            _fig.update_traces(hoverongaps=False)
 
             # Chart height with analytics-style floor:
             # `max(320, n * 28 + 40)`. Previously this was strict
             # `n * 28 + 40` so cells rendered at exactly 28 px on every
             # shift regardless of tech count. That uniform-cell design
             # produced very short charts on 1-3 tech shifts (96 px or
-            # less of total height, ~56 px of plot area), and every
-            # plotly hover hit-test workaround we tried still failed
-            # to make the tooltip fire reliably on those short charts.
-            # Hypothesis being tested: the uniform-cell sizing IS the
-            # root cause, because below ~120 px of plot area plotly's
-            # heatmap `findBin` algorithm loses sub-pixel precision in
-            # the c2p / p2c round-trip and snaps the cursor to wrong
-            # cells. Analytics never hits the bug because of its 320 px
-            # floor; pre-analytics had no floor. Trading uniform cells
-            # on low-tech shifts (cells stretch to fill the 280 px plot
-            # area) for reliable hover. Shifts with ≥10 techs are
-            # unchanged from before — chart grows past 320 px and per-
-            # cell height stays at 28 px.
+            # less of total height, ~56 px of plot area) and plotly's
+            # heatmap hover hit-test loses sub-pixel precision below
+            # ~120 px of plot area, so the cursor's logical position
+            # snaps to wrong cells and the tooltip silently fails to
+            # fire on visibly-coloured bricks. Analytics never hits
+            # this bug because its `max(320, n * 28 + 100)` formula
+            # always gives ≥320 px of chart height. Trading uniform
+            # cells on low-tech shifts (cells stretch vertically to
+            # fill the 280 px plot area) for reliable hover. Shifts
+            # with ≥10 techs are visually unchanged — chart grows
+            # past 320 px and per-cell height stays at 28 px.
             _plot_h = max(320, len(_techs) * 28 + 40)
             _fig.update_layout(
                 height=_plot_h,
@@ -554,44 +440,12 @@ def render(params: dict, ss) -> None:
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
                 dragmode=False,
-                # Hover hit-test tuning. `hovermode="closest"` is the
-                # plotly default but pin it explicitly against future
-                # Streamlit / template overrides. `spikedistance=-1`
-                # disables spike-line competition entirely (otherwise on
-                # short charts a spike point can outrank the heatmap as
-                # the "winning" hover target — see plotly.js
-                # src/traces/heatmap/hover.js:117-121). Leave
-                # `hoverdistance` at its default 20 px; v2 tried
-                # `hoverdistance=1` which was too aggressive — restricted
-                # heatmap hover to a 2-pixel window around each cell
-                # center, breaking hover everywhere, not just on short
-                # charts.
-                hovermode="closest",
-                spikedistance=-1,
-                # Explicit axis ranges — disable autorange. The scatter
-                # overlay's markers extend ±25 px (radius) beyond each
-                # marker centre; with `autorange=True`, plotly inflates
-                # the y-axis range by that radius / pixels-per-unit
-                # ratio to fit the markers, which compresses the cells
-                # to ~half their intended height. Locking the axis to
-                # the categorical cell extents (one half-unit beyond
-                # the first/last category) keeps each cell exactly
-                # 28 px tall regardless of marker size.
                 xaxis=dict(
-                    tickfont=dict(size=10),
-                    side="bottom",
-                    fixedrange=True,
-                    autorange=False,
-                    range=[-0.5, len(_x) - 0.5],
+                    tickfont=dict(size=10), side="bottom", fixedrange=True,
                 ),
                 yaxis=dict(
-                    tickfont=dict(size=10),
-                    fixedrange=True,
-                    automargin=True,
-                    autorange=False,
-                    # range start > end → reversed axis (top-to-bottom
-                    # row ordering matches the _techs list order).
-                    range=[len(_techs) - 0.5, -0.5],
+                    tickfont=dict(size=10), autorange="reversed",
+                    fixedrange=True, automargin=True,
                 ),
                 hoverlabel=dict(
                     bgcolor="white",
@@ -613,13 +467,6 @@ def render(params: dict, ss) -> None:
                     "staticPlot": False,
                     "scrollZoom": False,
                     "displayModeBar": False,
-                    # responsive=True triggers Plotly.Plots.resize() on
-                    # window/container resize so internal pixel ↔ data
-                    # coordinate mappings stay in sync with the rendered
-                    # SVG. Streamlit's iframe occasionally produces a
-                    # stale mapping after resize, which can drift the
-                    # hover hit-test by a pixel or two on short charts.
-                    "responsive": True,
                 },
             )
 
