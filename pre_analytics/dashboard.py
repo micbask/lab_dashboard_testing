@@ -439,14 +439,25 @@ def render(params: dict, ss) -> None:
                 ]
 
             # Custom colorscale: z=0 renders pure white so empty cells
-            # don't show the YlOrBr palest tint (which would be visible
-            # on every empty cell now that we no longer NaN-mask). Non-
-            # empty cells (any z > 0) still get the cream-to-brown
-            # YlOrBr gradient via the second and third stops.
+            # don't show a coloured tint (now that we no longer NaN-
+            # mask). For z > 0 we use the FULL 9-stop ColorBrewer
+            # YlOrBr palette so the gradient matches the original
+            # `colorscale="YlOrBr"` look — a 3-stop white→cream→brown
+            # shortcut (used in v3 first cut) compressed every mid-
+            # range cell into a flat blend and changed the visual
+            # appearance noticeably. These hex codes are the
+            # ColorBrewer YlOrBr-9 sequential ramp.
             _pa_colorscale = [
-                [0.0,    "#ffffff"],
-                [0.0001, "#fff7bc"],
-                [1.0,    "#8c2d04"],
+                [0.0,     "#ffffff"],   # z = 0 → pure white
+                [0.0001,  "#ffffe5"],   # YlOrBr stop 0  (palest)
+                [0.125,   "#fff7bc"],   # YlOrBr stop 1
+                [0.25,    "#fee391"],   # YlOrBr stop 2
+                [0.375,   "#fec44f"],   # YlOrBr stop 3
+                [0.5,     "#fe9929"],   # YlOrBr stop 4
+                [0.625,   "#ec7014"],   # YlOrBr stop 5
+                [0.75,    "#cc4c02"],   # YlOrBr stop 6
+                [0.875,   "#993404"],   # YlOrBr stop 7
+                [1.0,     "#662506"],   # YlOrBr stop 8  (darkest)
             ]
 
             _heatmap_kwargs = dict(
