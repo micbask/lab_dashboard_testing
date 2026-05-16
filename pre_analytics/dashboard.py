@@ -320,234 +320,41 @@ def render(params: dict, ss) -> None:
             "HC3":    [None],
         }
 
-        def _render_combined_heatmap(draw_df, location, view, hour_range,
-                                     heatmap_key):
-            """Render a single combined heatmap for the location.
-
-            All techs from all shifts are laid out in one Plotly figure
-            ordered by `_PA_SHIFT_ORDER[location]`. Shifts are demarcated
-            visually with:
-              • thin horizontal divider lines between shift sections
-              • a USC-maroon shift-name annotation rendered vertically
-                at the figure's left edge, with the per-shift summary
-                (draws · samples · tech count) surfaced on hover
-
-            A right-side "Total" column shows the per-tech daily total
-            (Daily view) or per-day average (Monthly view). Like the
-            analytics dashboard, the Total column is a SEPARATE trace
-            with its own flat-neutral colorscale so the wide-range total
-            values don't compress the per-hour gradient. Total cell
-            tooltip surfaces both total draws AND total samples for the
-            tech.
-
-            Combining all shifts into one chart eliminates the short-
-            chart hover precision bug that plagued per-shift charts on
-            shifts with 1-3 techs: total chart height is now
-            (n_total_techs × 28 + chrome), always large enough for
-            plotly's findBin hit-test to work reliably.
-            """
+        def _render_pa_heatmap(draw_df, location, shift, view, heatmap_key,
+                               hour_range):
             _h_start, _h_end = hour_range
             _hours_subset = list(range(_h_start, _h_end + 1))
-            _n_hour_cols  = len(_hours_subset)
 
-            _shifts = _PA_SHIFT_ORDER.get(location, [None])
-
-            # Subset to this location once; reused for shift summaries
-            # and per-cell daily-view details.
-            _loc_df = (
-                draw_df[draw_df["location"] == location]
-                if not draw_df.empty else draw_df
+            # Build the full 0..23 pivot then slice to the selected hours.
+            # Pass year/month so Monthly view divides by calendar days
+            # (not days-with-data, which would overstate sparse months).
+            _pivot = build_draw_pivot(
+                draw_df, location, shift, view,
+                year=_pa_yr, month=_pa_mo,
             )
-            _loc_hr_df = (
-                _loc_df[
-                    (_loc_df["hour"] >= _h_start)
-                    & (_loc_df["hour"] <= _h_end)
-                ]
-                if not _loc_df.empty else _loc_df
-            )
+            _pivot = _pivot[_hours_subset]
+            _techs = _pivot.index.tolist()
+            _x     = [HOUR_LABELS[h] for h in _hours_subset]
 
-            # n_days for Monthly per-day averaging (matches what
-            # build_draw_pivot uses internally).
-            import calendar as _calp
-            _n_days = _calp.monthrange(_pa_yr, _pa_mo)[1] if view == "Monthly" else 1
-
-            # Pass 1 — build the combined tech ordering + per-shift bookkeeping.
-            _combined_techs: list = []
-            _shift_info: list = []   # list of dicts: shift / start_idx / end_idx / etc.
-            _z_hours_rows: list = []
-            for _shift in _shifts:
-                _pivot = build_draw_pivot(
-                    draw_df, location, _shift, view,
-                    year=_pa_yr, month=_pa_mo,
-                )
-                _pivot = _pivot[_hours_subset]
-                _techs = _pivot.index.tolist()
-                if not _techs:
-                    continue
-
-                _start = len(_combined_techs)
-                _combined_techs.extend(_techs)
-                _end = len(_combined_techs)
-
-                for _tech in _techs:
-                    _z_hours_rows.append(_pivot.loc[_tech].tolist())
-
-                # Shift-level summary respects the active hour range so
-                # the right-margin tally matches the KPI cards above.
-                if _shift is None:
-                    _shift_df = _loc_hr_df
-                else:
-                    _shift_df = (
-                        _loc_hr_df[_loc_hr_df["shift"] == _shift]
-                        if not _loc_hr_df.empty else _loc_hr_df
-                    )
-                _shift_n_draws = len(_shift_df)
-                _shift_n_samples = int(_shift_df["samples"].sum()) if not _shift_df.empty else 0
-
-                _shift_info.append({
-                    "shift":     _shift,
-                    "start_idx": _start,
-                    "end_idx":   _end,
-                    "n_techs":   _end - _start,
-                    "n_draws":   _shift_n_draws,
-                    "n_samples": _shift_n_samples,
-                })
-
-            if not _combined_techs:
-                st.info(
-                    f"No data for **{location}** on **{_pa_date_label}** in "
-                    f"the selected hour range."
-                )
-                return
-
-            _n_tot_techs = len(_combined_techs)
-
-            # zmax keyed to non-zero hour-cell values only — Total column
-            # has its own colorscale so wide-range totals can't pull the
-            # gradient off-scale.
-            _flat = [v for row in _z_hours_rows for v in row if v > 0]
+            _z_arr   = _pivot.values.astype(float)
+            _flat    = [v for row in _z_arr for v in row if v > 0]
             _vmax_pa = float(_np.percentile(_flat, 95)) if _flat else 1.0
             _vmax_pa = max(_vmax_pa, 1.0)
 
-            # Per-hour-cell text labels (integer count or empty string).
-            _text_hours = [
+            _text_vals = [
                 [str(int(round(v))) if v > 0 else "" for v in row]
-                for row in _z_hours_rows
+                for row in _z_arr
             ]
 
-            # Per-tech Total column = sum of filtered hours (Daily) or
-            # sum of avg-per-day per-hour values (Monthly, which is the
-            # avg total per day).
-            _z_total_rows = [[sum(row)] for row in _z_hours_rows]
-            _text_total = []
-            for [v] in _z_total_rows:
-                if v <= 0:
-                    _text_total.append([""])
-                elif view == "Monthly":
-                    _text_total.append([f"{v:.1f}"])
-                else:
-                    _text_total.append([str(int(round(v)))])
+            # Mask zero cells to NaN so hoverongaps=False can suppress the
+            # tooltip on empty cells.
+            _z = _np.where(_z_arr == 0, _np.nan, _z_arr).tolist()
 
-            # NaN-mask zero hour cells so hoverongaps=False can suppress
-            # tooltips on empty cells. The Total trace keeps numeric
-            # zeros — its flat colorscale renders zero the same as any
-            # value, and hovertemplate handles the "no draws" case.
-            _z_hours_masked = [
-                [_np.nan if v == 0 else v for v in row]
-                for row in _z_hours_rows
-            ]
-
-            # Per-cell hover details: Daily view shows the per-draw
-            # breakdown sourced from the raw draw_df; Monthly view shows
-            # the avg-per-day figure pulled from the pivot.
-            _details: dict = {}
-            if view == "Daily" and not _loc_df.empty:
-                for (_tech, _hour), _grp in _loc_df.groupby(
-                    ["display_name", "hour"]
-                ):
-                    if _hour < _h_start or _hour > _h_end:
-                        continue
-                    _grp_sorted = _grp.sort_values("draw_datetime")
-                    _n_d = len(_grp_sorted)
-                    _n_s = int(_grp_sorted["samples"].sum())
-                    _lines = [
-                        f"{_n_d} draw{'s' if _n_d != 1 else ''} · "
-                        f"{_n_s} total sample{'s' if _n_s != 1 else ''}"
-                    ]
-                    for _, _r in _grp_sorted.iterrows():
-                        _t = pd.to_datetime(_r["draw_datetime"]).strftime("%H:%M")
-                        _s = int(_r["samples"])
-                        _lines.append(
-                            f"{_t} - {_s} sample{'s' if _s != 1 else ''}"
-                        )
-                    _details[(_tech, int(_hour))] = "<br>".join(_lines)
-
-            # Per-tech totals for the Total column hover. Daily: counts
-            # are absolute. Monthly: divide by days-in-month to express
-            # the same per-day-average semantics the cell text shows.
-            _tech_totals: dict = {}
-            if not _loc_hr_df.empty:
-                for _tech, _grp in _loc_hr_df.groupby("display_name"):
-                    _tech_totals[_tech] = (
-                        len(_grp),
-                        int(_grp["samples"].sum()),
-                    )
-
-            # customdata for hour cells: [hour_label, detail_html]. The
-            # numeric x-coords (0..N-1) require us to surface the hour
-            # label via customdata because %{x} would render as the
-            # integer index.
-            _cd_hours = []
-            for _i, _tech in enumerate(_combined_techs):
-                _row = []
-                for _j, _h in enumerate(_hours_subset):
-                    _label = HOUR_LABELS[_h]
-                    if view == "Monthly":
-                        _v = _z_hours_rows[_i][_j]
-                        _detail = f"Avg draws: {_v:.1f}" if _v > 0 else "No draws this hour"
-                    else:
-                        _detail = _details.get(
-                            (_tech, _h),
-                            "No draws this hour",
-                        )
-                    _row.append([_label, _detail])
-                _cd_hours.append(_row)
-
-            # customdata for Total cells: one [label, detail_html] per
-            # tech. Detail surfaces total draws and total samples (Daily)
-            # or per-day averages (Monthly).
-            _cd_total = []
-            for _tech in _combined_techs:
-                _n_d, _n_s = _tech_totals.get(_tech, (0, 0))
-                if view == "Monthly":
-                    _avg_d = _n_d / max(_n_days, 1)
-                    _avg_s = _n_s / max(_n_days, 1)
-                    _detail = (
-                        f"{_avg_d:.1f} avg draws/day · "
-                        f"{_avg_s:.1f} avg samples/day"
-                    )
-                else:
-                    _detail = (
-                        f"{_n_d:,} draw{'s' if _n_d != 1 else ''} · "
-                        f"{_n_s:,} total sample{'s' if _n_s != 1 else ''}"
-                    )
-                _cd_total.append([["Total", _detail]])
-
-            # Numeric x-coords let the hour heatmap and the Total heatmap
-            # share a single x-axis without the categorical-side-by-side
-            # half-width rendering bug. Tick labels are restored manually
-            # via tickvals/ticktext below.
-            _x_hours_coords = list(range(_n_hour_cols))
-            _x_total_coord  = _n_hour_cols
-
-            _fig = _pgo.Figure()
-
-            # Hour-columns trace: YlOrBr gradient, NaN-masked zeros.
-            _fig.add_trace(_pgo.Heatmap(
-                z=_z_hours_masked,
-                x=_x_hours_coords,
-                y=_combined_techs,
-                text=_text_hours,
+            _heatmap_kwargs = dict(
+                z=_z,
+                x=_x,
+                y=_techs,
+                text=_text_vals,
                 texttemplate="%{text}",
                 hoverinfo="text",
                 colorscale="YlOrBr",
@@ -556,154 +363,89 @@ def render(params: dict, ss) -> None:
                 xgap=1,
                 ygap=1,
                 showscale=False,
-                customdata=_cd_hours,
-                hovertemplate=(
-                    "<b>%{y} @ %{customdata[0]}</b><br>"
-                    "%{customdata[1]}<extra></extra>"
-                ),
-            ))
+            )
 
-            # Total-column trace: flat neutral grey, independent of the
-            # hour gradient. Same y-axis (categorical techs) so rows
-            # line up exactly with the hour grid.
-            _fig.add_trace(_pgo.Heatmap(
-                z=_z_total_rows,
-                x=[_x_total_coord],
-                y=_combined_techs,
-                text=_text_total,
-                texttemplate="%{text}",
-                hoverinfo="text",
-                # 2-stop flat colorscale — every total cell renders as the
-                # same neutral grey regardless of magnitude.
-                colorscale=[[0.0, "#ececec"], [1.0, "#ececec"]],
-                zmin=0,
-                zmax=1,
-                xgap=1,
-                ygap=1,
-                showscale=False,
-                customdata=_cd_total,
-                hovertemplate=(
-                    "<b>%{y} @ %{customdata[0]}</b><br>"
-                    "%{customdata[1]}<extra></extra>"
-                ),
-                textfont=dict(color="#1a1a1a", size=11),
-            ))
+            if view == "Monthly":
+                # Monthly cells are per-day averages — show only the average,
+                # no per-draw breakdown.
+                _heatmap_kwargs["hovertemplate"] = (
+                    "<b>%{y} @ %{x}</b><br>Avg draws: %{z:.1f}<extra></extra>"
+                )
+            else:
+                # Daily — build per-cell draw breakdown for the customdata tooltip.
+                if shift is None:
+                    _sub = (
+                        draw_df[draw_df["location"] == location]
+                        if not draw_df.empty else draw_df
+                    )
+                else:
+                    _sub = (
+                        draw_df[
+                            (draw_df["location"] == location)
+                            & (draw_df["shift"] == shift)
+                        ] if not draw_df.empty else draw_df
+                    )
 
+                _details: dict = {}
+                if not _sub.empty:
+                    for (_tech, _hour), _grp in _sub.groupby(
+                        ["display_name", "hour"]
+                    ):
+                        _grp_sorted = _grp.sort_values("draw_datetime")
+                        _n_d = len(_grp_sorted)
+                        _n_s = int(_grp_sorted["samples"].sum())
+                        _lines = [
+                            f"{_n_d} draw{'s' if _n_d != 1 else ''} · "
+                            f"{_n_s} total sample{'s' if _n_s != 1 else ''}"
+                        ]
+                        for _, _r in _grp_sorted.iterrows():
+                            _t = pd.to_datetime(_r["draw_datetime"]).strftime("%H:%M")
+                            _s = int(_r["samples"])
+                            _lines.append(
+                                f"{_t} - {_s} sample{'s' if _s != 1 else ''}"
+                            )
+                        _details[(_tech, int(_hour))] = "<br>".join(_lines)
+
+                _heatmap_kwargs["customdata"] = [
+                    [_details.get((_tech, _h), None) for _h in _hours_subset]
+                    for _tech in _techs
+                ]
+                _heatmap_kwargs["hovertemplate"] = (
+                    "<b>%{y} @ %{x}</b><br>%{customdata}<extra></extra>"
+                )
+
+            _fig = _pgo.Figure(data=_pgo.Heatmap(**_heatmap_kwargs))
             _fig.update_traces(hoverongaps=False)
 
-            # X-axis tick labels: hour names for the gradient cells +
-            # "Total" for the right-most cell.
-            _tick_vals = list(_x_hours_coords) + [_x_total_coord]
-            _tick_text = [HOUR_LABELS[h] for h in _hours_subset] + ["Total"]
-
-            # Shapes — thin 1 px divider lines between shift sections.
-            # The alternating low-opacity background bands per shift
-            # were removed per design feedback; the dividers alone give
-            # enough visual separation.
-            _shapes = []
-            for _idx, _info in enumerate(_shift_info):
-                if _idx < len(_shift_info) - 1:
-                    _shapes.append(dict(
-                        type="line",
-                        xref="x", x0=-0.5, x1=_x_total_coord + 0.5,
-                        yref="y",
-                        y0=_info["end_idx"] - 0.5,
-                        y1=_info["end_idx"] - 0.5,
-                        line=dict(color="rgba(0, 0, 0, 0.18)", width=1),
-                    ))
-
-            # Annotations — vertical shift label rendered INSIDE the
-            # plot area in a thin label strip on the left, with the
-            # per-shift summary (draws · samples · tech count) surfaced
-            # on hover. The x-axis range is extended below by
-            # `_LABEL_STRIP_W` data units (see xaxis.range below), so
-            # x ∈ [-_LABEL_STRIP_W - 0.5, -0.5] is empty in-plot space
-            # to the left of the first cell. Placing the rotated label
-            # at x=-1.2 puts it in that strip — safely separated from
-            # both the tech-name tick labels (which live in the left
-            # margin) and the heatmap cells. xref="container" would
-            # have been simpler but isn't supported on this Plotly
-            # version. HC3's None-shift skips the annotation. NOTE:
-            # annotation hoverlabel only supports bgcolor / bordercolor
-            # / font — no `align` (unlike trace hoverlabel).
-            _annotations = []
-            for _info in _shift_info:
-                if _info["shift"] is None:
-                    continue
-                _mid_y = (_info["start_idx"] + _info["end_idx"] - 1) / 2.0
-                _annotations.append(dict(
-                    xref="x", x=-1.2, xanchor="center",
-                    yref="y", y=_mid_y, yanchor="middle",
-                    text=f"<b>{_info['shift']}</b>",
-                    textangle=-90,
-                    showarrow=False,
-                    font=dict(
-                        size=12, color="#6F1828",
-                        family="Inter, system-ui, sans-serif",
-                    ),
-                    hovertext=(
-                        f"<b>{_info['shift']}</b><br>"
-                        f"{_info['n_draws']:,} draws · "
-                        f"{_info['n_samples']:,} samples<br>"
-                        f"{_info['n_techs']} tech"
-                        f"{'s' if _info['n_techs'] != 1 else ''}"
-                    ),
-                    hoverlabel=dict(
-                        bgcolor="white",
-                        bordercolor="#6F1828",
-                        font=dict(
-                            size=12,
-                            family="Inter, system-ui, sans-serif",
-                            color="#1a1a1a",
-                        ),
-                    ),
-                    captureevents=True,
-                ))
-
-            # Chart height — grows with total tech count, comfortably
-            # above plotly's findBin hover-precision threshold for every
-            # location (Keck has ~24 techs across 4 shifts → ~700 px;
-            # Norris ~17 → ~520 px; HC3 ~10 → ~360 px).
-            _plot_h = _n_tot_techs * 28 + 80
-            # Width (in x-axis data units) of the in-plot "label strip"
-            # reserved on the left for the rotated shift-name
-            # annotations. Two data units ≈ two hour-column widths of
-            # padding, which is enough room for a font-size-12 rotated
-            # label without crowding the first hour cell. Skipped on
-            # HC3 (no shift labels) so we don't waste space.
-            _has_shift_labels = any(
-                _i["shift"] is not None for _i in _shift_info
-            )
-            _label_strip_w = 2.0 if _has_shift_labels else 0.0
+            # Chart height with analytics-style floor:
+            # `max(320, n * 28 + 40)`. Previously this was strict
+            # `n * 28 + 40` so cells rendered at exactly 28 px on every
+            # shift regardless of tech count. That uniform-cell design
+            # produced very short charts on 1-3 tech shifts (96 px or
+            # less of total height, ~56 px of plot area) and plotly's
+            # heatmap hover hit-test loses sub-pixel precision below
+            # ~120 px of plot area, so the cursor's logical position
+            # snaps to wrong cells and the tooltip silently fails to
+            # fire on visibly-coloured bricks. Analytics never hits
+            # this bug because its `max(320, n * 28 + 100)` formula
+            # always gives ≥320 px of chart height. Trading uniform
+            # cells on low-tech shifts (cells stretch vertically to
+            # fill the 280 px plot area) for reliable hover. Shifts
+            # with ≥10 techs are visually unchanged — chart grows
+            # past 320 px and per-cell height stays at 28 px.
+            _plot_h = max(320, len(_techs) * 28 + 40)
             _fig.update_layout(
                 height=_plot_h,
-                # Tight margins — tech-name tick labels live in the
-                # automargin-expanded left margin; rotated shift labels
-                # live inside the plot area in the label strip carved
-                # out via xaxis.range below.
-                margin=dict(l=10, r=20, t=20, b=40),
+                margin=dict(l=10, r=10, t=10, b=30),
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
                 dragmode=False,
-                shapes=_shapes,
-                annotations=_annotations,
                 xaxis=dict(
-                    tickmode="array",
-                    tickvals=_tick_vals,
-                    ticktext=_tick_text,
-                    tickfont=dict(size=10),
-                    side="bottom",
-                    fixedrange=True,
-                    # Extend the axis range left by `_label_strip_w`
-                    # data units so the rotated shift-label annotations
-                    # (at x=-1.2) have empty in-plot space to occupy.
-                    range=[-0.5 - _label_strip_w, _x_total_coord + 0.5],
+                    tickfont=dict(size=10), side="bottom", fixedrange=True,
                 ),
                 yaxis=dict(
-                    tickfont=dict(size=10),
-                    autorange="reversed",
-                    fixedrange=True,
-                    automargin=True,
+                    tickfont=dict(size=10), autorange="reversed",
+                    fixedrange=True, automargin=True,
                 ),
                 hoverlabel=dict(
                     bgcolor="white",
@@ -747,19 +489,23 @@ def render(params: dict, ss) -> None:
             unsafe_allow_html=True,
         )
 
-        # Single combined heatmap for the whole location — all techs
-        # from every shift in one chart, with shift sections demarcated
-        # via in-chart annotations and divider lines. Replaces the
-        # previous per-shift loop (one separate plotly chart per shift)
-        # which hit a heatmap hover hit-test precision bug on shifts
-        # with 1-3 techs because their chart was too short (~56-96 px)
-        # for plotly's findBin to resolve the cursor reliably. Combining
-        # all shifts into a single tall chart sidesteps that entirely.
-        _render_combined_heatmap(
-            _draw_df, pa_location, pa_view,
-            (pa_h_start, pa_h_end),
-            f"combined_heatmap_{pa_location}",
-        )
+        for _pa_shift in _PA_SHIFT_ORDER.get(pa_location, [None]):
+            if pa_location != "HC3" and _pa_shift is not None:
+                # Per-shift heading uses the shared .section-heading class
+                # (16 px / weight 500 / cardinal-stripe gold underline) for
+                # visual parity with the analytics dashboard's section
+                # headings. Previously used `st.subheader` which renders an
+                # <h3> at Streamlit's default ~28 px — dominated the page
+                # visually and looked inconsistent with the rest of the app.
+                st.markdown(
+                    f'<div class="section-heading">{pa_location} - {_pa_shift}</div>',
+                    unsafe_allow_html=True,
+                )
+            _hkey = f"heatmap_{pa_location}_{_pa_shift or 'all'}"
+            _render_pa_heatmap(
+                _draw_df, pa_location, _pa_shift, pa_view, _hkey,
+                (pa_h_start, pa_h_end),
+            )
 
     except Exception as e:
         st.exception(e)
