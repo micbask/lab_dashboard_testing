@@ -361,10 +361,21 @@ def render(params: dict, ss) -> None:
             # !trace.hoverongaps) return;`
             _z = _z_arr.tolist()
 
-            # Build per-cell hovertext: formatted string for cells with
-            # draws, empty string for empty cells. Plotly suppresses the
-            # tooltip entirely when hovertext == "" and hoverinfo ==
-            # "text" — no tooltip box rendered at all.
+            # Build per-cell hovertext: EVERY cell gets a non-empty
+            # string. Both prior fixes (v1: NaN mask + hoverongaps=False,
+            # v2: numeric z + empty hovertext on empty cells) failed
+            # because plotly's `findBin` hit-test can snap the cursor to
+            # an adjacent cell when sub-pixel rounding in c2p/p2c
+            # produces a 1-pixel error — and if that adjacent cell's
+            # tooltip is "suppressed" (either via the hoverongaps
+            # early-exit or via empty hovertext), no tooltip fires even
+            # though the cursor is visually over a coloured brick. By
+            # giving every cell non-empty text, the snap is harmless:
+            # whichever cell findBin lands on, a tooltip fires. Non-
+            # empty cells get the full draw breakdown; empty cells get
+            # a minimal "no draws this hour" tooltip so the user gets
+            # consistent feedback when moving the cursor across the
+            # chart.
             if view == "Monthly":
                 _hovertext = [
                     [
@@ -372,7 +383,8 @@ def render(params: dict, ss) -> None:
                             f"<b>{_tech} @ {_x[_j]}</b><br>"
                             f"Avg draws: {_z_arr[_i, _j]:.1f}"
                         )
-                        if _z_arr[_i, _j] > 0 else ""
+                        if _z_arr[_i, _j] > 0
+                        else f"<b>{_tech} @ {_x[_j]}</b><br>No draws this hour"
                         for _j in range(len(_hours_subset))
                     ]
                     for _i, _tech in enumerate(_techs)
@@ -415,9 +427,27 @@ def render(params: dict, ss) -> None:
                         _details[(_tech, int(_hour))] = "<br>".join(_lines)
 
                 _hovertext = [
-                    [_details.get((_tech, _h), "") for _h in _hours_subset]
+                    [
+                        _details.get(
+                            (_tech, _h),
+                            f"<b>{_tech} @ {HOUR_LABELS[_h]}</b>"
+                            f"<br>No draws this hour",
+                        )
+                        for _h in _hours_subset
+                    ]
                     for _tech in _techs
                 ]
+
+            # Custom colorscale: z=0 renders pure white so empty cells
+            # don't show the YlOrBr palest tint (which would be visible
+            # on every empty cell now that we no longer NaN-mask). Non-
+            # empty cells (any z > 0) still get the cream-to-brown
+            # YlOrBr gradient via the second and third stops.
+            _pa_colorscale = [
+                [0.0,    "#ffffff"],
+                [0.0001, "#fff7bc"],
+                [1.0,    "#8c2d04"],
+            ]
 
             _heatmap_kwargs = dict(
                 z=_z,
@@ -427,7 +457,7 @@ def render(params: dict, ss) -> None:
                 texttemplate="%{text}",
                 hovertext=_hovertext,
                 hoverinfo="text",
-                colorscale="YlOrBr",
+                colorscale=_pa_colorscale,
                 zmin=0,
                 zmax=_vmax_pa,
                 xgap=1,
@@ -478,20 +508,19 @@ def render(params: dict, ss) -> None:
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
                 dragmode=False,
-                # Hover hit-test tuning for short charts. Default
-                # `hoverdistance=20` lets axis spike points and other
-                # candidates outrank the heatmap's pointData (which uses
-                # the maximum-distance sentinel — see plotly.js
-                # src/traces/heatmap/hover.js:117-121). On a 56-84 px
-                # plot, that 20-px radius covers the entire chart and
-                # produces sporadic hover failures. Setting
-                # `hoverdistance=1` restricts hit-testing to the cell
-                # directly under the cursor; `spikedistance=-1` disables
-                # spike-line competition entirely; `hovermode="closest"`
-                # is explicit (matches the default but pins it against
-                # any future Streamlit / plotly-template override).
+                # Hover hit-test tuning. `hovermode="closest"` is the
+                # plotly default but pin it explicitly against future
+                # Streamlit / template overrides. `spikedistance=-1`
+                # disables spike-line competition entirely (otherwise on
+                # short charts a spike point can outrank the heatmap as
+                # the "winning" hover target — see plotly.js
+                # src/traces/heatmap/hover.js:117-121). Leave
+                # `hoverdistance` at its default 20 px; v2 tried
+                # `hoverdistance=1` which was too aggressive — restricted
+                # heatmap hover to a 2-pixel window around each cell
+                # center, breaking hover everywhere, not just on short
+                # charts.
                 hovermode="closest",
-                hoverdistance=1,
                 spikedistance=-1,
                 xaxis=dict(
                     tickfont=dict(size=10), side="bottom", fixedrange=True,
@@ -520,6 +549,13 @@ def render(params: dict, ss) -> None:
                     "staticPlot": False,
                     "scrollZoom": False,
                     "displayModeBar": False,
+                    # responsive=True triggers Plotly.Plots.resize() on
+                    # window/container resize so internal pixel ↔ data
+                    # coordinate mappings stay in sync with the rendered
+                    # SVG. Streamlit's iframe occasionally produces a
+                    # stale mapping after resize, which can drift the
+                    # hover hit-test by a pixel or two on short charts.
+                    "responsive": True,
                 },
             )
 
