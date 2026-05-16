@@ -612,24 +612,27 @@ def render(params: dict, ss) -> None:
                         line=dict(color="rgba(0, 0, 0, 0.18)", width=1),
                     ))
 
-            # Annotations — vertical shift label on the LEFT edge of
-            # the figure container, with the per-shift summary
-            # (draws · samples · tech count) surfaced on hover.
-            # xref="container" pins the annotation to the figure's
-            # left edge, independent of the plot's automargin-expanded
-            # left margin, so the rotated label can never collide with
-            # the tech-name tick labels (which live in the automargin
-            # zone between the plot area and the figure edge).
-            # HC3's None-shift skips the annotation. NOTE: annotation
-            # hoverlabel only supports bgcolor / bordercolor / font —
-            # no `align` (unlike trace hoverlabel), so it's omitted.
+            # Annotations — vertical shift label rendered INSIDE the
+            # plot area in a thin label strip on the left, with the
+            # per-shift summary (draws · samples · tech count) surfaced
+            # on hover. The x-axis range is extended below by
+            # `_LABEL_STRIP_W` data units (see xaxis.range below), so
+            # x ∈ [-_LABEL_STRIP_W - 0.5, -0.5] is empty in-plot space
+            # to the left of the first cell. Placing the rotated label
+            # at x=-1.2 puts it in that strip — safely separated from
+            # both the tech-name tick labels (which live in the left
+            # margin) and the heatmap cells. xref="container" would
+            # have been simpler but isn't supported on this Plotly
+            # version. HC3's None-shift skips the annotation. NOTE:
+            # annotation hoverlabel only supports bgcolor / bordercolor
+            # / font — no `align` (unlike trace hoverlabel).
             _annotations = []
             for _info in _shift_info:
                 if _info["shift"] is None:
                     continue
                 _mid_y = (_info["start_idx"] + _info["end_idx"] - 1) / 2.0
                 _annotations.append(dict(
-                    xref="container", x=0.01, xanchor="left",
+                    xref="x", x=-1.2, xanchor="center",
                     yref="y", y=_mid_y, yanchor="middle",
                     text=f"<b>{_info['shift']}</b>",
                     textangle=-90,
@@ -662,16 +665,23 @@ def render(params: dict, ss) -> None:
             # location (Keck has ~24 techs across 4 shifts → ~700 px;
             # Norris ~17 → ~520 px; HC3 ~10 → ~360 px).
             _plot_h = _n_tot_techs * 28 + 80
+            # Width (in x-axis data units) of the in-plot "label strip"
+            # reserved on the left for the rotated shift-name
+            # annotations. Two data units ≈ two hour-column widths of
+            # padding, which is enough room for a font-size-12 rotated
+            # label without crowding the first hour cell. Skipped on
+            # HC3 (no shift labels) so we don't waste space.
+            _has_shift_labels = any(
+                _i["shift"] is not None for _i in _shift_info
+            )
+            _label_strip_w = 2.0 if _has_shift_labels else 0.0
             _fig.update_layout(
                 height=_plot_h,
-                # l=30 leaves a thin strip at the figure's left edge
-                # for the rotated shift-label annotation (xref="container"),
-                # then yaxis automargin expands the margin further to fit
-                # the tech-name tick labels — the annotation sits in the
-                # safe zone outside automargin's range. r=20 since the
-                # per-shift tally has been moved into the shift label's
-                # hover tooltip.
-                margin=dict(l=30, r=20, t=20, b=40),
+                # Tight margins — tech-name tick labels live in the
+                # automargin-expanded left margin; rotated shift labels
+                # live inside the plot area in the label strip carved
+                # out via xaxis.range below.
+                margin=dict(l=10, r=20, t=20, b=40),
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
                 dragmode=False,
@@ -684,6 +694,10 @@ def render(params: dict, ss) -> None:
                     tickfont=dict(size=10),
                     side="bottom",
                     fixedrange=True,
+                    # Extend the axis range left by `_label_strip_w`
+                    # data units so the rotated shift-label annotations
+                    # (at x=-1.2) have empty in-plot space to occupy.
+                    range=[-0.5 - _label_strip_w, _x_total_coord + 0.5],
                 ),
                 yaxis=dict(
                     tickfont=dict(size=10),
