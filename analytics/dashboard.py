@@ -1168,43 +1168,44 @@ def _render_tat_view(params: dict) -> None:
     _aligns = ["left"] + ["right"] * 16
     _header_font_colors = ["#6F1828"] + ["#1a1a1a"] * 16
 
-    # All 17 columns get equal width. The figure is rendered at a
-    # fixed pixel width (_tat_table_fixed_w below) so each column
-    # has enough room for its content; on screens narrower than
-    # that width the table scrolls horizontally instead of squeezing.
-    _column_widths = [1] * 17
-
-    # Per-column absolute width in px. 110 px × 17 = 1870 px total
-    # (plus margins). Wide enough for the longest Range value
-    # ("47h23m-263h46m", ~14 chars at 12 px font ≈ 84 px) and the
-    # short procedure aliases ("CBC w diff", ~10 chars ≈ 60 px) on
-    # one line. Norris-Specialty's long procedure names still wrap.
-    _COL_PX = 110
-    _tat_table_fixed_w = _COL_PX * 17 + 20   # +20 for table chrome
+    # Per-column absolute pixel widths.
+    #   Procedure column = 220 px (doubled from 110) — fits long
+    #     aliases on one line and most Norris-Specialty names on
+    #     two lines instead of three.
+    #   Stat columns = 110 px each, 16 of them = 1760 px.
+    # The Procedure column is split into its own Plotly figure (a
+    # "frozen pane") that DOES NOT scroll horizontally; the 16
+    # stat columns are in a second figure inside an overflow-x
+    # scrollable div. When the page is narrower than the stat
+    # block, horizontal scrolling reveals the off-screen columns
+    # while the procedure name column stays fixed on the left.
+    _PROC_COL_PX = 220
+    _STAT_COL_PX = 110
+    _STATS_W     = _STAT_COL_PX * 16 + 20   # +20 for stats-fig chrome
+    _PROC_W      = _PROC_COL_PX + 20        # +20 for proc-fig chrome
 
     # Row height — uses the per-row max line count across procedure
-    # name + the 4 Range cells (those are the columns most prone to
-    # wrap). When ANY cell in ANY row wraps, every row gets that
-    # height. With the wider columns most content fits on 1 line,
-    # so rows stay compact. Long Norris-Specialty names still wrap
-    # to multiple lines and drive the height.
+    # name + the 4 Range cells. Procedure column gets ~31 chars/
+    # line at the new 220 px width (~7 px/char at 12 px Inter);
+    # stat columns get ~16 chars/line at 110 px.
     import math as _math_tat
-    _CHARS_PER_LINE = 16      # ~110 px column / ~7 px per char at 12 px Inter
+    _PROC_CHARS_PER_LINE = 31
+    _STAT_CHARS_PER_LINE = 16
     _LINE_PX        = 20      # 12 px Inter ≈ 20 px line-height
     _ROW_PADDING_PX = 12
     _MIN_ROW_PX     = _LINE_PX + _ROW_PADDING_PX   # 32 px
 
-    def _est_lines(text):
+    def _est_lines(text, chars_per_line):
         n = max(1, len(str(text)))
-        return _math_tat.ceil(n / _CHARS_PER_LINE)
+        return _math_tat.ceil(n / chars_per_line)
 
     _row_line_counts = [
         max(
-            _est_lines(_proc_col[i]),
-            _est_lines(_rt_range[i]),
-            _est_lines(_st_range[i]),
-            _est_lines(_ts_range[i]),
-            _est_lines(_all_range[i]),
+            _est_lines(_proc_col[i],      _PROC_CHARS_PER_LINE),
+            _est_lines(_rt_range[i],      _STAT_CHARS_PER_LINE),
+            _est_lines(_st_range[i],      _STAT_CHARS_PER_LINE),
+            _est_lines(_ts_range[i],      _STAT_CHARS_PER_LINE),
+            _est_lines(_all_range[i],     _STAT_CHARS_PER_LINE),
         )
         for i in range(len(_proc_col))
     ]
@@ -1213,34 +1214,34 @@ def _render_tat_view(params: dict) -> None:
         max(_row_line_counts, default=1) * _LINE_PX + _ROW_PADDING_PX,
     )
 
-    _tat_table_fig = go.Figure(
+    # Total figure height — shared by both sub-figures so their
+    # rows align horizontally when placed side-by-side.
+    _n_rows = max(1, len(table_df))
+    _table_h = 56 + _n_rows * _row_height + 24
+
+    # ─── Figure 1: PROCEDURE column (frozen left pane) ────────────────
+    _proc_fig = go.Figure(
         data=go.Table(
-            columnwidth=_column_widths,
+            columnwidth=[1],
             header=dict(
-                values=_tat_headers,
-                fill_color=_hdr_fill_cells,
+                values=["Procedure"],
+                fill_color="#ffffff",
                 line_color="#e2e8f0",
                 align="center",
                 font=dict(
                     family="Inter, system-ui, sans-serif",
                     size=12,
-                    color=_header_font_colors,
+                    color="#6F1828",
                 ),
-                # 56 px lets the 2-line headers ("RT" / "Range" etc.)
-                # render without clipping.
                 height=56,
             ),
             cells=dict(
-                values=_cell_values,
-                fill_color=_cell_fill_cols,
+                values=[_proc_col],
+                fill_color="#ffffff",
                 line_color="#eef0f3",
-                align=_aligns,
+                align=["left"],
                 font=dict(
                     family="Inter, system-ui, sans-serif",
-                    # 12 px (back up from 10) — readable text. With
-                    # the fixed-width / horizontal-scroll rendering
-                    # below, we don't need to squeeze the font to
-                    # make content fit.
                     size=12,
                     color="#1a1a1a",
                 ),
@@ -1248,49 +1249,93 @@ def _render_tat_view(params: dict) -> None:
             ),
         )
     )
-
-    # Total height = header + n_rows × row_height + small bottom buffer.
-    _n_rows = max(1, len(table_df))
-    # 56 px header + n_rows × max row height + 24 px buffer. _row_height
-    # is sized to the longest procedure name in the selection (see
-    # estimate above), so all rows share the same height and the
-    # layout never under-sizes the figure → no internal scrollbar →
-    # no header overlap.
-    _table_h = 56 + _n_rows * _row_height + 24
-    _tat_table_fig.update_layout(
+    _proc_fig.update_layout(
         height=_table_h,
-        # Fixed pixel width so columns stay at their full _COL_PX
-        # size regardless of container width. When the page is
-        # narrower than the table, the wrapper div below adds a
-        # horizontal scrollbar instead of squeezing columns.
-        width=_tat_table_fixed_w,
-        margin=dict(l=4, r=4, t=4, b=4),
+        width=_PROC_W,
+        margin=dict(l=4, r=0, t=4, b=4),
         paper_bgcolor="rgba(0,0,0,0)",
     )
 
-    # Render the Plotly chart as HTML inside a horizontally-scrolling
-    # container. st.plotly_chart with use_container_width=False would
-    # render at the fixed width but the Streamlit column would clip
-    # it on the right; wrapping in components.html lets the inner
-    # div add `overflow-x:auto` so a scrollbar appears when needed.
+    # ─── Figure 2: 16 STAT columns (scrollable right pane) ────────────
+    _stats_fig = go.Figure(
+        data=go.Table(
+            columnwidth=[1] * 16,
+            header=dict(
+                # Drop the leading "Procedure" header — it's in the
+                # frozen left pane.
+                values=_tat_headers[1:],
+                fill_color=_hdr_fill_cells[1:],
+                line_color="#e2e8f0",
+                align="center",
+                font=dict(
+                    family="Inter, system-ui, sans-serif",
+                    size=12,
+                    color=_header_font_colors[1:],
+                ),
+                height=56,
+            ),
+            cells=dict(
+                # Drop the procedure-name column from the cell
+                # values too.
+                values=_cell_values[1:],
+                fill_color=_cell_fill_cols[1:],
+                line_color="#eef0f3",
+                align=_aligns[1:],
+                font=dict(
+                    family="Inter, system-ui, sans-serif",
+                    size=12,
+                    color="#1a1a1a",
+                ),
+                height=_row_height,
+            ),
+        )
+    )
+    _stats_fig.update_layout(
+        height=_table_h,
+        width=_STATS_W,
+        margin=dict(l=0, r=4, t=4, b=4),
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
+
+    # ─── Render both figures into a flex layout ─────────────────────
+    # The procedure figure sits in a fixed-width flex item on the
+    # left. The stats figure sits in a flex-1 item with
+    # overflow-x:auto on the right — when the viewport is narrower
+    # than _STATS_W, a horizontal scrollbar appears under just that
+    # half of the table; the procedure column stays in view.
+    #
+    # Plotly.js is loaded ONCE (include_plotlyjs="cdn" on the first
+    # to_html call) so both charts share the same library load.
     import plotly.io as _pio
     import streamlit.components.v1 as _components
 
-    _plotly_html = _pio.to_html(
-        _tat_table_fig,
+    _proc_html = _pio.to_html(
+        _proc_fig,
         include_plotlyjs="cdn",
         full_html=False,
         config={"displayModeBar": False},
     )
+    _stats_html = _pio.to_html(
+        _stats_fig,
+        include_plotlyjs=False,
+        full_html=False,
+        config={"displayModeBar": False},
+    )
+
     _components.html(
         f"""
-        <div style="overflow-x: auto; width: 100%; padding-bottom: 4px;">
-            {_plotly_html}
+        <div style="display: flex; width: 100%; align-items: flex-start; padding-bottom: 4px;">
+            <div style="flex: 0 0 {_PROC_W}px; min-width: {_PROC_W}px;">
+                {_proc_html}
+            </div>
+            <div style="flex: 1 1 auto; min-width: 0; overflow-x: auto;">
+                {_stats_html}
+            </div>
         </div>
         """,
         # iframe height = table height + ~24 px for the horizontal
-        # scrollbar (when present). scrolling=False on the iframe
-        # so only the inner div's horizontal scrollbar shows.
+        # scrollbar on the stats half. scrolling=False on the
+        # iframe so only the inner div's horizontal scrollbar shows.
         height=_table_h + 24,
         scrolling=False,
     )
