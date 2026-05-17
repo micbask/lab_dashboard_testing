@@ -1750,12 +1750,17 @@ def _render_daily_view(params: dict, ss) -> None:
             f'<strong>Total</strong> column = forecasted full-day sum per procedure.'
         )
     else:
+        # Daily view: name what's being counted per hour. In-Lab vs
+        # Completed shows different verbs ("in-lab volume" vs
+        # "completions") since they're different measurements.
+        _values_label = (
+            "in-lab volume" if time_basis == "In-Lab" else "completions"
+        )
         _prefix = (
+            f'Values = {_values_label} per hour. '
             f'Colour scale: &nbsp;'
             f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
-            f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
-            f'(hour columns only). &nbsp;'
-            f'<strong>Total</strong> column = full-day sum per procedure.'
+            f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high'
         )
     _render_top_n_legend(_prefix)
 
@@ -1978,8 +1983,11 @@ def _render_monthly_view(params: dict, ss) -> None:
         f'</div>',
         unsafe_allow_html=True,
     )
+    _m_values_label = (
+        "in-lab" if time_basis == "In-Lab" else "completed"
+    )
     _m_prefix = (
-        f'Values = avg completed volume per day in hour. '
+        f'Values = avg {_m_values_label} volume per day in hour. '
         f'Colour scale: &nbsp;'
         f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
         f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high'
@@ -2064,7 +2072,7 @@ def _render_monthly_view(params: dict, ss) -> None:
     )
     st.markdown(
         f'<div class="heatmap-legend">'
-        f'Values = avg completed volume per day in hour. '
+        f'Values = avg {_m_values_label} volume per day in hour. '
         f'Colour scale: &nbsp;'
         f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
         f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high'
