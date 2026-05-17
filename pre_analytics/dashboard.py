@@ -324,10 +324,12 @@ def render(params: dict, ss) -> None:
         # Source-data caveat: the underlying dataset is completed
         # orders only. Recent days look thinner than they really are
         # because draws on samples still in-progress are silently
-        # excluded until those samples complete. Surfaced here, above
-        # the KPI cards, so users see it before reading the numbers.
-        st.caption(
-            "Data reflects completed orders only. Recent draws on "
+        # excluded until those samples complete. Rendered via st.info
+        # to match the forecast disclaimer banner on the analytics
+        # dashboard — same visual language for "interpret these
+        # numbers with this in mind" callouts across both dashboards.
+        st.info(
+            "Data reflects **completed orders only**. Recent draws on "
             "samples still in progress are not yet included."
         )
 
