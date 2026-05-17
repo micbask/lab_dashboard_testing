@@ -1761,7 +1761,7 @@ def _render_monthly_view(params: dict, ss) -> None:
 
     st.markdown(
         f'<div class="section-heading">'
-        f'{map_type} - weekday pattern · {month_name_str}'
+        f'{map_type} - day-of-week pattern · {month_name_str}'
         f'</div>',
         unsafe_allow_html=True,
     )
