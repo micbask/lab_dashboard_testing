@@ -1573,6 +1573,7 @@ html body [class*="st-key-top_n_btn_"] button div {
     padding-bottom: 0.5rem !important;
 }
 [data-testid="stAlert"] {
+    margin-top: 0.5rem !important;
     margin-bottom: 0.5rem !important;
 }
 .status-chip {
