@@ -890,10 +890,13 @@ def _render_tat_view(params: dict) -> None:
             _pct = float((_tats < _threshold).mean() * 100.0)
         _summary_rows.append((_prio, _n, _mean, _pct, _mn, _mx))
 
-    _summary_priority_col = [
-        f"<b><span style='color:{_priority_colors_map[p]}'>{p}</span></b>"
-        for p, *_ in _summary_rows
-    ]
+    # PLAIN text for the Priority column — no HTML. The deployed
+    # Plotly Table version doesn't render HTML in cells (previous
+    # builds did, but the renderer changed and the literal markup
+    # was leaking through, e.g. "<span style='color:#0066cc'>RT").
+    # Per-cell colour is set via cells.font.color as a 2-D list
+    # below, which is the native Plotly Table mechanism.
+    _summary_priority_col = [r[0] for r in _summary_rows]
     _summary_n_col     = [_fmt_n_table(r[1]) for r in _summary_rows]
     _summary_mean_col  = [format_tat(r[2])   for r in _summary_rows]
     _summary_targ_col  = [_priority_target_labels[r[0]] for r in _summary_rows]
@@ -914,6 +917,23 @@ def _render_tat_view(params: dict) -> None:
         _per_row_light,    # Target
         _per_row_light,    # % within target
         _per_row_light,    # Range
+    ]
+
+    # Per-cell font colour (column-major, mirrors fill_color shape).
+    # Priority column gets each row's priority colour for visual
+    # emphasis; remaining columns stay default dark grey for
+    # readability of the numbers.
+    _summary_priority_text_colors = [
+        _priority_colors_map[r[0]] for r in _summary_rows
+    ]
+    _summary_default_text_colors = ["#1a1a1a"] * len(_summary_rows)
+    _summary_font_colors = [
+        _summary_priority_text_colors,   # Priority
+        _summary_default_text_colors,    # n
+        _summary_default_text_colors,    # Mean TAT
+        _summary_default_text_colors,    # Target
+        _summary_default_text_colors,    # % within target
+        _summary_default_text_colors,    # Range
     ]
 
     # Column widths sized to actual content: Priority and Target hold
@@ -952,15 +972,18 @@ def _render_tat_view(params: dict) -> None:
                 align=["center", "right", "right", "center", "right", "right"],
                 font=dict(
                     family="Inter, system-ui, sans-serif",
-                    size=12,
-                    color="#1a1a1a",
+                    size=13,
+                    color=_summary_font_colors,
                 ),
-                height=32,
+                height=36,
             ),
         )
     )
+    # 40 px header + 36 px per row + 16 px buffer. Cell heights are
+    # uniform now that the Priority column holds plain text instead of
+    # wrapping HTML, so all 4 rows (RT / ST / TS / All) fit cleanly.
     _summary_fig.update_layout(
-        height=40 + len(_summary_rows) * 32 + 16,
+        height=40 + len(_summary_rows) * 36 + 16,
         margin=dict(l=4, r=4, t=4, b=4),
         paper_bgcolor="rgba(0,0,0,0)",
     )
@@ -1139,6 +1162,36 @@ def _render_tat_view(params: dict) -> None:
     _stat_ws  = [0.7, 1.0, 0.9, 1.4]   # n, Mean, %, Range — one block
     _column_widths = [_proc_w] + _stat_ws * 4
 
+    # Per-row heights so Norris-Specialty's long procedure names
+    # (e.g. "Leukemia Lymphoma Evaluation Flow Cytome", 40+ chars)
+    # wrap to 2-3 lines and get the vertical room they need. A
+    # uniform 36 px height was clipping wrapped content + creating
+    # an internal scrollbar that overlapped the sticky header.
+    #
+    # Width math: on a 1200 px container the Procedure column gets
+    # ≈ 2.4/18.4 = 13% → ~156 px. At 13 px Inter, average char width
+    # is ~7 px, so ~22 chars fit per line. We estimate lines from
+    # name length / 22 (rounded up) and allocate ~22 px per line +
+    # 14 px vertical padding, floored at 36 px for short names. The
+    # estimate is generous (favours over- not under-sizing) so the
+    # row never clips when the actual wrap point differs slightly
+    # from the estimate.
+    import math as _math_tat
+    _CHARS_PER_LINE = 22
+    _LINE_PX        = 22
+    _ROW_PADDING_PX = 14
+    _MIN_ROW_PX     = 36
+
+    _row_heights = [
+        max(
+            _MIN_ROW_PX,
+            _math_tat.ceil(max(1, len(str(p))) / _CHARS_PER_LINE)
+            * _LINE_PX
+            + _ROW_PADDING_PX,
+        )
+        for p in _proc_col
+    ]
+
     _tat_table_fig = go.Figure(
         data=go.Table(
             columnwidth=_column_widths,
@@ -1167,18 +1220,21 @@ def _render_tat_view(params: dict) -> None:
                     size=12,
                     color="#1a1a1a",
                 ),
-                # 36 px (was 32) gives the data more vertical breathing
-                # room so values read as the dominant element against
-                # the stronger group tints.
-                height=36,
+                # Per-row height list (vs a single int) so long
+                # procedure names get extra vertical space — see
+                # _row_heights computation above.
+                height=_row_heights,
             ),
         )
     )
 
     # Total height = header + n_rows × row_height + small bottom buffer.
-    _n_rows = max(1, len(table_df))
-    # 56 px header + 36 px per row (matches cells.height) + 24 px buffer.
-    _table_h = 56 + _n_rows * 36 + 24
+    # 56 px header + actual sum of per-row heights + 24 px buffer.
+    # Summing the dynamic list (vs the historic n_rows × fixed-height
+    # formula) is what stops the internal scrollbar + header overlap
+    # — when rows had to grow to fit wrapped procedure names, the
+    # cells exceeded the layout.height and Plotly auto-scrolled.
+    _table_h = 56 + (sum(_row_heights) if _row_heights else _MIN_ROW_PX) + 24
     _tat_table_fig.update_layout(
         height=_table_h,
         margin=dict(l=4, r=4, t=4, b=4),
