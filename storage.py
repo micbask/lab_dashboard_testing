@@ -421,16 +421,23 @@ def load_filtered_data(
     combined = pd.concat(frames, ignore_index=True)
 
     # Apply procedure-name aliases (CBC w diff / CMP / BMP / CBC no diff)
-    # at read time so already-stored Parquet data — which was written
-    # with the full verbose procedure names — renders with the short
-    # display names in the dashboard. New uploads are also aliased at
-    # parse time (parsing.clean_procedure_names runs inside
-    # parse_single_file), so the on-disk format eventually converges;
-    # this read-time pass means we don't need a one-time Parquet
-    # rewrite. Lazy import to avoid a top-level dependency from
-    # storage.py onto parsing.py.
-    from parsing import clean_procedure_names as _alias_procs
+    # AND resource remaps at read time so already-stored Parquet data —
+    # which was written before the current alias / remap rules existed —
+    # renders correctly. New uploads run both passes at parse time
+    # (inside parse_single_file), so the on-disk format eventually
+    # converges; this read-time pass means we don't need a one-time
+    # Parquet rewrite. Resource remaps MUST be applied before the
+    # DuckDB filter below — otherwise rows whose stored resource is
+    # the old name get dropped by the bench-scoped `Performing Service
+    # Resource IN (...)` filter even though the post-remap resource
+    # would have matched. Lazy import to avoid a top-level dependency
+    # from storage.py onto parsing.py.
+    from parsing import (
+        clean_procedure_names as _alias_procs,
+        apply_resource_remaps as _remap_resources,
+    )
     combined = _alias_procs(combined)
+    combined = _remap_resources(combined)
 
     # Push down ALL filters via DuckDB — date range, resources, procedure exclusions
     con = duckdb.connect()

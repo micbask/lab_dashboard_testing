@@ -181,24 +181,35 @@ def train_and_cache_forecasts(
     }
 
     _write_forecast_to_github(map_type, payload)
-    st.session_state[f"forecasts_{map_type}"] = payload
+    # Bust the read cache so the next call to load_forecasts() pulls
+    # the freshly-written payload from GitHub instead of returning
+    # a stale cached copy.
+    load_forecasts.clear()
 
 
+@st.cache_data(show_spinner=False, ttl=600)
 def load_forecasts(map_type: str) -> dict | None:
-    """Return the cached forecast payload for map_type, or None."""
-    cache_key = f"forecasts_{map_type}"
-    if cache_key in st.session_state:
-        return st.session_state[cache_key]
-    payload = _read_forecast_from_github(map_type)
-    if payload is not None:
-        st.session_state[cache_key] = payload
-    return payload
+    """Return the cached forecast payload for map_type, or None.
+
+    Backed by @st.cache_data (TTL 10 min) instead of raw session_state.
+    A forecast payload can hold ~21k (proc, hour) → {date: float}
+    entries; storing one per map_type per user-session in session_state
+    accumulated without bound and was a real OOM risk on Streamlit
+    Cloud's 1 GB cap. The TTL-backed cache_data approach is shared
+    across sessions on the same worker (fewer GitHub API hits) and
+    bounded by Streamlit's cache-eviction policy.
+    """
+    return _read_forecast_from_github(map_type)
 
 
 def retrain_all_forecasts(df: pd.DataFrame, resource_assignments: dict) -> None:
     """Train and cache forecasts for every map type (in-memory df version)."""
+    # Bust the read cache up front so any reads during training don't
+    # return stale data. The individual train_and_cache_forecasts call
+    # also clears, but doing it once here covers the early-failure
+    # window too.
+    load_forecasts.clear()
     for mt in MAP_TYPES:
-        st.session_state.pop(f"forecasts_{mt}", None)
         try:
             train_and_cache_forecasts(df, mt, resource_assignments)
         except Exception as _fc_err:
@@ -217,8 +228,11 @@ def retrain_all_forecasts_streaming(resource_assignments: dict) -> None:
     """
     from storage import iter_partitions
 
+    # Bust the read cache up front so any reads during training don't
+    # return stale data; the per-map _train_forecasts_streaming call
+    # also clears after each successful write.
+    load_forecasts.clear()
     for mt in MAP_TYPES:
-        st.session_state.pop(f"forecasts_{mt}", None)
         try:
             _train_forecasts_streaming(mt, resource_assignments)
         except Exception as _fc_err:
@@ -352,7 +366,9 @@ def _train_forecasts_streaming(map_type: str, resource_assignments: dict) -> Non
     }
 
     _write_forecast_to_github(map_type, payload)
-    st.session_state[f"forecasts_{map_type}"] = payload
+    # Bust the read cache so the next load_forecasts() call returns
+    # the just-written payload instead of the stale cached version.
+    load_forecasts.clear()
 
 
 def _train_models_for_basis(

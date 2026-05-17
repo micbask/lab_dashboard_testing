@@ -266,40 +266,42 @@ def build_weekday_pivot(
 @st.cache_data(show_spinner=False, ttl=300)
 def load_monthly_avg_for_comparison(
     _df: pd.DataFrame,
-    selected_date: date,
-    procedures: tuple,
+    year: int,
+    month: int,
     cache_key: str = "",
 ) -> pd.DataFrame:
-    """Build a procedure x hour-of-day average-per-day pivot for the month
-    that contains `selected_date`, restricted to the given procedures.
+    """Build the procedure × hour-of-day average-per-day pivot for the
+    month identified by (year, month).
 
-    Used by the Daily heatmap's hover tooltip in analytics/dashboard.py to
-    compare today's count to the month's per-day average for the same
-    (procedure, hour) cell. The returned DataFrame is indexed by procedure
-    (subset of `procedures`) with integer hour columns 0..23. Each cell is
-    the month-summed count for that procedure/hour divided by the number
-    of distinct dates that have any data in the month.
+    Used by the Daily heatmap's hover tooltip in analytics/dashboard.py
+    to compare today's count to the month's per-day average for the
+    same (procedure, hour) cell. The returned DataFrame is indexed by
+    procedure (the FULL set present in the month, not pre-filtered)
+    with integer hour columns 0..23.
 
-    Returns an empty DataFrame if `_df` has no rows in the selected month
-    or no rows for any of the requested procedures.
+    Caching: keyed on (year, month, cache_key). The pivot is the same
+    for every day within the month and for every procedure-selection
+    the caller might make, so one cache entry is reused across all
+    day-navigations within the month — previously this function keyed
+    by `selected_date` + the per-day procedure tuple, so each day
+    produced its own cache entry. Callers filter the returned pivot
+    to their displayed procedures.
 
-    `_df` is underscore-prefixed so Streamlit skips hashing the DataFrame.
-    `procedures` is a tuple (hashable) and acts as part of the cache key.
+    Returns an empty DataFrame if `_df` has no rows in the month.
+
+    `_df` is underscore-prefixed so Streamlit skips hashing it.
     `cache_key` carries the (map_type, time_basis, idx_hash) fingerprint.
     """
     _ = cache_key  # consumed by st.cache_data for cache-key fingerprinting
-    if _df is None or _df.empty or not procedures:
+    if _df is None or _df.empty:
         return pd.DataFrame()
 
-    year, month = selected_date.year, selected_date.month
     month_start = date(year, month, 1)
     month_end   = date(year, month, _cal.monthrange(year, month)[1])
 
-    procedures_list = list(procedures)
     month_df = _df[
         (_df["complete_date"] >= month_start) &
-        (_df["complete_date"] <= month_end) &
-        (_df["Order Procedure"].isin(procedures_list))
+        (_df["complete_date"] <= month_end)
     ]
     if month_df.empty:
         return pd.DataFrame()
@@ -308,7 +310,7 @@ def load_monthly_avg_for_comparison(
         month_df.pivot_table(
             index="Order Procedure", columns="hour",
             values="Complete Volume", aggfunc="sum", fill_value=0,
-        ).reindex(index=procedures_list, columns=list(range(24)), fill_value=0)
+        ).reindex(columns=list(range(24)), fill_value=0)
     )
     n_days = max(int(month_df["complete_date"].nunique()), 1)
     return pivot / n_days
@@ -471,24 +473,31 @@ def build_tat_table(
         aggregate.
 
         % within target uses each sample's priority-specific threshold
-        via vectorized lookup against the resolved `_targets` dict, so
-        the result is the weighted service-level rate across all
-        priorities for this procedure. Samples whose Collection
-        Priority isn't in `_targets` (shouldn't happen post-loader)
-        get NaN thresholds, and `tats < NaN` evaluates False — those
-        count as "not within target" via .fillna(False).
+        via vectorized lookup against the resolved `_targets` dict.
+        Samples whose Collection Priority isn't in `_targets` (rare
+        but real — odd values like 'NU', blanks, lowercase variants)
+        are EXCLUDED from the % denominator instead of being silently
+        counted as "missed target", which would falsely depress the
+        compliance rate. n and Mean still reflect every sample so the
+        volume reported matches the data.
         """
         if proc_rows.empty:
             return [None, None, None, None, None]
         tats = proc_rows["TAT_minutes"].astype(float)
         n = int(len(proc_rows))
         mean = float(tats.mean())
-        thresholds = proc_rows["Collection Priority"].map(_targets).astype(float)
-        meets = int((tats < thresholds).fillna(False).sum())
+        known_mask = proc_rows["Collection Priority"].isin(_targets)
+        if known_mask.any():
+            known_tats = tats[known_mask]
+            thresholds = proc_rows.loc[known_mask, "Collection Priority"].map(_targets).astype(float)
+            meets = int((known_tats < thresholds).sum())
+            pct = float(meets / int(known_mask.sum()) * 100.0)
+        else:
+            pct = None
         return [
             n,
             mean,
-            float(meets / n * 100.0),
+            pct,
             float(tats.min()),
             float(tats.max()),
         ]

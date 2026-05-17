@@ -313,8 +313,9 @@ def render_sidebar(ss) -> dict:
                     reset_all_data()
                     st.cache_data.clear()
                     st.success("Master dataset cleared.")
-                for _mt in MAP_TYPES:
-                    ss.pop(f"forecasts_{_mt}", None)
+                # Forecasts are now in @st.cache_data (forecasting.load_forecasts),
+                # which the global cache_data.clear() above already invalidated.
+                # The historic per-map session_state pop is no longer needed.
             except Exception as _rst_err:
                 st.error(f"Reset failed: {_rst_err}")
 
@@ -892,13 +893,20 @@ def _render_tat_view(params: dict) -> None:
         _mn = float(_tats.min())
         _mx = float(_tats.max())
         if _prio == "All":
-            _thresholds = _subset["Collection Priority"].map(
-                _tat_targets
-            ).astype(float)
-            _meets = int(
-                (_tats < _thresholds).fillna(False).sum()
-            )
-            _pct = float(_meets / _n * 100.0)
+            # Exclude samples with unmapped Collection Priority from the
+            # % denominator — see _all_stats in analytics/data.py for
+            # the same logic. Folding them in as "not meeting target"
+            # silently depresses the compliance rate.
+            _known_mask = _subset["Collection Priority"].isin(_tat_targets)
+            if _known_mask.any():
+                _known_tats = _tats[_known_mask]
+                _thresholds = _subset.loc[
+                    _known_mask, "Collection Priority"
+                ].map(_tat_targets).astype(float)
+                _meets = int((_known_tats < _thresholds).sum())
+                _pct = float(_meets / int(_known_mask.sum()) * 100.0)
+            else:
+                _pct = None
         else:
             _threshold = _tat_targets[_prio]
             _pct = float((_tats < _threshold).mean() * 100.0)
@@ -1792,8 +1800,12 @@ def _render_daily_view(params: dict, ss) -> None:
                 _month_df = _local_df
         except Exception:
             _month_df = pd.DataFrame()
+        # Pass (year, month) — not selected_date — so the cache key is
+        # per-month, not per-day. The returned pivot covers all
+        # procedures in the month; the customdata loop below filters
+        # via `_proc in _monthly_avg.index`.
         _monthly_avg = load_monthly_avg_for_comparison(
-            _month_df, selected_date, tuple(pivot.index),
+            _month_df, selected_date.year, selected_date.month,
             cache_key=f"{map_type}|{time_basis}|{_idx_hash}",
         )
 
@@ -1949,7 +1961,13 @@ def _render_monthly_view(params: dict, ss) -> None:
         return
 
     _m_hour_cols   = [c for c in monthly_pivot.columns if c != "Total"]
-    _m_total_vol   = int(round(monthly_pivot["Total"].sum() * n_days))
+    # Total volume = sum across the FULL filtered DataFrame (not the
+    # top-N pivot). monthly_pivot is post-top-N filtered and its
+    # "Total" column is the per-procedure per-day AVERAGE, so
+    # `sum() * n_days` only covers the visible procedures and
+    # under-reports actual completions whenever the user picks
+    # Top 10/20/30 instead of "All".
+    _m_total_vol   = int(filtered_df["Complete Volume"].fillna(0).sum())
     _m_top_proc    = monthly_pivot["Total"].idxmax()
     _m_peak_col    = monthly_pivot[_m_hour_cols].sum().idxmax()
     _m_peak_disp   = _m_peak_col.replace("AM", " AM").replace("PM", " PM")
