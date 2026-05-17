@@ -950,14 +950,19 @@ def _render_tat_view(params: dict) -> None:
     # ("47h23m-263h46m") still fits in an equal slot at 15 px font
     # given the table's typical ~1100 px width.
     #
-    # Vertical centering: Plotly Table top-anchors text within each
-    # row when the plot area exceeds the sum of cell heights (the
-    # extra space gets appended below). To force true centering we
-    # size the layout height to EXACTLY match the header+cells sum
-    # (plus the 4+4 px margin) — no leftover space, no stretching,
-    # no off-center drift.
-    _HEADER_H = 56
-    _ROW_H    = 64
+    # Row sizing: Plotly Table top-anchors cell text near the top of
+    # each row (hardcoded `dy="0.75em"` in plotly.js, no `valign`
+    # property). To make text APPEAR vertically centered, the row
+    # height needs to be tight — just font + a few px of pad — so
+    # the top-anchored glyph sits near the visual midpoint instead
+    # of way above center inside a tall cell.
+    #
+    # DO NOT add `autosize=True` here. Combined with Plotly.js's
+    # default `responsive: true`, it lets the figure grow to fill
+    # whatever parent (iframe) it's in, ignoring layout.height. The
+    # procedure table below works because it omits autosize.
+    _HEADER_H = 36
+    _ROW_H    = 36
     _summary_fig = go.Figure(
         data=go.Table(
             columnwidth=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
@@ -1002,20 +1007,18 @@ def _render_tat_view(params: dict) -> None:
         height=_summary_total_h,
         margin=dict(l=4, r=4, t=4, b=4),
         paper_bgcolor="rgba(0,0,0,0)",
-        autosize=True,
     )
-    # Embed via components.html at a pinned iframe height to bypass
-    # Streamlit's plotly wrapper min-height (which otherwise stretches
-    # the figure and top-anchors cell text). Plotly.js loaded via CDN.
+    # Embed via components.html at a pinned iframe height. Streamlit's
+    # st.plotly_chart wrapper imposes a min-height that would stretch
+    # the figure; components.html lets us pin it precisely. Also pass
+    # responsive=False so plotly.js doesn't reflow inside the iframe.
     import plotly.io as _pio_summary
     import streamlit.components.v1 as _components_summary
     _summary_html = _pio_summary.to_html(
         _summary_fig,
         include_plotlyjs="cdn",
         full_html=False,
-        config={"displayModeBar": False},
-        default_width="100%",
-        default_height=f"{_summary_total_h}px",
+        config={"displayModeBar": False, "responsive": False},
     )
     _components_summary.html(
         _summary_html,
