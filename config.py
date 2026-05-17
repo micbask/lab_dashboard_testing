@@ -50,7 +50,7 @@ SITE_CONFIG: dict[str, dict] = {
     },
     "PMOB": {
         "resources": [
-            "PAS Cellavision", "PAS Cobas c303 A", "PAS Cobas c303 B",
+            "PAS Cellavision", "PAS Cobas",
             "PAS HEME Man Diff", "PAS HEME Orders", "PAS HEME Results",
             "PAS IRIS", "PAS XN2000 1", "PAS XN2000 2",
             "PAS Manual Chemistry Bench", "PAS Manual Hematology Bench",
