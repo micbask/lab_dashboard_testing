@@ -19,6 +19,39 @@ BORDER = "#D1D5DB"
 # ═════════════════════════════════════════════════════════════════════════════
 # SITE CONFIGURATION
 # ═════════════════════════════════════════════════════════════════════════════
+# ─── TAT target defaults ───────────────────────────────────────────────
+# Per-priority service-level targets in minutes. The "% within target"
+# stat in the TAT view is computed against the row's own priority
+# target: RT vs the 2h SLA, ST/TS vs 1h. Bench-specific overrides
+# live in SITE_CONFIG[bench]["tat_targets"] below.
+DEFAULT_TAT_TARGETS: dict[str, int] = {
+    "RT": 120,  # Routine — 2-hour service level
+    "ST": 60,   # Stat — 1-hour
+    "TS": 60,   # Time Study — 1-hour
+}
+
+# Core panel — the 5 procedures the TAT view defaults to selecting
+# on benches whose `use_core_panel_defaults` is True. Listed in
+# fixed clinical-priority order so the table reads RT-first.
+CORE_PANEL_DEFAULTS: list[str] = [
+    "CBC w diff", "CBC no diff", "BMP", "CMP", "Lactic Acid",
+]
+
+# ─── Per-bench site configuration ──────────────────────────────────────
+# To add a new lab bench, add ONE entry below. Every downstream consumer
+# (analytics radio, pre-analytics radio if applicable, TAT targets, core
+# panel defaults, resource picker, forecast retraining) reads from this
+# dict — there are no other places to edit.
+#
+# Keys:
+#   resources                 list[str]    — bench's service-resource list
+#   vmax                      int          — heatmap colour-scale high end
+#   short_label               str          — what the analytics radio shows
+#   tat_targets               dict|None    — per-priority overrides; None
+#                                            means "use DEFAULT_TAT_TARGETS"
+#   use_core_panel_defaults   bool         — TAT view defaults to the
+#                                            5-procedure core panel when
+#                                            True, else top-5-by-volume
 SITE_CONFIG: dict[str, dict] = {
     "Keck Core": {
         "resources": [
@@ -29,6 +62,9 @@ SITE_CONFIG: dict[str, dict] = {
             "USC Serology Routine Bench",
         ],
         "vmax": 50,
+        "short_label": "Keck",
+        "tat_targets": None,
+        "use_core_panel_defaults": True,
     },
     "Norris Core": {
         "resources": [
@@ -38,6 +74,9 @@ SITE_CONFIG: dict[str, dict] = {
             "NCH GEM 4000 H", "NCH GEM 4000 I",
         ],
         "vmax": 30,
+        "short_label": "Norris",
+        "tat_targets": None,
+        "use_core_panel_defaults": True,
     },
     "Norris Specialty": {
         "resources": [
@@ -45,6 +84,10 @@ SITE_CONFIG: dict[str, dict] = {
             "NCI Manual Flow Bench", "NCI Manual Verify Now Bench",
         ],
         "vmax": 20,
+        "short_label": "Specialty",
+        # Send-out work: 48h flat SLA across all priorities.
+        "tat_targets": {"RT": 48 * 60, "ST": 48 * 60, "TS": 48 * 60},
+        "use_core_panel_defaults": False,
     },
     "PMOB": {
         "resources": [
@@ -55,14 +98,53 @@ SITE_CONFIG: dict[str, dict] = {
             "PAS Manual Urinalysis Bench",
         ],
         "vmax": 30,
+        "short_label": "PMOB",
+        "tat_targets": None,
+        "use_core_panel_defaults": True,
     },
 }
 
 # Derived helpers
-DEFAULT_RESOURCES: dict[str, list] = {k: v["resources"] for k, v in SITE_CONFIG.items()}
-VMAX:              dict[str, int]  = {k: v["vmax"]      for k, v in SITE_CONFIG.items()}
+DEFAULT_RESOURCES: dict[str, list] = {k: v["resources"]    for k, v in SITE_CONFIG.items()}
+VMAX:              dict[str, int]  = {k: v["vmax"]         for k, v in SITE_CONFIG.items()}
 ALL_RESOURCES:     list[str]       = sorted({r for v in SITE_CONFIG.values() for r in v["resources"]})
 MAP_TYPES:         list[str]       = list(SITE_CONFIG.keys())
+
+# Radio labels for the Testing Bench picker. {short_label → full bench name}.
+BENCH_LABEL_TO_VALUE: dict[str, str] = {
+    v["short_label"]: k for k, v in SITE_CONFIG.items()
+}
+
+# {bench → resolved per-priority targets dict}. Always present — bench
+# entries with `tat_targets: None` resolve to DEFAULT_TAT_TARGETS.
+TAT_TARGET_OVERRIDES: dict[str, dict[str, int]] = {
+    k: (v["tat_targets"] or DEFAULT_TAT_TARGETS)
+    for k, v in SITE_CONFIG.items()
+}
+
+# Benches that should default their TAT procedure filter to the core panel.
+BENCHES_USING_CORE_PANEL: set[str] = {
+    k for k, v in SITE_CONFIG.items() if v["use_core_panel_defaults"]
+}
+
+
+def get_tat_targets(bench: str | None) -> dict[str, int]:
+    """Resolve the per-priority TAT targets for `bench`.
+
+    Returns a fresh dict so callers can mutate without affecting the
+    module-level data. Unknown benches (or None) fall back to defaults.
+    """
+    if bench and bench in TAT_TARGET_OVERRIDES:
+        return dict(TAT_TARGET_OVERRIDES[bench])
+    return dict(DEFAULT_TAT_TARGETS)
+
+
+# ─── Pre-analytics location list ───────────────────────────────────────
+# Locations don't map 1:1 to benches: HC3 is a phlebotomy-only location
+# with no analytics bench, and PMOB has both. Keep the list explicit
+# until the pre-analytics side grows enough config to deserve its own
+# dict structure.
+PRE_ANALYTICS_LOCATIONS: list[str] = ["Keck", "Norris", "HC3", "PMOB"]
 
 # Procedures always excluded from Analytics data scope (Completed,
 # In-Lab, TAT) live in analytics/filters.py as EXCLUDED_PROCEDURES.

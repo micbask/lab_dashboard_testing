@@ -4,7 +4,7 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
-from config import HOUR_LABELS
+from config import HOUR_LABELS, PRE_ANALYTICS_LOCATIONS
 from storage import (
     storage_is_configured, get_data_summary, ensure_partitioned_storage,
     reset_all_data, delete_date_range, get_index_hash,
@@ -54,7 +54,7 @@ def render_sidebar(ss) -> dict:
             unsafe_allow_html=True,
         )
         pa_location = st.radio(
-            "Location", ["Keck", "Norris", "HC3", "PMOB"],
+            "Location", PRE_ANALYTICS_LOCATIONS,
             horizontal=True, label_visibility="collapsed",
             key="pa_location_radio",
         )

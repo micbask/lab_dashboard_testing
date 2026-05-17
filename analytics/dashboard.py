@@ -9,6 +9,7 @@ import streamlit as st
 from config import (
     DEFAULT_RESOURCES, MAP_TYPES,
     HOUR_LABELS, LABEL_TO_HOUR,
+    BENCH_LABEL_TO_VALUE, BENCHES_USING_CORE_PANEL, CORE_PANEL_DEFAULTS,
 )
 from storage import (
     storage_is_configured, get_data_summary,
@@ -51,17 +52,9 @@ _ORANGES_HIGH = "#7f2704"
 _TOTAL_NEUTRAL = "#ececec"
 
 
-# Display labels for the Testing Bench radio (non-TAT path). The radio
-# shows short labels but the rest of the app — resource lookups,
-# forecast keys, banner subtitle, download filenames — keeps using the
-# full MAP_TYPES names ("Keck Core", "Norris Core", "Norris Specialty"),
-# so we convert via this dict before passing map_type downstream.
-BENCH_LABEL_TO_VALUE = {
-    "Keck":      "Keck Core",
-    "Norris":    "Norris Core",
-    "Specialty": "Norris Specialty",
-    "PMOB":      "PMOB",
-}
+# BENCH_LABEL_TO_VALUE moved to config.py — derived from
+# SITE_CONFIG[bench]["short_label"]. Adding a new bench is now a
+# single SITE_CONFIG entry.
 
 
 def _build_analytics_heatmap(
@@ -646,63 +639,8 @@ _TAT_TS_COLOR       = "#0a9396"   # TS (Time Study)
 _TAT_COMBINED_COLOR = "#444444"   # All
 
 
-def format_tat(minutes) -> str:
-    """Format TAT minutes as 'Xh Ym' (or 'Ym' when <1h); '-' for None/NaN."""
-    if minutes is None or pd.isna(minutes):
-        return "-"
-    h = int(minutes // 60)
-    m = int(round(minutes - h * 60))
-    if h == 0:
-        return f"{m}m"
-    return f"{h}h {m}m"
-
-
-def format_pct(pct) -> str:
-    """Format a percentage value as 'XX.X%'; '-' for None/NaN."""
-    if pct is None or pd.isna(pct):
-        return "-"
-    return f"{pct:.1f}%"
-
-
-def _fmt_tat_compact(minutes) -> str:
-    """No-space TAT format used inside the Range column. Same numbers
-    as `format_tat` but the hour/minute separator is dropped so
-    values are shorter and fit narrow uniform-width cells.
-
-    '8' min       → '8m'
-    '60' min      → '1h'
-    '354' min     → '5h54m'  (vs format_tat's '5h 54m')
-
-    Returns '-' for None/NaN.
-    """
-    if minutes is None or pd.isna(minutes):
-        return "-"
-    minutes = int(round(minutes))
-    h = minutes // 60
-    m = minutes - h * 60
-    if h == 0:
-        return f"{m}m"
-    if m == 0:
-        return f"{h}h"
-    return f"{h}h{m}m"
-
-
-def format_range(min_v, max_v) -> str:
-    """Format a (min, max) TAT pair on ONE line, e.g. '8m-5h54m'.
-
-    No spaces — pairs the no-space hour/minute format from
-    `_fmt_tat_compact` with a single bare hyphen so the value is
-    as compact as possible for the procedure table's narrow
-    uniform-width Range cells.
-
-    Returns '-' if either bound is missing.
-    """
-    if (
-        min_v is None or max_v is None
-        or pd.isna(min_v) or pd.isna(max_v)
-    ):
-        return "-"
-    return f"{_fmt_tat_compact(min_v)}-{_fmt_tat_compact(max_v)}"
+# Display formatters — shared with pre_analytics via /formatting.py.
+from formatting import format_tat, format_pct, format_range  # noqa: E402
 
 
 def _render_tat_view(params: dict) -> None:
@@ -1037,12 +975,9 @@ def _render_tat_view(params: dict) -> None:
     #   Norris Specialty (and any other bench) → keep the historic
     #     top-5-by-volume default since "core panels" don't apply.
     _all_procs = sorted(tat_df["Order Procedure"].dropna().unique().tolist())
-    _CORE_PANEL_DEFAULTS = [
-        "CBC w diff", "CBC no diff", "BMP", "CMP", "Lactic Acid",
-    ]
-    if _bench in ("Keck Core", "Norris Core", "PMOB"):
+    if _bench in BENCHES_USING_CORE_PANEL:
         _present = set(_all_procs)
-        _default_top = [p for p in _CORE_PANEL_DEFAULTS if p in _present]
+        _default_top = [p for p in CORE_PANEL_DEFAULTS if p in _present]
         if not _default_top:
             # Fallback: this bench/date has none of the core panels in
             # the data — fall back to the historic top-5-by-volume so

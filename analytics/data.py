@@ -343,42 +343,15 @@ def load_monthly_avg_for_comparison(
 # TAT METRIC LAYER
 # ════════════════════════════════════════════════════════════════════════════
 
-# Default per-priority service-level targets in minutes. The "% within
-# target" stat in the TAT view is computed against the row's own
-# priority target: RT samples vs the 2h SLA, ST/TS vs 1h. To change a
-# default target, edit this dict — the summary stats, per-procedure
-# table, bar-chart reference lines, and the dashboard legend all read
-# from `get_tat_targets(bench)` which falls back to this dict.
-TAT_TARGET_MINUTES: dict[str, int] = {
-    "RT": 120,  # Routine — 2-hour service level
-    "ST": 60,   # Stat — 1-hour
-    "TS": 60,   # Time Study — 1-hour
-}
-
-# Per-bench target overrides. Send-out / specialty work has a 48-hour
-# SLA across all priorities (RT/ST/TS lose their meaning when samples
-# are batched and shipped to a reference lab), so Norris Specialty
-# gets a single flat target. Add new entries here for any future
-# bench-specific SLAs.
-TAT_TARGET_OVERRIDES: dict[str, dict[str, int]] = {
-    "Norris Specialty": {
-        "RT": 48 * 60,
-        "ST": 48 * 60,
-        "TS": 48 * 60,
-    },
-}
-
-
-def get_tat_targets(bench: str | None) -> dict[str, int]:
-    """Resolve the per-priority TAT targets for `bench`.
-
-    Returns the override dict if `bench` has one, else the default
-    TAT_TARGET_MINUTES. Always returns a fresh copy so callers can
-    mutate without leaking back into the module-level dicts.
-    """
-    if bench and bench in TAT_TARGET_OVERRIDES:
-        return dict(TAT_TARGET_OVERRIDES[bench])
-    return dict(TAT_TARGET_MINUTES)
+# TAT targets now live in config.SITE_CONFIG (per bench) with
+# DEFAULT_TAT_TARGETS as the fallback. Re-exported here for callers
+# that import from analytics.data — adding a bench-specific TAT
+# override is a one-line edit in config.SITE_CONFIG.
+from config import (
+    DEFAULT_TAT_TARGETS as TAT_TARGET_MINUTES,
+    TAT_TARGET_OVERRIDES,
+    get_tat_targets,
+)
 
 # Stat columns reported per priority group inside `build_tat_table`'s
 # MultiIndex output. The order here is the order they appear in the
