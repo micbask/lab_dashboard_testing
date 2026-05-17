@@ -1709,9 +1709,34 @@ def _render_daily_view(params: dict, ss) -> None:
         st.info("No completed procedures found for this site on the selected date.")
         return
 
-    total_vol  = int(round(pivot["Total"].sum()))
+    # KPI math: for the historic (non-forecast) path, compute Total
+    # volume / Peak hour / Avg per hour from the BENCH-WIDE filtered
+    # DataFrame (not the top-N pivot) so the cards stay stable when
+    # the user toggles Top 10/20/30/All. The hour-range slider still
+    # scopes the metrics. Top procedure is unchanged — top-of-pivot
+    # equals top-of-all by definition.
+    #
+    # Forecast path keeps the pivot-based math because the forecast
+    # data source doesn't expose a bench-wide total in this scope.
     top_proc   = pivot["Total"].idxmax()
-    peak_hour  = pivot[_hour_cols].sum().idxmax()
+    if _is_forecast_view:
+        total_vol      = int(round(pivot["Total"].sum()))
+        peak_hour      = pivot[_hour_cols].sum().idxmax()
+        peak_hour_cnt  = int(round(pivot[_hour_cols].sum()[peak_hour]))
+    else:
+        _h_start, _h_end = hour_range
+        _filt_hr = filtered_df[
+            filtered_df["hour"].between(_h_start, _h_end)
+        ]
+        total_vol = int(_filt_hr["Complete Volume"].fillna(0).sum())
+        _per_hour = _filt_hr.groupby("hour")["Complete Volume"].sum()
+        if not _per_hour.empty:
+            _peak_h_int   = int(_per_hour.idxmax())
+            peak_hour     = HOUR_LABELS[_peak_h_int]
+            peak_hour_cnt = int(round(float(_per_hour.max())))
+        else:
+            peak_hour     = pivot[_hour_cols].sum().idxmax()
+            peak_hour_cnt = int(round(pivot[_hour_cols].sum()[peak_hour]))
     avg_per_hr = round(total_vol / max(len(_hour_cols), 1), 1)
     _vol_label = "Forecast volume" if _is_forecast_view else "Total volume"
 
@@ -1725,7 +1750,7 @@ def _render_daily_view(params: dict, ss) -> None:
                     unsafe_allow_html=True)
     with _m3:
         st.markdown(metric_card("Peak hour", peak_hour,
-                    sub=f"{int(round(pivot[_hour_cols].sum()[peak_hour]))} "
+                    sub=f"{peak_hour_cnt} "
                         f"{'predicted' if _is_forecast_view else 'completions'}"),
                     unsafe_allow_html=True)
     with _m4:
