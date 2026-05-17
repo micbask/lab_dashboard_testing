@@ -674,6 +674,37 @@ def format_pct(pct) -> str:
     return f"{pct:.1f}%"
 
 
+def _fmt_tat_compact(minutes) -> str:
+    """Compact TAT format used inside the Range column.
+
+    Drops the space between hours and minutes ('1h12' instead of
+    '1h 12m') so values like '1h12–3h45' fit in the table's narrow
+    Range cells. Returns '-' for None/NaN, 'Xm' when under an hour,
+    'Xh' when exactly on the hour, 'XhY' otherwise.
+    """
+    if minutes is None or pd.isna(minutes):
+        return "-"
+    minutes = int(round(minutes))
+    h = minutes // 60
+    m = minutes - h * 60
+    if h == 0:
+        return f"{m}m"
+    if m == 0:
+        return f"{h}h"
+    return f"{h}h{m}"
+
+
+def format_range(min_v, max_v) -> str:
+    """Format a (min, max) TAT pair as 'min–max' using the compact
+    formatter. Returns '-' if either bound is missing."""
+    if (
+        min_v is None or max_v is None
+        or pd.isna(min_v) or pd.isna(max_v)
+    ):
+        return "-"
+    return f"{_fmt_tat_compact(min_v)}–{_fmt_tat_compact(max_v)}"
+
+
 def _render_tat_view(params: dict) -> None:
     """Render the TAT analytics page.
 
@@ -968,42 +999,52 @@ def _render_tat_view(params: dict) -> None:
         unsafe_allow_html=True,
     )
 
+    # Each priority group now has 4 columns: n, Mean, %, Range.
+    # The "Range" column shows min–max TAT (compact form, e.g.
+    # "1h12–3h45"). The All group's "%" header is shortened from
+    # "% within target" to "%" so it doesn't clip on narrow screens
+    # (the priority-specific columns already name their threshold;
+    # the All column is self-evident).
     _tat_headers = [
         "Procedure",
         # RT group (target < 2h)
         f"<span style='color:{_TAT_ROUTINE_COLOR}'>RT</span><br>n",
         f"<span style='color:{_TAT_ROUTINE_COLOR}'>RT</span><br>Mean",
         f"<span style='color:{_TAT_ROUTINE_COLOR}'>RT</span><br>% &lt;{_rt_target_h}h",
+        f"<span style='color:{_TAT_ROUTINE_COLOR}'>RT</span><br>Range",
         # ST group (target < 1h)
         f"<span style='color:{_TAT_STAT_COLOR}'>ST</span><br>n",
         f"<span style='color:{_TAT_STAT_COLOR}'>ST</span><br>Mean",
         f"<span style='color:{_TAT_STAT_COLOR}'>ST</span><br>% &lt;{_st_target_h}h",
+        f"<span style='color:{_TAT_STAT_COLOR}'>ST</span><br>Range",
         # TS group (target < 1h)
         f"<span style='color:{_TAT_TS_COLOR}'>TS</span><br>n",
         f"<span style='color:{_TAT_TS_COLOR}'>TS</span><br>Mean",
         f"<span style='color:{_TAT_TS_COLOR}'>TS</span><br>% &lt;{_ts_target_h}h",
+        f"<span style='color:{_TAT_TS_COLOR}'>TS</span><br>Range",
         # All group (weighted per-sample target)
         f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>n",
         f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>Mean",
-        f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>% within target",
+        f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>%",
+        f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>Range",
     ]
 
     # Column-tinted header / cell fills so the priority groups read as
     # visual blocks. Cells use a much paler 0.04 alpha so the data still
-    # dominates the eye.
+    # dominates the eye. 4 cells per group now (n, Mean, %, Range).
     _hdr_fill_cells = (
         ["#ffffff"]
-        + ["rgba(0, 102, 204, 0.10)"]   * 3   # RT
-        + ["rgba(204, 102, 0, 0.10)"]   * 3   # ST
-        + ["rgba(10, 147, 150, 0.10)"]  * 3   # TS
-        + ["rgba(68, 68, 68, 0.10)"]    * 3   # All
+        + ["rgba(0, 102, 204, 0.10)"]   * 4   # RT
+        + ["rgba(204, 102, 0, 0.10)"]   * 4   # ST
+        + ["rgba(10, 147, 150, 0.10)"]  * 4   # TS
+        + ["rgba(68, 68, 68, 0.10)"]    * 4   # All
     )
     _cell_fill_cols = (
         ["#ffffff"]
-        + ["rgba(0, 102, 204, 0.04)"]   * 3
-        + ["rgba(204, 102, 0, 0.04)"]   * 3
-        + ["rgba(10, 147, 150, 0.04)"]  * 3
-        + ["rgba(68, 68, 68, 0.04)"]    * 3
+        + ["rgba(0, 102, 204, 0.04)"]   * 4
+        + ["rgba(204, 102, 0, 0.04)"]   * 4
+        + ["rgba(10, 147, 150, 0.04)"]  * 4
+        + ["rgba(68, 68, 68, 0.04)"]    * 4
     )
 
     def _fmt_n(v):
@@ -1015,29 +1056,49 @@ def _render_tat_view(params: dict) -> None:
     _rt_n_col   = [_fmt_n(v)     for v in table_df[("RT",  "n")]]
     _rt_mean    = [format_tat(v) for v in table_df[("RT",  "Mean")]]
     _rt_pct     = [format_pct(v) for v in table_df[("RT",  "% within target")]]
+    _rt_range   = [
+        format_range(mn, mx)
+        for mn, mx in zip(table_df[("RT", "Min")], table_df[("RT", "Max")])
+    ]
     _st_n_col   = [_fmt_n(v)     for v in table_df[("ST",  "n")]]
     _st_mean    = [format_tat(v) for v in table_df[("ST",  "Mean")]]
     _st_pct     = [format_pct(v) for v in table_df[("ST",  "% within target")]]
+    _st_range   = [
+        format_range(mn, mx)
+        for mn, mx in zip(table_df[("ST", "Min")], table_df[("ST", "Max")])
+    ]
     _ts_n_col   = [_fmt_n(v)     for v in table_df[("TS",  "n")]]
     _ts_mean    = [format_tat(v) for v in table_df[("TS",  "Mean")]]
     _ts_pct     = [format_pct(v) for v in table_df[("TS",  "% within target")]]
+    _ts_range   = [
+        format_range(mn, mx)
+        for mn, mx in zip(table_df[("TS", "Min")], table_df[("TS", "Max")])
+    ]
     _all_n_col  = [_fmt_n(v)     for v in table_df[("All", "n")]]
     _all_mean   = [format_tat(v) for v in table_df[("All", "Mean")]]
     _all_pct    = [format_pct(v) for v in table_df[("All", "% within target")]]
+    _all_range  = [
+        format_range(mn, mx)
+        for mn, mx in zip(table_df[("All", "Min")], table_df[("All", "Max")])
+    ]
 
     _cell_values = [
         _proc_col,
-        _rt_n_col,  _rt_mean,  _rt_pct,
-        _st_n_col,  _st_mean,  _st_pct,
-        _ts_n_col,  _ts_mean,  _ts_pct,
-        _all_n_col, _all_mean, _all_pct,
+        _rt_n_col,  _rt_mean,  _rt_pct,  _rt_range,
+        _st_n_col,  _st_mean,  _st_pct,  _st_range,
+        _ts_n_col,  _ts_mean,  _ts_pct,  _ts_range,
+        _all_n_col, _all_mean, _all_pct, _all_range,
     ]
-    _aligns = ["left"] + ["right"] * 12
-    _header_font_colors = ["#6F1828"] + ["#1a1a1a"] * 12
+    _aligns = ["left"] + ["right"] * 16
+    _header_font_colors = ["#6F1828"] + ["#1a1a1a"] * 16
 
+    # Column widths: 17 columns total. Procedure shrunk from 3 to 2
+    # units (short aliases like "CBC w diff" still fit comfortably in
+    # ~130 px); each stat column gets 1 unit. Total = 18 units, so
+    # Procedure ≈ 11% of width, stat cols ≈ 5.5% each.
     _tat_table_fig = go.Figure(
         data=go.Table(
-            columnwidth=[3] + [1] * 12,
+            columnwidth=[2] + [1] * 16,
             header=dict(
                 values=_tat_headers,
                 fill_color=_hdr_fill_cells,
@@ -1048,9 +1109,9 @@ def _render_tat_view(params: dict) -> None:
                     size=12,
                     color=_header_font_colors,
                 ),
-                # Slightly taller than the original 48 px so the
-                # "% within target" header on the All column wraps to
-                # two lines without clipping.
+                # 56 px lets the 2-line headers ("RT" / "Range" etc.)
+                # render without clipping. All four columns now have a
+                # 2-line header so the height is consistent.
                 height=56,
             ),
             cells=dict(

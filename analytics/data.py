@@ -332,7 +332,7 @@ TAT_TARGET_MINUTES: dict[str, int] = {
 # Stat columns reported per priority group inside `build_tat_table`'s
 # MultiIndex output. The order here is the order they appear in the
 # rendered table.
-_TAT_STAT_COLS = ["n", "Mean", "% within target"]
+_TAT_STAT_COLS = ["n", "Mean", "% within target", "Min", "Max"]
 
 
 def compute_tat_metrics(df: pd.DataFrame) -> pd.DataFrame:
@@ -393,18 +393,23 @@ def build_tat_table(
               target: each sample evaluated against its own priority's
               threshold from TAT_TARGET_MINUTES)
 
-    Each group reports n, Mean, and % within target. Procedures with
-    no rows in a given group get None for every stat column in that
-    group; rendering displays those as "-".
+    Each group reports n, Mean, % within target, Min, and Max. The
+    dashboard renders Min/Max as a combined "Range" column. Procedures
+    with no rows in a given group get None for every stat column in
+    that group; rendering displays those as "-".
 
     The returned DataFrame has one row per procedure in
     `selected_procedures` and a pandas MultiIndex column structure:
 
         Level 0:  ['Procedure', 'RT', 'ST', 'TS', 'All']
-        Level 1:  ['Procedure', then 'n', 'Mean', '% within target' x 4]
+        Level 1:  ['Procedure', then 'n', 'Mean', '% within target',
+                   'Min', 'Max' x 4]
 
-    Rows are sorted by All n descending; procedures with no samples
-    sort to the bottom.
+    Row order PRESERVES `selected_procedures` order so callers can
+    control the display sequence (e.g. fixed clinical-priority order
+    for core-panel defaults vs descending-by-volume for the top-N
+    default). The historic descending-by-(All, n) sort was removed
+    because it forced every default into volume order.
     """
     columns = pd.MultiIndex.from_tuples(
         [("Procedure", "Procedure")]
@@ -418,20 +423,23 @@ def build_tat_table(
         return pd.DataFrame(columns=columns)
 
     def _group_stats(group_df: pd.DataFrame, threshold_minutes: int) -> list:
-        """Return [n, Mean, % within target] for a single-priority
-        subset evaluated against `threshold_minutes`. Three Nones for
-        an empty subset."""
+        """Return [n, Mean, % within target, Min, Max] for a
+        single-priority subset evaluated against `threshold_minutes`.
+        Five Nones for an empty subset."""
         if group_df.empty:
-            return [None, None, None]
+            return [None, None, None, None, None]
         tats = group_df["TAT_minutes"].astype(float)
         return [
             int(len(tats)),
             float(tats.mean()),
             float((tats < threshold_minutes).mean() * 100.0),
+            float(tats.min()),
+            float(tats.max()),
         ]
 
     def _all_stats(proc_rows: pd.DataFrame) -> list:
-        """Return [n, Mean, % within target] for the All aggregate.
+        """Return [n, Mean, % within target, Min, Max] for the All
+        aggregate.
 
         % within target uses each sample's priority-specific threshold
         (RT vs <2h, ST/TS vs <1h) via vectorized lookup against
@@ -443,13 +451,19 @@ def build_tat_table(
         target" via .fillna(False).
         """
         if proc_rows.empty:
-            return [None, None, None]
+            return [None, None, None, None, None]
         tats = proc_rows["TAT_minutes"].astype(float)
         n = int(len(proc_rows))
         mean = float(tats.mean())
         thresholds = proc_rows["Collection Priority"].map(TAT_TARGET_MINUTES).astype(float)
         meets = int((tats < thresholds).fillna(False).sum())
-        return [n, mean, float(meets / n * 100.0)]
+        return [
+            n,
+            mean,
+            float(meets / n * 100.0),
+            float(tats.min()),
+            float(tats.max()),
+        ]
 
     sel = tat_df[tat_df["Order Procedure"].isin(selected_procedures)]
 
@@ -468,11 +482,7 @@ def build_tat_table(
             + _all_stats(proc_rows)
         )
 
-    out = pd.DataFrame(rows, columns=columns)
-
-    # Sort by All n descending; rows with None n drop to the bottom.
-    out = (
-        out.sort_values(("All", "n"), ascending=False, na_position="last")
-        .reset_index(drop=True)
-    )
-    return out
+    # Row order = selected_procedures order, NOT sorted by volume.
+    # Callers control the sequence by passing procedures in their
+    # desired display order.
+    return pd.DataFrame(rows, columns=columns)
