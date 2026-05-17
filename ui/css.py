@@ -1579,13 +1579,12 @@ html body [class*="st-key-top_n_btn_"] button div {
    sits directly under the cardinal stripe, which has a 40 px
    margin-bottom that we can't shrink globally (analytics views
    rely on it for KPI breathing room). A negative margin-top here
-   absorbs 24 px of the stripe's gap so the disclaimer ends up
-   ~16 px below the stripe — a small breathing margin above,
-   roughly twice its own 8 px margin-bottom to the KPI cards.
+   absorbs 8 px of the stripe's gap so the disclaimer ends up
+   ~32 px below the stripe — a comfortable breathing margin above.
    Targeted via st.container(key=...) on the pre-analytics side
    so the rule only fires there. */
 .st-key-pa_data_caveat [data-testid="stAlert"] {
-    margin-top: -24px !important;
+    margin-top: -8px !important;
 }
 .status-chip {
     display: inline-block;
