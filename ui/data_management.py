@@ -9,6 +9,8 @@ reset / forecast retrain, and surface the latest ingest stats.
 import pandas as pd
 import streamlit as st
 
+from ui.cards import status_chip
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # DATA MANAGEMENT SIDEBAR (shared between analytics + pre-analytics)
