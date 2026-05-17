@@ -911,21 +911,45 @@ def _render_tat_view(params: dict) -> None:
     )
 
     # ── Procedure filter ───────────────────────────────────────────────────
-    _all_procs   = sorted(tat_df["Order Procedure"].dropna().unique().tolist())
-    _default_top = get_top_procedures_by_volume(tat_df, n=5)
-    _filter_key  = f"tat_proc_filter_{_bench}_{_date_str}"
+    # Default selection is bench-specific:
+    #   Keck Core / Norris Core → the 5 "core panel" procedures in a
+    #     fixed clinical-priority order (CBC w diff, CBC no diff, BMP,
+    #     CMP, Lactic Acid). Intersect with what's actually present in
+    #     the data so a missing procedure is silently dropped instead
+    #     of crashing the multiselect. If none of them are present
+    #     (atypical day), fall back to top-5-by-volume.
+    #   Norris Specialty (and any other bench) → keep the historic
+    #     top-5-by-volume default since "core panels" don't apply.
+    _all_procs = sorted(tat_df["Order Procedure"].dropna().unique().tolist())
+    _CORE_PANEL_DEFAULTS = [
+        "CBC w diff", "CBC no diff", "BMP", "CMP", "Lactic Acid",
+    ]
+    if _bench in ("Keck Core", "Norris Core"):
+        _present = set(_all_procs)
+        _default_top = [p for p in _CORE_PANEL_DEFAULTS if p in _present]
+        if not _default_top:
+            # Fallback: this bench/date has none of the core panels in
+            # the data — fall back to the historic top-5-by-volume so
+            # the chart still has a sensible starting selection.
+            _default_top = get_top_procedures_by_volume(tat_df, n=5)
+        _default_label = "core panels"
+    else:
+        _default_top = get_top_procedures_by_volume(tat_df, n=5)
+        _default_label = "top 5 by volume"
+
+    _filter_key = f"tat_proc_filter_{_bench}_{_date_str}"
 
     st.markdown(
         '<div class="section-heading">Procedures</div>',
         unsafe_allow_html=True,
     )
     _selected = st.multiselect(
-        "Filter procedures (defaults to top 5 by volume)",
+        f"Filter procedures (defaults to {_default_label})",
         options=_all_procs,
         default=_default_top,
         key=_filter_key,
     )
-    # Empty selection → fall back to the top-5 default so the table and
+    # Empty selection → fall back to the default so the table and
     # chart never collapse to nothing on an accidental clear.
     if not _selected:
         _selected = _default_top

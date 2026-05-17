@@ -420,6 +420,18 @@ def load_filtered_data(
 
     combined = pd.concat(frames, ignore_index=True)
 
+    # Apply procedure-name aliases (CBC w diff / CMP / BMP / CBC no diff)
+    # at read time so already-stored Parquet data — which was written
+    # with the full verbose procedure names — renders with the short
+    # display names in the dashboard. New uploads are also aliased at
+    # parse time (parsing.clean_procedure_names runs inside
+    # parse_single_file), so the on-disk format eventually converges;
+    # this read-time pass means we don't need a one-time Parquet
+    # rewrite. Lazy import to avoid a top-level dependency from
+    # storage.py onto parsing.py.
+    from parsing import clean_procedure_names as _alias_procs
+    combined = _alias_procs(combined)
+
     # Push down ALL filters via DuckDB — date range, resources, procedure exclusions
     con = duckdb.connect()
     con.register("data", combined)

@@ -312,6 +312,12 @@ def select_available_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def clean_procedure_names(df: pd.DataFrame) -> pd.DataFrame:
+    """Mirror of parsing.clean_procedure_names — keep in sync.
+
+    Two passes: collapse \\xa0 variants to a canonical double-space
+    form, then apply display aliases (CBC w diff / CBC no diff / CMP /
+    BMP).
+    """
     if "Order Procedure" not in df.columns:
         return df
     df["Order Procedure"] = df["Order Procedure"].str.replace(
@@ -324,6 +330,13 @@ def clean_procedure_names(df: pd.DataFrame) -> pd.DataFrame:
         "Complete Blood Count With Auto  Differen",
         regex=False,
     )
+    _aliases = {
+        "Complete Blood Count With Auto  Differen": "CBC w diff",
+        "Complete Blood Count NO Auto Differentia": "CBC no diff",
+        "Comprehensive Metabolic Panel":            "CMP",
+        "Basic Metabolic Panel":                    "BMP",
+    }
+    df["Order Procedure"] = df["Order Procedure"].replace(_aliases)
     return df
 
 
