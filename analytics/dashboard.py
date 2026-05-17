@@ -1683,9 +1683,7 @@ def _render_monthly_view(params: dict, ss) -> None:
         f'Values = avg completed volume per day in hour. '
         f'Colour scale: &nbsp;'
         f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
-        f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
-        f'(hour columns only). &nbsp;'
-        f'<strong>Total</strong> column = avg daily total per procedure.'
+        f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high'
     )
     _render_top_n_legend(_m_prefix)
 
@@ -1767,12 +1765,10 @@ def _render_monthly_view(params: dict, ss) -> None:
     )
     st.markdown(
         f'<div class="heatmap-legend">'
-        f'Values = avg completed volume per occurrence of that weekday. '
+        f'Values = avg completed volume per day in hour. '
         f'Colour scale: &nbsp;'
         f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
-        f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
-        f'(hour columns only). &nbsp;'
-        f'<strong>Total</strong> column = avg daily total for that weekday.'
+        f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high'
         f'</div>',
         unsafe_allow_html=True,
     )

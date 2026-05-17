@@ -410,14 +410,36 @@ def render(params: dict, ss) -> None:
                         location, _shift,
                     )
                     _counts_pv = _counts_pv[_hours_subset]
+
+                    # Companion samples-sum pivot for the per-cell
+                    # hover (Monthly view surfaces avg samples in
+                    # addition to avg draws). Indexed to match
+                    # _counts_pv so per-tech division aligns.
+                    if not _hr_slice.empty:
+                        _samples_sum_pv = _hr_slice.pivot_table(
+                            index="display_name", columns="hour",
+                            values="samples", aggfunc="sum",
+                            fill_value=0,
+                        ).reindex(
+                            index=_counts_pv.index,
+                            columns=_hours_subset,
+                            fill_value=0,
+                        )
+                    else:
+                        _samples_sum_pv = _counts_pv * 0
+
                     # Avg = count / active_days. Techs with 0 active
                     # days stay at 0 (no division), so they render as
                     # empty rows — same as today.
                     _pivot = _counts_pv.astype(float).copy()
+                    _samples_avg_pv = _samples_sum_pv.astype(float).copy()
                     for _t in _pivot.index:
                         _ad = _tech_active_days.get(_t, 0)
                         if _ad > 0:
                             _pivot.loc[_t] = _pivot.loc[_t] / _ad
+                            _samples_avg_pv.loc[_t] = (
+                                _samples_avg_pv.loc[_t] / _ad
+                            )
                 else:
                     _pivot = build_draw_pivot(
                         draw_df, location, _shift, view,
@@ -425,6 +447,7 @@ def render(params: dict, ss) -> None:
                     )
                     _pivot = _pivot[_hours_subset]
                     _tech_active_days = {}
+                    _samples_avg_pv = None
 
                 _techs = _pivot.index.tolist()
                 if not _techs:
@@ -450,6 +473,7 @@ def render(params: dict, ss) -> None:
                         if not _shift_df.empty else 0
                     ),
                     "active_days":   _tech_active_days,
+                    "samples_avg":   _samples_avg_pv,
                 })
 
             if not _shift_data:
@@ -556,10 +580,15 @@ def render(params: dict, ss) -> None:
                         _label = HOUR_LABELS[_h]
                         if view == "Monthly":
                             _v = _d["pivot"].loc[_tech].iloc[_j]
+                            _sv = (
+                                _d["samples_avg"].loc[_tech].iloc[_j]
+                                if _d["samples_avg"] is not None else 0.0
+                            )
                             _ad = _d["active_days"].get(_tech, 0)
                             if _v > 0:
                                 _detail = (
                                     f"{_v:.1f} avg draws · "
+                                    f"{_sv:.1f} avg samples · "
                                     f"N = {_ad} active day"
                                     f"{'s' if _ad != 1 else ''}"
                                 )
@@ -1057,12 +1086,10 @@ def render(params: dict, ss) -> None:
             )
             st.markdown(
                 '<div class="heatmap-legend">'
-                'Values = avg draws per occurrence of that day-of-week. '
+                'Values = avg draws per day in hour. '
                 'Colour scale: &nbsp;'
                 '<strong style="color:#fff7bc;">■</strong> low &nbsp;→&nbsp; '
-                '<strong style="color:#8c2d04;">■</strong> high '
-                '(hour columns only). &nbsp;'
-                '<strong>Total</strong> column = avg daily total for that day-of-week.'
+                '<strong style="color:#8c2d04;">■</strong> high'
                 '</div>',
                 unsafe_allow_html=True,
             )
@@ -1147,9 +1174,7 @@ def render(params: dict, ss) -> None:
                     hovertemplate=(
                         "<b>%{y} @ %{customdata[0]}</b><br>"
                         "%{customdata[1]:.1f} avg draws<br>"
-                        "%{customdata[2]:.1f} avg samples<br>"
-                        "<i>%{customdata[3]:,} total draws · "
-                        "%{customdata[4]:,} total samples</i>"
+                        "%{customdata[2]:.1f} avg samples"
                         "<extra></extra>"
                     ),
                     hoverongaps=False,
@@ -1194,9 +1219,7 @@ def render(params: dict, ss) -> None:
                     hovertemplate=(
                         "<b>%{y} @ %{customdata[0]}</b><br>"
                         "%{customdata[1]:.1f} avg daily total draws<br>"
-                        "%{customdata[2]:.1f} avg daily total samples<br>"
-                        "<i>%{customdata[3]:,} total draws · "
-                        "%{customdata[4]:,} total samples</i>"
+                        "%{customdata[2]:.1f} avg daily total samples"
                         "<extra></extra>"
                     ),
                     textfont=dict(color="#1a1a1a", size=11),
@@ -1261,13 +1284,20 @@ def render(params: dict, ss) -> None:
             '<div class="section-heading">Draws by tech &amp; hour</div>',
             unsafe_allow_html=True,
         )
+        # View-aware legend prefix — Monthly cells are averages (avg
+        # draws per active day for that tech / hour); Daily cells are
+        # exact counts.
+        if pa_view == "Monthly":
+            _legend_values = "Values = avg draws per day in hour. "
+        else:
+            _legend_values = "Values = draws per hour. "
         st.markdown(
-            '<div class="heatmap-legend">'
-            'Colour scale: &nbsp;'
-            '<strong style="color:#fff7bc;">■</strong> low &nbsp;→&nbsp; '
-            '<strong style="color:#8c2d04;">■</strong> high. &nbsp;'
-            'Higher values indicate more draws per hour.'
-            '</div>',
+            f'<div class="heatmap-legend">'
+            f'{_legend_values}'
+            f'Colour scale: &nbsp;'
+            f'<strong style="color:#fff7bc;">■</strong> low &nbsp;→&nbsp; '
+            f'<strong style="color:#8c2d04;">■</strong> high'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
