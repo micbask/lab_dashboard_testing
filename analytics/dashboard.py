@@ -32,6 +32,7 @@ from analytics.data import (
     build_pivot, build_monthly_pivot, build_weekday_pivot,
     load_monthly_avg_for_comparison,
     compute_tat_metrics, get_top_procedures_by_volume, build_tat_table,
+    TAT_TARGET_MINUTES,
 )
 
 
@@ -277,6 +278,15 @@ def render_sidebar(ss) -> dict:
             key="time_basis",
         )
 
+        # Switching time_basis can leave the user on a date that has
+        # data for the previous basis but is empty for the new one
+        # (e.g. Completed has May 15, In-Lab doesn't). Pop the date
+        # picker so it re-clamps to the bench's _max_d on the next
+        # render, the same invalidation pattern as a bench change.
+        if ss.get("last_time_basis") != time_basis:
+            ss.pop("date_picker", None)
+            ss["last_time_basis"] = time_basis
+
         # ── 3. View ──
         st.markdown(
             '<div class="sidebar-section-label">VIEW</div>',
@@ -294,7 +304,7 @@ def render_sidebar(ss) -> dict:
                     retrain_all_forecasts_streaming(ss.resource_assignments)
                 st.success("Forecast models retrained.")
             else:
-                st.warning("No storage configured — cannot retrain forecasts.")
+                st.warning("No storage configured - cannot retrain forecasts.")
 
         if ss.pop("pending_reset", False):
             try:
@@ -471,7 +481,7 @@ def render_sidebar(ss) -> dict:
                                 unsafe_allow_html=True,
                             )
                     else:
-                        st.caption("No forecast available — use Refresh Forecast to generate one.")
+                        st.caption("No forecast available - use Refresh Forecast to generate one.")
 
                     # ── 5. Hour Range  (Completed / In-Lab only) ──
                     st.markdown(
@@ -595,22 +605,61 @@ def render_sidebar(ss) -> dict:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# LOCAL-FILE FALLBACK HELPER
+# ════════════════════════════════════════════════════════════════════════════
+
+def _apply_local_file_scope(
+    local_df: pd.DataFrame,
+    resources: list,
+    time_basis: str,
+) -> pd.DataFrame:
+    """Apply bench-level scope + procedure exclusions + In-Lab remap
+    to a local-file-upload DataFrame.
+
+    Mirrors what `load_analytics_data` does on the storage path: scopes
+    to the testing bench's resources, removes excluded procedures, and
+    (for time_basis="In-Lab") re-maps complete_date/hour to inlab_date/
+    inlab_hour while dropping rows without an In-Lab timestamp.
+
+    Only used when storage is not configured; the storage path runs this
+    inside the cached loader instead.
+    """
+    out = local_df[
+        local_df["Performing Service Resource"].isin(resources) &
+        ~local_df["Order Procedure"].isin(EXCLUDED_PROCEDURES)
+    ].copy()
+    if time_basis == "In-Lab":
+        _has_inlab = (
+            "inlab_date" in out.columns
+            and out["inlab_date"].notna().any()
+        )
+        if not _has_inlab:
+            return out.iloc[0:0]
+        out = out[out["inlab_date"].notna()].copy()
+        out["complete_date"] = out["inlab_date"]
+        out["hour"] = out["inlab_hour"].astype(int)
+    return out
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # TAT VIEW (Phase 2)
 # ════════════════════════════════════════════════════════════════════════════
 
-# Per-priority colours used across the TAT table headers and bar chart so
-# Routine/Stat/All stay visually grouped end-to-end. The "All" column
-# is the union of Routine + Stat/Time-Study (internally still keyed on
-# the "Combined" MultiIndex label coming out of analytics/data.py).
-_TAT_ROUTINE_COLOR  = "#0066cc"
-_TAT_STAT_COLOR     = "#cc6600"
-_TAT_COMBINED_COLOR = "#444444"
+# Per-priority colours used across the TAT legend, summary table,
+# per-procedure table headers, and bar chart so RT/ST/TS/All stay
+# visually grouped end-to-end. TS gets teal — visually distinct from
+# RT's blue and ST's warm orange, no overlap with the urgency-warm
+# range used elsewhere in the dashboard. All stays neutral gray.
+_TAT_ROUTINE_COLOR  = "#0066cc"   # RT (Routine)
+_TAT_STAT_COLOR     = "#cc6600"   # ST (Stat)
+_TAT_TS_COLOR       = "#0a9396"   # TS (Time Study)
+_TAT_COMBINED_COLOR = "#444444"   # All
 
 
 def format_tat(minutes) -> str:
-    """Format TAT minutes as 'Xh Ym' (or 'Ym' when <1h); '—' for None/NaN."""
+    """Format TAT minutes as 'Xh Ym' (or 'Ym' when <1h); '-' for None/NaN."""
     if minutes is None or pd.isna(minutes):
-        return "—"
+        return "-"
     h = int(minutes // 60)
     m = int(round(minutes - h * 60))
     if h == 0:
@@ -619,21 +668,35 @@ def format_tat(minutes) -> str:
 
 
 def format_pct(pct) -> str:
-    """Format a percentage value as 'XX.X%'; '—' for None/NaN."""
+    """Format a percentage value as 'XX.X%'; '-' for None/NaN."""
     if pct is None or pd.isna(pct):
-        return "—"
+        return "-"
     return f"{pct:.1f}%"
 
 
 def _render_tat_view(params: dict) -> None:
-    """Render the TAT analytics page: KPI strip, procedure filter,
-    Plotly go.Table of priority-grouped statistics, and a horizontal
-    grouped bar chart of mean TAT per procedure.
+    """Render the TAT analytics page.
 
-    The TAT view is now scoped by Performing Service Resource (i.e.
-    Testing Bench) — the same scope used by the Completed and In-Lab
-    views — so the reported turnaround is for the bench that actually
-    ran the test rather than the patient's facility.
+    Layout:
+      1. Priority legend  — RT/ST/TS with their service-level targets
+         (one row, colored dots), sourced from TAT_TARGET_MINUTES.
+      2. Summary by priority — Plotly go.Table with rows RT / ST / TS /
+         All and columns n, Mean TAT, Target, % within target. Each
+         row's % is evaluated against its own priority's target; the
+         All row uses a weighted aggregate across priorities and is
+         the single source of truth for the total-sample count.
+      3. Procedure filter (st.multiselect, defaults to top 5 by volume).
+      4. Turnaround time by procedure — Plotly go.Table, 13 columns
+         (procedure + 4 priority groups × n / Mean / % within target).
+         The priority-specific threshold is named in the column header
+         (RT % <2h, ST % <1h, TS % <1h, All % within target).
+      5. Mean TAT by procedure — horizontal grouped bar chart with 4
+         series (RT, ST, TS, All) plus dashed vertical reference lines
+         at each priority's target (60 min for ST/TS, 120 min for RT).
+
+    The view is scoped by Performing Service Resource (Testing Bench)
+    — same scope as Completed / In-Lab — so the reported turnaround
+    is for the bench that actually ran the test.
     """
     _bench     = params.get("tat_bench") or params["map_type"]
     _date_str  = params.get("tat_date_str") or ""
@@ -652,12 +715,40 @@ def _render_tat_view(params: dict) -> None:
         except Exception:
             _date_label = _date_str
     else:
-        _date_label = _date_str or "—"
+        _date_label = _date_str or "-"
 
     render_header(_bench, f"{_date_label} · TAT")
 
+    # ── Priority legend ────────────────────────────────────────────────────
+    # Colored dot + abbreviation + target, one row under the dashboard
+    # subtitle. Targets are read from TAT_TARGET_MINUTES (analytics/data.py)
+    # so changing a threshold in one place updates the legend, the
+    # summary table, the per-procedure column headers, and the bar
+    # chart reference lines together.
+    _rt_target_h = TAT_TARGET_MINUTES["RT"] // 60
+    _st_target_h = TAT_TARGET_MINUTES["ST"] // 60
+    _ts_target_h = TAT_TARGET_MINUTES["TS"] // 60
+
+    def _legend_chip(color: str, label: str) -> str:
+        return (
+            '<span style="display:inline-flex;align-items:center;">'
+            f'<span style="display:inline-block;width:10px;height:10px;'
+            f'border-radius:50%;background:{color};margin-right:6px;"></span>'
+            f'{label}</span>'
+        )
+
+    st.markdown(
+        '<div style="display:flex;flex-wrap:wrap;gap:18px;align-items:center;'
+        'font-size:12px;color:rgba(0,0,0,0.6);margin-bottom:16px;">'
+        f'{_legend_chip(_TAT_ROUTINE_COLOR, f"RT (Routine, target &lt; {_rt_target_h}h)")}'
+        f'{_legend_chip(_TAT_STAT_COLOR,    f"ST (Stat, target &lt; {_st_target_h}h)")}'
+        f'{_legend_chip(_TAT_TS_COLOR,      f"TS (Time Study, target &lt; {_ts_target_h}h)")}'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
     if not _date_str:
-        st.warning("No date string supplied — cannot load TAT data.")
+        st.warning("No date string supplied - cannot load TAT data.")
         return
 
     # Translate date_str + view → (start_date, end_date) for the shared
@@ -676,62 +767,148 @@ def _render_tat_view(params: dict) -> None:
         end_date=_end_d,
         resources=_resources,
         time_basis="TAT",
-        _index_hash=get_index_hash(),
+        index_hash=get_index_hash(),
     )
     tat_df = compute_tat_metrics(_raw_tat_df)
-
-    # ── KPI strip ──────────────────────────────────────────────────────────
-    if tat_df.empty:
-        _total_samples  = 0
-        _routine_mean   = None
-        _stat_mean      = None
-        _combined_under = None
-    else:
-        _total_samples = int(len(tat_df))
-        _routine = tat_df[tat_df["Collection Priority"] == "RT"]
-        _stat    = tat_df[tat_df["Collection Priority"].isin(["ST", "TS"])]
-        _routine_mean = (
-            float(_routine["TAT_minutes"].mean()) if not _routine.empty else None
-        )
-        _stat_mean = (
-            float(_stat["TAT_minutes"].mean()) if not _stat.empty else None
-        )
-        _combined_under = float(
-            (tat_df["TAT_minutes"] < 60).mean() * 100.0
-        )
-
-    _k1, _k2, _k3, _k4 = st.columns(4)
-    with _k1:
-        st.markdown(
-            metric_card("Total samples", f"{_total_samples:,}", accent=True),
-            unsafe_allow_html=True,
-        )
-    with _k2:
-        st.markdown(
-            metric_card("Avg TAT — routine", format_tat(_routine_mean),
-                        sub="RT samples"),
-            unsafe_allow_html=True,
-        )
-    with _k3:
-        st.markdown(
-            metric_card("Avg TAT — stat", format_tat(_stat_mean),
-                        sub="ST + TS samples"),
-            unsafe_allow_html=True,
-        )
-    with _k4:
-        st.markdown(
-            metric_card("% under 1 hour — combined", format_pct(_combined_under),
-                        sub="all priorities"),
-            unsafe_allow_html=True,
-        )
-
-    st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
 
     if tat_df.empty:
         st.warning(
             f"No TAT data found for **{_bench}** on **{_date_label}**."
         )
         return
+
+    # ── Summary by priority (Plotly go.Table) ─────────────────────────────
+    # Four rows (RT, ST, TS, All), five columns (Priority, n, Mean TAT,
+    # Target, % within target). RT's % is computed against its 2h SLA,
+    # ST/TS against 1h, and the All row aggregates with per-sample
+    # threshold lookup. The Target cell for All shows "-" since the
+    # aggregate has no single scalar threshold.
+    st.markdown(
+        '<div class="section-heading">Summary by priority</div>',
+        unsafe_allow_html=True,
+    )
+
+    _priorities_order = ["RT", "ST", "TS", "All"]
+    _priority_colors_map = {
+        "RT":  _TAT_ROUTINE_COLOR,
+        "ST":  _TAT_STAT_COLOR,
+        "TS":  _TAT_TS_COLOR,
+        "All": _TAT_COMBINED_COLOR,
+    }
+    _priority_fills_map = {
+        "RT":  "rgba(0, 102, 204, 0.10)",
+        "ST":  "rgba(204, 102, 0, 0.10)",
+        "TS":  "rgba(10, 147, 150, 0.10)",
+        "All": "rgba(68, 68, 68, 0.10)",
+    }
+    _priority_target_labels = {
+        "RT":  f"&lt; {_rt_target_h}h",
+        "ST":  f"&lt; {_st_target_h}h",
+        "TS":  f"&lt; {_ts_target_h}h",
+        "All": "-",
+    }
+
+    def _fmt_n_table(v) -> str:
+        if v is None or pd.isna(v):
+            return "-"
+        return f"{int(v):,}"
+
+    # Compute per-priority + All stats. The All row uses the same
+    # weighted threshold logic as build_tat_table._all_stats.
+    _summary_rows: list[tuple] = []
+    for _prio in _priorities_order:
+        if _prio == "All":
+            _subset = tat_df
+        else:
+            _subset = tat_df[tat_df["Collection Priority"] == _prio]
+        if _subset.empty:
+            _summary_rows.append((_prio, None, None, None))
+            continue
+        _n = int(len(_subset))
+        _mean = float(_subset["TAT_minutes"].mean())
+        if _prio == "All":
+            _thresholds = _subset["Collection Priority"].map(
+                TAT_TARGET_MINUTES
+            ).astype(float)
+            _meets = int(
+                (_subset["TAT_minutes"].astype(float) < _thresholds)
+                .fillna(False)
+                .sum()
+            )
+            _pct = float(_meets / _n * 100.0)
+        else:
+            _threshold = TAT_TARGET_MINUTES[_prio]
+            _pct = float((_subset["TAT_minutes"] < _threshold).mean() * 100.0)
+        _summary_rows.append((_prio, _n, _mean, _pct))
+
+    _summary_priority_col = [
+        f"<b><span style='color:{_priority_colors_map[p]}'>{p}</span></b>"
+        for p, _, _, _ in _summary_rows
+    ]
+    _summary_n_col    = [_fmt_n_table(n) for _, n, _, _ in _summary_rows]
+    _summary_mean_col = [format_tat(m) for _, _, m, _ in _summary_rows]
+    _summary_targ_col = [_priority_target_labels[p] for p, _, _, _ in _summary_rows]
+    _summary_pct_col  = [format_pct(pct) for _, _, _, pct in _summary_rows]
+
+    # Tint the Priority cell per row; other cells white. Plotly's
+    # cells.fill_color expects column-major 2D arrays.
+    _summary_priority_fills_list = [
+        _priority_fills_map[p] for p, _, _, _ in _summary_rows
+    ]
+    _summary_cell_fills = [
+        _summary_priority_fills_list,
+        ["#ffffff"] * len(_summary_rows),
+        ["#ffffff"] * len(_summary_rows),
+        ["#ffffff"] * len(_summary_rows),
+        ["#ffffff"] * len(_summary_rows),
+    ]
+
+    _summary_fig = go.Figure(
+        data=go.Table(
+            columnwidth=[1.2, 0.7, 1.0, 0.8, 1.4],
+            header=dict(
+                values=["Priority", "n", "Mean TAT", "Target", "% within target"],
+                fill_color="#ffffff",
+                line_color="#e2e8f0",
+                align="center",
+                font=dict(
+                    family="Inter, system-ui, sans-serif",
+                    size=12,
+                    color="#6F1828",
+                ),
+                height=40,
+            ),
+            cells=dict(
+                values=[
+                    _summary_priority_col,
+                    _summary_n_col,
+                    _summary_mean_col,
+                    _summary_targ_col,
+                    _summary_pct_col,
+                ],
+                fill_color=_summary_cell_fills,
+                line_color="#eef0f3",
+                align=["center", "right", "right", "center", "right"],
+                font=dict(
+                    family="Inter, system-ui, sans-serif",
+                    size=12,
+                    color="#1a1a1a",
+                ),
+                height=32,
+            ),
+        )
+    )
+    _summary_fig.update_layout(
+        height=40 + len(_summary_rows) * 32 + 16,
+        margin=dict(l=4, r=4, t=4, b=4),
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
+    st.plotly_chart(
+        _summary_fig,
+        use_container_width=True,
+        config={"displayModeBar": False},
+        key="tat_summary_table",
+    )
 
     # ── Procedure filter ───────────────────────────────────────────────────
     _all_procs   = sorted(tat_df["Order Procedure"].dropna().unique().tolist())
@@ -756,6 +933,12 @@ def _render_tat_view(params: dict) -> None:
     table_df = build_tat_table(tat_df, _selected)
 
     # ── TAT table (Plotly go.Table) ────────────────────────────────────────
+    # 13 columns: Procedure + 4 priority groups × (n, Mean, % within
+    # target). Each priority group's threshold is named explicitly in
+    # its % column header (RT % <2h, ST % <1h, TS % <1h), so users
+    # never need to guess which target a percentage was measured
+    # against. The All group uses "% within target" because its
+    # per-row aggregate has no single scalar threshold.
     st.markdown(
         '<div class="section-heading">Turnaround time by procedure</div>',
         unsafe_allow_html=True,
@@ -763,15 +946,22 @@ def _render_tat_view(params: dict) -> None:
 
     _tat_headers = [
         "Procedure",
-        f"<span style='color:{_TAT_ROUTINE_COLOR}'>Routine</span><br>n",
-        f"<span style='color:{_TAT_ROUTINE_COLOR}'>Routine</span><br>Mean",
-        f"<span style='color:{_TAT_ROUTINE_COLOR}'>Routine</span><br>% <1h",
-        f"<span style='color:{_TAT_STAT_COLOR}'>Stat</span><br>n",
-        f"<span style='color:{_TAT_STAT_COLOR}'>Stat</span><br>Mean",
-        f"<span style='color:{_TAT_STAT_COLOR}'>Stat</span><br>% <1h",
+        # RT group (target < 2h)
+        f"<span style='color:{_TAT_ROUTINE_COLOR}'>RT</span><br>n",
+        f"<span style='color:{_TAT_ROUTINE_COLOR}'>RT</span><br>Mean",
+        f"<span style='color:{_TAT_ROUTINE_COLOR}'>RT</span><br>% &lt;{_rt_target_h}h",
+        # ST group (target < 1h)
+        f"<span style='color:{_TAT_STAT_COLOR}'>ST</span><br>n",
+        f"<span style='color:{_TAT_STAT_COLOR}'>ST</span><br>Mean",
+        f"<span style='color:{_TAT_STAT_COLOR}'>ST</span><br>% &lt;{_st_target_h}h",
+        # TS group (target < 1h)
+        f"<span style='color:{_TAT_TS_COLOR}'>TS</span><br>n",
+        f"<span style='color:{_TAT_TS_COLOR}'>TS</span><br>Mean",
+        f"<span style='color:{_TAT_TS_COLOR}'>TS</span><br>% &lt;{_ts_target_h}h",
+        # All group (weighted per-sample target)
         f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>n",
         f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>Mean",
-        f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>% <1h",
+        f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>% within target",
     ]
 
     # Column-tinted header / cell fills so the priority groups read as
@@ -779,47 +969,51 @@ def _render_tat_view(params: dict) -> None:
     # dominates the eye.
     _hdr_fill_cells = (
         ["#ffffff"]
-        + ["rgba(0, 102, 204, 0.10)"]   * 3
-        + ["rgba(204, 102, 0, 0.10)"]   * 3
-        + ["rgba(68, 68, 68, 0.10)"]    * 3
+        + ["rgba(0, 102, 204, 0.10)"]   * 3   # RT
+        + ["rgba(204, 102, 0, 0.10)"]   * 3   # ST
+        + ["rgba(10, 147, 150, 0.10)"]  * 3   # TS
+        + ["rgba(68, 68, 68, 0.10)"]    * 3   # All
     )
     _cell_fill_cols = (
         ["#ffffff"]
         + ["rgba(0, 102, 204, 0.04)"]   * 3
         + ["rgba(204, 102, 0, 0.04)"]   * 3
+        + ["rgba(10, 147, 150, 0.04)"]  * 3
         + ["rgba(68, 68, 68, 0.04)"]    * 3
     )
 
-    # Build per-column value lists. n columns are integers (or "—");
-    # Mean uses format_tat; %<1h uses format_pct.
     def _fmt_n(v):
         if v is None or pd.isna(v):
-            return "—"
+            return "-"
         return f"{int(v):,}"
 
-    _proc_col      = table_df[("Procedure", "Procedure")].tolist()
-    _routine_n     = [_fmt_n(v)      for v in table_df[("Routine",  "n")]]
-    _routine_mean_ = [format_tat(v)  for v in table_df[("Routine",  "Mean")]]
-    _routine_pct   = [format_pct(v)  for v in table_df[("Routine",  "% <1h")]]
-    _stat_n        = [_fmt_n(v)      for v in table_df[("Stat",     "n")]]
-    _stat_mean_    = [format_tat(v)  for v in table_df[("Stat",     "Mean")]]
-    _stat_pct      = [format_pct(v)  for v in table_df[("Stat",     "% <1h")]]
-    _comb_n        = [_fmt_n(v)      for v in table_df[("Combined", "n")]]
-    _comb_mean     = [format_tat(v)  for v in table_df[("Combined", "Mean")]]
-    _comb_pct      = [format_pct(v)  for v in table_df[("Combined", "% <1h")]]
+    _proc_col   = table_df[("Procedure", "Procedure")].tolist()
+    _rt_n_col   = [_fmt_n(v)     for v in table_df[("RT",  "n")]]
+    _rt_mean    = [format_tat(v) for v in table_df[("RT",  "Mean")]]
+    _rt_pct     = [format_pct(v) for v in table_df[("RT",  "% within target")]]
+    _st_n_col   = [_fmt_n(v)     for v in table_df[("ST",  "n")]]
+    _st_mean    = [format_tat(v) for v in table_df[("ST",  "Mean")]]
+    _st_pct     = [format_pct(v) for v in table_df[("ST",  "% within target")]]
+    _ts_n_col   = [_fmt_n(v)     for v in table_df[("TS",  "n")]]
+    _ts_mean    = [format_tat(v) for v in table_df[("TS",  "Mean")]]
+    _ts_pct     = [format_pct(v) for v in table_df[("TS",  "% within target")]]
+    _all_n_col  = [_fmt_n(v)     for v in table_df[("All", "n")]]
+    _all_mean   = [format_tat(v) for v in table_df[("All", "Mean")]]
+    _all_pct    = [format_pct(v) for v in table_df[("All", "% within target")]]
 
     _cell_values = [
         _proc_col,
-        _routine_n, _routine_mean_, _routine_pct,
-        _stat_n,    _stat_mean_,    _stat_pct,
-        _comb_n,    _comb_mean,     _comb_pct,
+        _rt_n_col,  _rt_mean,  _rt_pct,
+        _st_n_col,  _st_mean,  _st_pct,
+        _ts_n_col,  _ts_mean,  _ts_pct,
+        _all_n_col, _all_mean, _all_pct,
     ]
-    _aligns = ["left"] + ["right"] * 9
-    _header_font_colors = ["#6F1828"] + ["#1a1a1a"] * 9
+    _aligns = ["left"] + ["right"] * 12
+    _header_font_colors = ["#6F1828"] + ["#1a1a1a"] * 12
 
     _tat_table_fig = go.Figure(
         data=go.Table(
-            columnwidth=[3] + [1] * 9,
+            columnwidth=[3] + [1] * 12,
             header=dict(
                 values=_tat_headers,
                 fill_color=_hdr_fill_cells,
@@ -830,7 +1024,10 @@ def _render_tat_view(params: dict) -> None:
                     size=12,
                     color=_header_font_colors,
                 ),
-                height=48,
+                # Slightly taller than the original 48 px so the
+                # "% within target" header on the All column wraps to
+                # two lines without clipping.
+                height=56,
             ),
             cells=dict(
                 values=_cell_values,
@@ -849,7 +1046,7 @@ def _render_tat_view(params: dict) -> None:
 
     # Total height = header + n_rows × row_height + small bottom buffer.
     _n_rows = max(1, len(table_df))
-    _table_h = 48 + _n_rows * 32 + 24
+    _table_h = 56 + _n_rows * 32 + 24
     _tat_table_fig.update_layout(
         height=_table_h,
         margin=dict(l=4, r=4, t=4, b=4),
@@ -864,21 +1061,21 @@ def _render_tat_view(params: dict) -> None:
     )
 
     # ── Mean-TAT bar chart ─────────────────────────────────────────────────
+    # 4 series (RT, ST, TS, All), horizontal grouped bars. Vertical
+    # dashed reference lines at each priority's target give a visual
+    # "missing SLA?" cue: any bar that extends past its target line is
+    # over-target. Two distinct lines because ST and TS share the same
+    # 60-min threshold while RT sits at 120.
     st.markdown(
         '<div class="section-heading">Mean TAT by procedure</div>',
         unsafe_allow_html=True,
     )
 
     _bar_procs = list(_proc_col)
-    _routine_means_raw = [
-        v for v in table_df[("Routine",  "Mean")]
-    ]
-    _stat_means_raw = [
-        v for v in table_df[("Stat",     "Mean")]
-    ]
-    _comb_means_raw = [
-        v for v in table_df[("Combined", "Mean")]
-    ]
+    _rt_means_raw  = list(table_df[("RT",  "Mean")])
+    _st_means_raw  = list(table_df[("ST",  "Mean")])
+    _ts_means_raw  = list(table_df[("TS",  "Mean")])
+    _all_means_raw = list(table_df[("All", "Mean")])
 
     def _bar_xs(values):
         # None / NaN means a missing bar; Plotly accepts None to skip.
@@ -893,30 +1090,61 @@ def _render_tat_view(params: dict) -> None:
     _bar_fig = go.Figure()
     _bar_fig.add_trace(go.Bar(
         y=_bar_procs,
-        x=_bar_xs(_routine_means_raw),
-        name="Routine",
+        x=_bar_xs(_rt_means_raw),
+        name="RT",
         orientation="h",
         marker_color=_TAT_ROUTINE_COLOR,
-        hovertemplate=_bar_hover(_routine_means_raw, "Routine"),
+        hovertemplate=_bar_hover(_rt_means_raw, "RT"),
     ))
     _bar_fig.add_trace(go.Bar(
         y=_bar_procs,
-        x=_bar_xs(_stat_means_raw),
-        name="Stat",
+        x=_bar_xs(_st_means_raw),
+        name="ST",
         orientation="h",
         marker_color=_TAT_STAT_COLOR,
-        hovertemplate=_bar_hover(_stat_means_raw, "Stat"),
+        hovertemplate=_bar_hover(_st_means_raw, "ST"),
     ))
     _bar_fig.add_trace(go.Bar(
         y=_bar_procs,
-        x=_bar_xs(_comb_means_raw),
+        x=_bar_xs(_ts_means_raw),
+        name="TS",
+        orientation="h",
+        marker_color=_TAT_TS_COLOR,
+        hovertemplate=_bar_hover(_ts_means_raw, "TS"),
+    ))
+    _bar_fig.add_trace(go.Bar(
+        y=_bar_procs,
+        x=_bar_xs(_all_means_raw),
         name="All",
         orientation="h",
         marker_color=_TAT_COMBINED_COLOR,
-        hovertemplate=_bar_hover(_comb_means_raw, "All"),
+        hovertemplate=_bar_hover(_all_means_raw, "All"),
     ))
 
-    _bar_h = max(300, len(_bar_procs) * 50 + 100)
+    # Reference lines at each priority's target. Annotations sit at
+    # the top of the plot so they don't overlap bars.
+    _bar_fig.add_vline(
+        x=TAT_TARGET_MINUTES["ST"],
+        line_dash="dash",
+        line_color="#aaaaaa",
+        line_width=1,
+        annotation_text=f"ST/TS target ({TAT_TARGET_MINUTES['ST']}m)",
+        annotation_position="top",
+        annotation_font=dict(size=10, color="#666666"),
+    )
+    _bar_fig.add_vline(
+        x=TAT_TARGET_MINUTES["RT"],
+        line_dash="dash",
+        line_color="#aaaaaa",
+        line_width=1,
+        annotation_text=f"RT target ({TAT_TARGET_MINUTES['RT']}m)",
+        annotation_position="top",
+        annotation_font=dict(size=10, color="#666666"),
+    )
+
+    # 60 px per procedure group accommodates 4 bars + group gap; the
+    # +100 covers the legend + axis labels chrome.
+    _bar_h = max(320, len(_bar_procs) * 60 + 100)
     _bar_fig.update_layout(
         height=_bar_h,
         barmode="group",
@@ -925,7 +1153,7 @@ def _render_tat_view(params: dict) -> None:
         dragmode=False,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=10, r=10, t=40, b=30),
+        margin=dict(l=10, r=10, t=50, b=30),
         legend=dict(
             orientation="h",
             yanchor="bottom", y=1.02,
@@ -963,676 +1191,662 @@ def _render_tat_view(params: dict) -> None:
     )
 
 
-def render(params: dict, ss) -> None:
-    """Render analytics main panel (pending upload + heatmaps).
+# ════════════════════════════════════════════════════════════════════════════
+# TOP-N SELECTOR (shared between Daily + Monthly volume views)
+# ════════════════════════════════════════════════════════════════════════════
 
-    All early exits use `return` rather than `st.stop()` so app.py's
-    footer line is always reached on every dashboard view.
+# Each entry is (button-label, top-N value). The top-N value flows
+# downstream to build_pivot / build_monthly_pivot / build_forecast_pivot;
+# `None` means "no top-N filter, return every procedure" (the "All"
+# button). Defined at module scope so _render_top_n_legend can be a
+# module-level helper rather than a closure inside render().
+_TOP_N_OPTIONS = [("10", 10), ("20", 20), ("30", 30), ("All", None)]
+_VALID_TOP_N = tuple(v for _, v in _TOP_N_OPTIONS)
+
+
+def _render_top_n_legend(prefix_html: str) -> None:
+    """Render legend prose + Top-N selector inline using st.columns.
+
+    `prefix_html` is the legend prose (e.g. "Colour scale: ... full-day
+    sum per procedure."). Appends a "Showing top" label column and four
+    st.button columns (10 / 20 / 30 / All). Selected button uses
+    type="primary" so CSS can target it for cardinal+gold styling.
+
+    Native Streamlit widgets are required: clicks trigger script reruns
+    (preserve session_state including auth) rather than the full-page
+    navigation that a prior <a href="?top_n=N"> design caused.
     """
-    map_type          = params["map_type"]
-    view_mode         = params["view_mode"]
-    time_basis        = params["time_basis"]
-    _data_exists      = params["data_exists"]
-    _local_df         = params["local_df"]
-    _max_d            = params["max_d"]
-    _current_resources = params["current_resources"]
-    _idx_hash          = params["idx_hash"]
-
-    # ── Pending upload ─────────────────────────────────────────────────────
-    if ss.get("pending_upload"):
-        upload_list = ss["pending_upload"]
-        if isinstance(upload_list, dict):
-            upload_list = [upload_list]
-
-        _n_files   = len(upload_list)
-        _file_names = ", ".join(f['name'] for f in upload_list)
-        render_header(map_type, "Processing upload…")
-
-        with st.status(f"Processing {_n_files} file(s)…", expanded=True) as _upload_status:
-            try:
-                st.write(f"**Step 1 / 3** — Parsing {_n_files} file(s): {_file_names}")
-                _parsed_frames = []
-                for _uf_info in upload_list:
-                    _uf_df = parse_single_file(_uf_info["bytes"], filename=_uf_info["name"])
-                    st.write(
-                        f"  • `{_uf_info['name']}`: **{len(_uf_df):,}** rows "
-                        f"({_uf_df['complete_date'].min()} → {_uf_df['complete_date'].max()})"
-                    )
-                    _parsed_frames.append((_uf_info["name"], _uf_df))
-                if len(_parsed_frames) == 1:
-                    new_df = _parsed_frames[0][1]
-                else:
-                    new_df, _ = deduplicate_and_merge(_parsed_frames)
-                st.write(f"Combined: **{len(new_df):,}** rows from {_n_files} file(s)")
-
-                st.write("**Step 2 / 3** — Cleaning and validating…")
-                _up_bad = int(
-                    new_df["Order Procedure"]
-                    .str.contains("\xa0", regex=False, na=False)
-                    .sum()
-                )
-                if _up_bad > 0:
-                    new_df = clean_procedure_names(new_df)
-                    st.write(f"Procedure names corrected ({_up_bad:,} row(s) fixed).")
-
-                st.write("**Step 3 / 3** — Ingesting into partitioned storage…")
-                from storage import ingest_new_data
-                stats = ingest_new_data(new_df)
-                st.write(
-                    f"Storage updated: **{stats['rows_before']:,}** → "
-                    f"**{stats['rows_after']:,}** rows (+{stats['rows_added']:,} new)"
-                )
-
-                ss.pop("pending_upload", None)
-                st.cache_data.clear()
-                ss.pop("_partition_index", None)
-                _upload_status.update(
-                    label=f"Done — added {stats['rows_added']:,} rows.",
-                    state="complete",
-                )
+    current_n = st.session_state.get("analytics_top_n", 10)
+    # 4 button columns (10 / 20 / 30 / All); "All" gets a slightly
+    # wider slot because it's a 3-char word vs the 2-digit numerics.
+    _cols = st.columns(
+        [6, 0.7, 0.3, 0.3, 0.3, 0.4],
+        vertical_alignment="center",
+    )
+    with _cols[0]:
+        st.markdown(
+            f'<div class="heatmap-legend-inline">{prefix_html}</div>',
+            unsafe_allow_html=True,
+        )
+    with _cols[1]:
+        st.markdown(
+            '<div class="top-n-label">Showing top</div>',
+            unsafe_allow_html=True,
+        )
+    for _col, (_label, _value) in zip(_cols[2:], _TOP_N_OPTIONS):
+        with _col:
+            _is_sel = (_value == current_n)
+            if st.button(
+                _label,
+                key=f"top_n_btn_{_label}",
+                type="primary" if _is_sel else "secondary",
+                use_container_width=True,
+            ):
+                st.session_state["analytics_top_n"] = _value
                 st.rerun()
 
-            except Exception as _proc_err:
-                _upload_status.update(
-                    label="Processing failed — existing data is unchanged.", state="error"
-                )
-                st.error(str(_proc_err))
-                ss.pop("pending_upload", None)
 
-        # Return (don't st.stop) so app.py's footer still renders at the
-        # bottom of the page even while upload-in-progress / errored.
+# ════════════════════════════════════════════════════════════════════════════
+# UPLOAD HANDLER
+# ════════════════════════════════════════════════════════════════════════════
+
+def _handle_pending_upload(map_type: str, upload_list, ss) -> None:
+    """Process a pending file upload: parse, dedup, clean, ingest, rerun.
+
+    Extracted from render() so the main dispatcher reads as a sequence
+    of view delegations.
+    """
+    if isinstance(upload_list, dict):
+        upload_list = [upload_list]
+
+    _n_files   = len(upload_list)
+    _file_names = ", ".join(f['name'] for f in upload_list)
+    render_header(map_type, "Processing upload…")
+
+    with st.status(f"Processing {_n_files} file(s)…", expanded=True) as _upload_status:
+        try:
+            st.write(f"**Step 1 / 3** - Parsing {_n_files} file(s): {_file_names}")
+            _parsed_frames = []
+            for _uf_info in upload_list:
+                _uf_df = parse_single_file(_uf_info["bytes"], filename=_uf_info["name"])
+                st.write(
+                    f"  • `{_uf_info['name']}`: **{len(_uf_df):,}** rows "
+                    f"({_uf_df['complete_date'].min()} → {_uf_df['complete_date'].max()})"
+                )
+                _parsed_frames.append((_uf_info["name"], _uf_df))
+            if len(_parsed_frames) == 1:
+                new_df = _parsed_frames[0][1]
+            else:
+                new_df, _ = deduplicate_and_merge(_parsed_frames)
+            st.write(f"Combined: **{len(new_df):,}** rows from {_n_files} file(s)")
+
+            st.write("**Step 2 / 3** - Cleaning and validating…")
+            _up_bad = int(
+                new_df["Order Procedure"]
+                .str.contains("\xa0", regex=False, na=False)
+                .sum()
+            )
+            if _up_bad > 0:
+                new_df = clean_procedure_names(new_df)
+                st.write(f"Procedure names corrected ({_up_bad:,} row(s) fixed).")
+
+            st.write("**Step 3 / 3** - Ingesting into partitioned storage…")
+            from storage import ingest_new_data
+            stats = ingest_new_data(new_df)
+            st.write(
+                f"Storage updated: **{stats['rows_before']:,}** → "
+                f"**{stats['rows_after']:,}** rows (+{stats['rows_added']:,} new)"
+            )
+
+            ss.pop("pending_upload", None)
+            st.cache_data.clear()
+            ss.pop("_partition_index", None)
+            _upload_status.update(
+                label=f"Done - added {stats['rows_added']:,} rows.",
+                state="complete",
+            )
+            st.rerun()
+
+        except Exception as _proc_err:
+            _upload_status.update(
+                label="Processing failed - existing data is unchanged.", state="error"
+            )
+            st.error(str(_proc_err))
+            ss.pop("pending_upload", None)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# DAILY VIEW
+# ════════════════════════════════════════════════════════════════════════════
+
+def _render_daily_view(params: dict, ss) -> None:
+    """Render the Daily heatmap + Hourly Volume bar chart for the
+    Completed / In-Lab / Forecast time bases.
+    """
+    map_type           = params["map_type"]
+    time_basis         = params["time_basis"]
+    _local_df          = params["local_df"]
+    _current_resources = params["current_resources"]
+    _idx_hash          = params["idx_hash"]
+    selected_date      = params["selected_date"]
+    hour_range         = params["hour_range"]
+    _is_forecast_view  = params["is_forecast_date"]
+
+    if _is_forecast_view:
+        _fc_panel_data = load_forecasts(map_type)
+        if _fc_panel_data is None:
+            st.warning(
+                f"No forecast data available for **{map_type}**.  "
+                "Open Data Management and click **Refresh Forecast** to generate predictions."
+            )
+            return
+        pivot, hours = build_forecast_pivot(
+            _fc_panel_data, selected_date, hour_range, time_basis=time_basis,
+            top_n=st.session_state.get("analytics_top_n", 10),
+            cache_key=f"{map_type}|{_fc_panel_data.get('last_data_date')}",
+        )
+    else:
+        if storage_is_configured():
+            filtered_df = load_analytics_data(
+                start_date=selected_date,
+                end_date=selected_date,
+                resources=_current_resources,
+                time_basis=time_basis,
+                index_hash=_idx_hash,
+            )
+        else:
+            filtered_df = _apply_local_file_scope(
+                _local_df,
+                ss.resource_assignments[map_type],
+                time_basis,
+            )
+
+        if time_basis == "In-Lab" and filtered_df.empty:
+            st.warning("No 'Date/Time - In Lab' data available.")
+            return
+
+        pivot, _df_date_hour, _df_date, hours = build_pivot(
+            filtered_df, selected_date, hour_range,
+            top_n=st.session_state.get("analytics_top_n", 10),
+        )
+
+    date_str = pd.Timestamp(selected_date).strftime("%B %d, %Y")
+    render_header(map_type, date_str + (" · forecast" if _is_forecast_view else ""))
+
+    if _is_forecast_view:
+        st.markdown(
+            '<div style="background:#1C1917;color:#e0e0e0;border-left:4px solid #FF9800;'
+            'border-radius:6px;padding:0.85rem 1rem;font-size:0.82rem;margin-bottom:0.5rem;">'
+            "This forecast is generated using Prophet, a forecasting ML model trained on all "
+            "available historical data. It learns weekly patterns in procedure "
+            "volume by hour of day. Predictions are based on limited training data and should "
+            "be treated as estimates only."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        st.info(
+            "Viewing **forecast** - these are predicted values, not actual completions. "
+            "Use the date picker or ◄ Prev / Next ► to return to historical dates."
+        )
+
+    if pivot is None:
+        if _is_forecast_view:
+            st.warning(
+                f"No forecast predictions available for **{map_type}** on **{date_str}** "
+                f"within the selected hour range."
+            )
+        else:
+            st.warning(
+                f"No data found for **{map_type}** on **{date_str}** "
+                f"within the selected hour range.  Try widening the hour slider."
+            )
         return
 
-    # ── No-data guard ──────────────────────────────────────────────────────
+    _hour_cols = [c for c in pivot.columns if c != "Total"]
+    if not _hour_cols or pivot.empty:
+        st.info("No completed procedures found for this site on the selected date.")
+        return
+
+    total_vol  = int(round(pivot["Total"].sum()))
+    top_proc   = pivot["Total"].idxmax()
+    peak_hour  = pivot[_hour_cols].sum().idxmax()
+    avg_per_hr = round(total_vol / max(len(_hour_cols), 1), 1)
+    _vol_label = "Forecast volume" if _is_forecast_view else "Total volume"
+
+    _m1, _m2, _m3, _m4 = st.columns(4)
+    with _m1:
+        st.markdown(metric_card(_vol_label, f"{total_vol:,}", accent=True),
+                    unsafe_allow_html=True)
+    with _m2:
+        st.markdown(metric_card("Top procedure", top_proc,
+                    sub=f"{int(round(pivot.loc[top_proc, 'Total'])):,} total"),
+                    unsafe_allow_html=True)
+    with _m3:
+        st.markdown(metric_card("Peak hour", peak_hour,
+                    sub=f"{int(round(pivot[_hour_cols].sum()[peak_hour]))} "
+                        f"{'predicted' if _is_forecast_view else 'completions'}"),
+                    unsafe_allow_html=True)
+    with _m4:
+        st.markdown(metric_card("Avg / hour", str(avg_per_hr),
+                    sub=f"across {len(_hour_cols)} hours"),
+                    unsafe_allow_html=True)
+
+    st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
+
+    if _is_forecast_view:
+        _heading_label = "Forecast volume by procedure &amp; hour"
+    elif time_basis == "In-Lab":
+        _heading_label = "In-lab volume by procedure &amp; hour"
+    else:
+        _heading_label = "Completed volume by procedure &amp; hour"
+    st.markdown(f'<div class="section-heading">{_heading_label}</div>',
+                unsafe_allow_html=True)
+
+    if _is_forecast_view:
+        _prefix = (
+            f'Colour scale: &nbsp;'
+            f'<strong style="color:{_ORANGES_LOW};">■</strong> low &nbsp;→&nbsp; '
+            f'<strong style="color:{_ORANGES_HIGH};">■</strong> high '
+            f'(hour columns only). &nbsp;'
+            f'<strong>Total</strong> column = forecasted full-day sum per procedure.'
+        )
+    else:
+        _prefix = (
+            f'Colour scale: &nbsp;'
+            f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
+            f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
+            f'(hour columns only). &nbsp;'
+            f'<strong>Total</strong> column = full-day sum per procedure.'
+        )
+    _render_top_n_legend(_prefix)
+
+    # Plotly heatmap (replaces the prior st.dataframe HTML table).
+    if _is_forecast_view:
+        _fig = _build_analytics_heatmap(
+            pivot,
+            colorscale="Oranges",
+            hovertemplate=(
+                "<b>%{y} @ %{customdata[0]}</b><br>"
+                "Forecast: %{customdata[1]:.1f}<extra></extra>"
+            ),
+        )
+    else:
+        # Build a procedure x hour avg-per-day pivot for the SAME month
+        # (and time basis) so the hover tooltip can compare today's
+        # count against the month average for that cell.
+        _month_df = pd.DataFrame()
+        try:
+            if storage_is_configured():
+                _m_start = date(selected_date.year, selected_date.month, 1)
+                _m_end   = date(
+                    selected_date.year, selected_date.month,
+                    _cal.monthrange(selected_date.year, selected_date.month)[1],
+                )
+                _month_df = load_analytics_data(
+                    start_date=_m_start,
+                    end_date=_m_end,
+                    resources=_current_resources,
+                    time_basis=time_basis,
+                    index_hash=_idx_hash,
+                )
+            else:
+                _month_df = _local_df
+        except Exception:
+            _month_df = pd.DataFrame()
+        _monthly_avg = load_monthly_avg_for_comparison(
+            _month_df, selected_date, tuple(pivot.index),
+            cache_key=f"{map_type}|{time_basis}|{_idx_hash}",
+        )
+
+        _customdata = []
+        for _proc in pivot.index:
+            _row = []
+            for _col in pivot.columns:
+                _val = int(round(pivot.loc[_proc, _col]))
+                if _col == "Total":
+                    _row.append(f"Day total: {_val}")
+                else:
+                    _hour_int = LABEL_TO_HOUR.get(_col)
+                    if (
+                        _hour_int is not None
+                        and not _monthly_avg.empty
+                        and _proc in _monthly_avg.index
+                        and _hour_int in _monthly_avg.columns
+                    ):
+                        _avg = float(_monthly_avg.loc[_proc, _hour_int])
+                        _row.append(f"Today: {_val} | Month avg: {_avg:.1f}")
+                    else:
+                        _row.append(f"Today: {_val}")
+            _customdata.append(_row)
+
+        _fig = _build_analytics_heatmap(
+            pivot,
+            colorscale="Viridis_r",
+            hovertemplate=(
+                "<b>%{y} @ %{customdata[0]}</b><br>"
+                "%{customdata[1]}<extra></extra>"
+            ),
+            customdata=_customdata,
+        )
+
+    st.plotly_chart(
+        _fig,
+        use_container_width=True,
+        key="analytics_daily_heatmap",
+        config={
+            "staticPlot": False,
+            "scrollZoom": False,
+            "displayModeBar": False,
+        },
+    )
+
+    # Hourly Volume bar chart (Plotly, USC cardinal). Replaces the
+    # previous Altair-in-expander chart, the Download PNG/CSV buttons,
+    # and the "Drill into a cell" expander that lived in this section.
+    st.markdown("---")
+
+    st.markdown(
+        f'<div class="section-heading">Hourly volume · {date_str}</div>',
+        unsafe_allow_html=True,
+    )
+
+    _hourly = pivot[_hour_cols].sum().reset_index()
+    _hourly.columns = ["Hour", "Total Volume"]
+    _hourly_fig = go.Figure()
+    _hourly_fig.add_trace(
+        go.Bar(
+            x=_hourly["Hour"],
+            y=_hourly["Total Volume"],
+            marker_color="#790A26",
+            hovertemplate="<b>%{x}</b><br>Volume: %{y}<extra></extra>",
+        )
+    )
+    _hourly_fig.update_layout(
+        height=280,
+        margin=dict(l=10, r=10, t=10, b=40),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        dragmode=False,
+        xaxis=dict(
+            tickfont=dict(size=10), title=None,
+            fixedrange=True, categoryorder="array",
+            categoryarray=list(_hour_cols),
+        ),
+        yaxis=dict(
+            tickfont=dict(size=10), title="Total volume",
+            fixedrange=True, automargin=True,
+        ),
+        hoverlabel=dict(
+            bgcolor="white",
+            bordercolor="#6F1828",
+            font=dict(
+                size=12,
+                family="Inter, system-ui, sans-serif",
+                color="#1a1a1a",
+            ),
+        ),
+    )
+    st.plotly_chart(
+        _hourly_fig,
+        use_container_width=True,
+        key="analytics_daily_hourly",
+        config={
+            "staticPlot": False,
+            "scrollZoom": False,
+            "displayModeBar": False,
+        },
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# MONTHLY VIEW
+# ════════════════════════════════════════════════════════════════════════════
+
+def _render_monthly_view(params: dict, ss) -> None:
+    """Render the Monthly heatmap, KPI strip, and weekday-pattern
+    breakdown.
+    """
+    map_type           = params["map_type"]
+    time_basis         = params["time_basis"]
+    _local_df          = params["local_df"]
+    _current_resources = params["current_resources"]
+    _idx_hash          = params["idx_hash"]
+    selected_year      = params["selected_year"]
+    selected_month     = params["selected_month"]
+
+    month_name_str = f"{_cal.month_name[selected_month]} {selected_year}"
+    render_header(map_type, month_name_str)
+
+    _month_start = date(selected_year, selected_month, 1)
+    _month_end   = date(selected_year, selected_month,
+                        _cal.monthrange(selected_year, selected_month)[1])
+
+    if storage_is_configured():
+        filtered_df = load_analytics_data(
+            start_date=_month_start,
+            end_date=_month_end,
+            resources=_current_resources,
+            time_basis=time_basis,
+            index_hash=_idx_hash,
+        )
+    else:
+        filtered_df = _apply_local_file_scope(
+            _local_df,
+            ss.resource_assignments[map_type],
+            time_basis,
+        )
+
+    if time_basis == "In-Lab" and filtered_df.empty:
+        st.warning("No 'Date/Time - In Lab' data available.")
+        return
+
+    monthly_pivot, n_days, month_raw_df = build_monthly_pivot(
+        filtered_df, selected_year, selected_month,
+        top_n=st.session_state.get("analytics_top_n", 10),
+    )
+
+    if monthly_pivot is None:
+        st.warning(f"No data found for **{map_type}** in **{month_name_str}**.")
+        return
+
+    _m_hour_cols   = [c for c in monthly_pivot.columns if c != "Total"]
+    _m_total_vol   = int(round(monthly_pivot["Total"].sum() * n_days))
+    _m_top_proc    = monthly_pivot["Total"].idxmax()
+    _m_peak_col    = monthly_pivot[_m_hour_cols].sum().idxmax()
+    _m_peak_disp   = _m_peak_col.replace("AM", " AM").replace("PM", " PM")
+    _m_avg_per_day = round(_m_total_vol / max(n_days, 1))
+
+    _mm1, _mm2, _mm3, _mm4 = st.columns(4)
+    with _mm1:
+        st.markdown(metric_card("Total volume", f"{_m_total_vol:,}", accent=True),
+                    unsafe_allow_html=True)
+    with _mm2:
+        st.markdown(metric_card("Top procedure", _m_top_proc,
+                    sub=f"highest volume in {month_name_str}"),
+                    unsafe_allow_html=True)
+    with _mm3:
+        st.markdown(metric_card("Peak hour", _m_peak_disp,
+                    sub="highest avg volume"), unsafe_allow_html=True)
+    with _mm4:
+        st.markdown(metric_card("Avg / day", f"{_m_avg_per_day:,}",
+                    sub=f"over {n_days} days"), unsafe_allow_html=True)
+
+    st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
+
+    st.markdown(
+        f'<div class="section-heading">'
+        f'{map_type} - monthly average · {month_name_str} · N = {n_days} days'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    _m_prefix = (
+        f'Values = avg completed volume per day in hour. '
+        f'Colour scale: &nbsp;'
+        f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
+        f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
+        f'(hour columns only). &nbsp;'
+        f'<strong>Total</strong> column = avg daily total per procedure.'
+    )
+    _render_top_n_legend(_m_prefix)
+
+    _m_fig = _build_analytics_heatmap(
+        monthly_pivot,
+        colorscale="Viridis_r",
+        hovertemplate=(
+            "<b>%{y} @ %{customdata[0]}</b><br>"
+            "Avg per day: %{customdata[1]:.1f}<extra></extra>"
+        ),
+    )
+    st.plotly_chart(
+        _m_fig,
+        use_container_width=True,
+        key="analytics_monthly_heatmap",
+        config={
+            "staticPlot": False,
+            "scrollZoom": False,
+            "displayModeBar": False,
+        },
+    )
+
+    # Weekday-pattern Plotly heatmap. Replaces the previous
+    # pandas-style dataframe inside an st.expander.
+    st.markdown("---")
+
+    weekday_pivot, _wd_counts = build_weekday_pivot(
+        month_raw_df, selected_year, selected_month,
+        cache_key=f"{map_type}|{time_basis}|{_idx_hash}",
+    )
+
+    if weekday_pivot is None:
+        st.info("No data available for weekday breakdown.")
+        return
+
+    _wd_hour_cols    = [c for c in weekday_pivot.columns if c != "Total"]
+    _wd_busiest_day  = weekday_pivot["Total"].idxmax()
+    _wd_lightest_day = weekday_pivot["Total"].idxmin()
+    _wd_peak_hour    = weekday_pivot[_wd_hour_cols].sum().idxmax()
+    _wd_peak_disp    = _wd_peak_hour.replace("AM", " AM").replace("PM", " PM")
+
+    _wc1, _wc2, _wc3 = st.columns(3)
+    with _wc1:
+        st.markdown(
+            metric_card(
+                "Busiest day",
+                _wd_busiest_day.split("  ")[0],
+                sub=f"avg {int(round(weekday_pivot.loc[_wd_busiest_day, 'Total']))} vol / day",
+            ),
+            unsafe_allow_html=True,
+        )
+    with _wc2:
+        st.markdown(
+            metric_card("Peak hour", _wd_peak_disp,
+                        sub="highest avg volume across weekdays"),
+            unsafe_allow_html=True,
+        )
+    with _wc3:
+        st.markdown(
+            metric_card(
+                "Lightest day",
+                _wd_lightest_day.split("  ")[0],
+                sub=f"avg {int(round(weekday_pivot.loc[_wd_lightest_day, 'Total']))} vol / day",
+            ),
+            unsafe_allow_html=True,
+        )
+
+    # Same metrics-divider treatment as the main monthly heatmap above:
+    # 32 px above + 32 px below (combined with the section heading's
+    # 12 px margin-top) so the weekday KPI cards and the "weekday
+    # pattern" heading have proper breathing room.
+    st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
+
+    st.markdown(
+        f'<div class="section-heading">'
+        f'{map_type} - weekday pattern · {month_name_str}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div class="heatmap-legend">'
+        f'Values = avg completed volume per occurrence of that weekday. '
+        f'Colour scale: &nbsp;'
+        f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
+        f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
+        f'(hour columns only). &nbsp;'
+        f'<strong>Total</strong> column = avg daily total for that weekday.'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    _wd_fig = _build_analytics_heatmap(
+        weekday_pivot,
+        colorscale="Viridis_r",
+        hovertemplate=(
+            "<b>%{y} @ %{customdata[0]}</b><br>"
+            "Avg: %{customdata[1]:.1f}<extra></extra>"
+        ),
+    )
+    # Match the Pre-Analytics cell-uniformity formula:
+    # height = n_rows * 28 + 40, with margin.b = 30 for x-axis label
+    # clearance. Total chrome = 40 px, per-cell = 28 px uniformly for
+    # any n_rows.
+    _wd_n = len(weekday_pivot)
+    _wd_fig.update_layout(
+        height=_wd_n * 28 + 40,
+        margin=dict(l=10, r=10, t=10, b=30),
+    )
+    st.plotly_chart(
+        _wd_fig,
+        use_container_width=True,
+        key="analytics_weekday_heatmap",
+        config={
+            "staticPlot": False,
+            "scrollZoom": False,
+            "displayModeBar": False,
+        },
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# MAIN DISPATCHER
+# ════════════════════════════════════════════════════════════════════════════
+
+def render(params: dict, ss) -> None:
+    """Render the analytics main panel.
+
+    Dispatches to the upload handler, the no-data placeholder, the TAT
+    view, the Daily view, or the Monthly view. All early exits use
+    `return` rather than `st.stop()` so app.py's footer line is always
+    reached on every dashboard view.
+    """
+    map_type     = params["map_type"]
+    view_mode    = params["view_mode"]
+    time_basis   = params["time_basis"]
+    _data_exists = params["data_exists"]
+
+    if ss.get("pending_upload"):
+        _handle_pending_upload(map_type, ss["pending_upload"], ss)
+        return
+
     if not _data_exists:
-        render_header(map_type, "—")
+        render_header(map_type, "-")
         st.info(
             "Welcome!  Upload a file or configure GitHub in your "
             "Streamlit secrets to start viewing lab productivity heatmaps."
         )
         return
 
-    # ── TAT view (Phase 2) ─────────────────────────────────────────────────
-    # KPI strip + procedure filter + go.Table of priority-grouped stats +
-    # mean-TAT-per-procedure bar chart, replacing the volume heatmap.
     if time_basis == "TAT":
         _render_tat_view(params)
         return
 
-    # ── Top-N selector state (Analytics-only). ─────────────────────────────
-    # PREVIOUS APPROACHES that failed:
-    #   1. `st.segmented_control` + heavy CSS overrides — 4 iterations, all
-    #      failed to break out of Streamlit's stElementContainer block layout.
-    #   2. Custom HTML <a href="?top_n=N"> tags reading state from
-    #      st.query_params — visually worked, BUT clicking the link triggers
-    #      a full BROWSER NAVIGATION inside the iframe (Streamlit cannot
-    #      distinguish an intra-app rerun from a real navigation when the
-    #      URL changes). The full navigation reloads the app from scratch,
-    #      wiping every session_state value including app_authenticated.
-    #      Users got bounced back to the login screen on every click.
-    #
-    # CURRENT (CORRECT) APPROACH:
-    # Use native `st.button` widgets. Click → script rerun → session_state
-    # preserved. Layout achieved via `st.columns([wide, narrow, narrow, narrow,
-    # narrow])` — legend prose + "Showing top" label + 3 buttons in one row.
-    # Buttons styled aggressively via CSS scoped to `[class*="st-key-
-    # top_n_btn_"]` so they look like minimal inline text instead of pill
-    # buttons. type="primary" marks the selected option; CSS gives the
-    # primary variant cardinal red text + gold underline.
-    # Top-N selector options. Each entry is (button-label, top-N value).
-    # The top-N value flows downstream to build_pivot / build_monthly_pivot
-    # / build_forecast_pivot — `None` means "no top-N filter, return every
-    # procedure", which is what the "All" button does.
-    _TOP_N_OPTIONS = [("10", 10), ("20", 20), ("30", 30), ("All", None)]
-    _VALID_TOP_N = tuple(v for _, v in _TOP_N_OPTIONS)
+    # Top-N state init (shared by Daily + Monthly volume views).
     if (
         "analytics_top_n" not in st.session_state
         or st.session_state["analytics_top_n"] not in _VALID_TOP_N
     ):
         st.session_state["analytics_top_n"] = 10
 
-    def _render_top_n_legend(prefix_html: str) -> None:
-        """Render legend prose + Top-N selector inline using st.columns.
-
-        prefix_html is the legend prose (e.g. "Colour scale: ... full-day
-        sum per procedure."). The function appends a "Showing top" label
-        column and four st.button columns in the same row (10 / 20 / 30
-        / All). Selected button is rendered with type="primary" so CSS
-        can target it for cardinal+gold styling; the others are
-        type="secondary".
-
-        Critically uses native Streamlit widgets — clicks trigger script
-        reruns (which preserve session_state including auth) rather than
-        the full-page navigation that <a href="?top_n=N"> caused in the
-        prior implementation.
-        """
-        current_n = st.session_state.get("analytics_top_n", 10)
-        # 4 button columns (10 / 20 / 30 / All); "All" gets a slightly
-        # wider slot because it's a 3-char word vs the 2-digit numerics.
-        _cols = st.columns(
-            [6, 0.7, 0.3, 0.3, 0.3, 0.4],
-            vertical_alignment="center",
-        )
-        with _cols[0]:
-            st.markdown(
-                f'<div class="heatmap-legend-inline">{prefix_html}</div>',
-                unsafe_allow_html=True,
-            )
-        with _cols[1]:
-            st.markdown(
-                '<div class="top-n-label">Showing top</div>',
-                unsafe_allow_html=True,
-            )
-        for _col, (_label, _value) in zip(_cols[2:], _TOP_N_OPTIONS):
-            with _col:
-                _is_sel = (_value == current_n)
-                if st.button(
-                    _label,
-                    key=f"top_n_btn_{_label}",
-                    type="primary" if _is_sel else "secondary",
-                    use_container_width=True,
-                ):
-                    st.session_state["analytics_top_n"] = _value
-                    st.rerun()
-
-    # ── Daily view ─────────────────────────────────────────────────────────
     if view_mode == "Daily":
-        selected_date    = params["selected_date"]
-        hour_range       = params["hour_range"]
-        _fc_data         = params["fc_data"]
-        _is_forecast_view = params["is_forecast_date"]
-
-        if _is_forecast_view:
-            _fc_panel_data = load_forecasts(map_type)
-            if _fc_panel_data is None:
-                st.warning(
-                    f"No forecast data available for **{map_type}**.  "
-                    "Open Data Management and click **Refresh Forecast** to generate predictions."
-                )
-                return
-            pivot, hours = build_forecast_pivot(
-                _fc_panel_data, selected_date, hour_range, time_basis=time_basis,
-                top_n=st.session_state.get("analytics_top_n", 10),
-            )
-            df_date_hour = None
-            df_date      = pd.DataFrame()
-        else:
-            if storage_is_configured():
-                filtered_df = load_analytics_data(
-                    start_date=selected_date,
-                    end_date=selected_date,
-                    resources=_current_resources,
-                    time_basis=time_basis,
-                    _index_hash=_idx_hash,
-                )
-            else:
-                resources = ss.resource_assignments[map_type]
-                filtered_df = _local_df[
-                    _local_df["Performing Service Resource"].isin(resources) &
-                    ~_local_df["Order Procedure"].isin(EXCLUDED_PROCEDURES)
-                ].copy()
-                if time_basis == "In-Lab":
-                    _has_inlab = (
-                        "inlab_date" in filtered_df.columns
-                        and filtered_df["inlab_date"].notna().any()
-                    )
-                    if _has_inlab:
-                        filtered_df = filtered_df[filtered_df["inlab_date"].notna()].copy()
-                        filtered_df["complete_date"] = filtered_df["inlab_date"]
-                        filtered_df["hour"] = filtered_df["inlab_hour"].astype(int)
-                    else:
-                        filtered_df = filtered_df.iloc[0:0]
-
-            if time_basis == "In-Lab" and filtered_df.empty:
-                st.warning("No 'Date/Time - In Lab' data available.")
-                return
-
-            pivot, df_date_hour, df_date, hours = build_pivot(
-                filtered_df, selected_date, hour_range,
-                top_n=st.session_state.get("analytics_top_n", 10),
-            )
-
-        date_str = pd.Timestamp(selected_date).strftime("%B %d, %Y")
-        render_header(map_type, date_str + (" · forecast" if _is_forecast_view else ""))
-
-        if _is_forecast_view:
-            st.markdown(
-                '<div style="background:#1C1917;color:#e0e0e0;border-left:4px solid #FF9800;'
-                'border-radius:6px;padding:0.85rem 1rem;font-size:0.82rem;margin-bottom:0.5rem;">'
-                "This forecast is generated using Prophet, a forecasting ML model trained on all "
-                "available historical data. It learns weekly patterns in procedure "
-                "volume by hour of day. Predictions are based on limited training data and should "
-                "be treated as estimates only."
-                "</div>",
-                unsafe_allow_html=True,
-            )
-            st.info(
-                "Viewing **forecast** - these are predicted values, not actual completions. "
-                "Use the date picker or ◄ Prev / Next ► to return to historical dates."
-            )
-
-        if pivot is None:
-            if _is_forecast_view:
-                st.warning(
-                    f"No forecast predictions available for **{map_type}** on **{date_str}** "
-                    f"within the selected hour range."
-                )
-            else:
-                st.warning(
-                    f"No data found for **{map_type}** on **{date_str}** "
-                    f"within the selected hour range.  Try widening the hour slider."
-                )
-            return
-
-        _hour_cols = [c for c in pivot.columns if c != "Total"]
-        if not _hour_cols or pivot.empty:
-            st.info("No completed procedures found for this site on the selected date.")
-            return
-
-        total_vol  = int(round(pivot["Total"].sum()))
-        top_proc   = pivot["Total"].idxmax()
-        peak_hour  = pivot[_hour_cols].sum().idxmax()
-        num_procs  = len(pivot)
-        avg_per_hr = round(total_vol / max(len(_hour_cols), 1), 1)
-        _vol_label = "Forecast volume" if _is_forecast_view else "Total volume"
-
-        _m1, _m2, _m3, _m4 = st.columns(4)
-        with _m1:
-            st.markdown(metric_card(_vol_label, f"{total_vol:,}", accent=True),
-                        unsafe_allow_html=True)
-        with _m2:
-            # Full procedure name (no truncation) — the metric_card auto-applies
-            # .metric-card-long for long values, which wraps to 2 lines via the
-            # CSS in ui_components.py (.metric-card-long .value).
-            st.markdown(metric_card("Top procedure", top_proc,
-                        sub=f"{int(round(pivot.loc[top_proc, 'Total'])):,} total"),
-                        unsafe_allow_html=True)
-        with _m3:
-            st.markdown(metric_card("Peak hour", peak_hour,
-                        sub=f"{int(round(pivot[_hour_cols].sum()[peak_hour]))} "
-                            f"{'predicted' if _is_forecast_view else 'completions'}"),
-                        unsafe_allow_html=True)
-        with _m4:
-            st.markdown(metric_card("Avg / hour", str(avg_per_hr),
-                        sub=f"across {len(_hour_cols)} hours"),
-                        unsafe_allow_html=True)
-
-        st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
-
-        if _is_forecast_view:
-            _heading_label = "Forecast volume by procedure &amp; hour"
-        elif time_basis == "In-Lab":
-            _heading_label = "In-lab volume by procedure &amp; hour"
-        else:
-            _heading_label = "Completed volume by procedure &amp; hour"
-        st.markdown(f'<div class="section-heading">{_heading_label}</div>',
-                    unsafe_allow_html=True)
-
-        # Inline legend + Top-N selector via _render_top_n_legend
-        # (st.button-based, preserves session_state on click).
-        # Analytics-only; pre-analytics' render path doesn't call this.
-        if _is_forecast_view:
-            _prefix = (
-                f'Colour scale: &nbsp;'
-                f'<strong style="color:{_ORANGES_LOW};">■</strong> low &nbsp;→&nbsp; '
-                f'<strong style="color:{_ORANGES_HIGH};">■</strong> high '
-                f'(hour columns only). &nbsp;'
-                f'<strong>Total</strong> column = forecasted full-day sum per procedure.'
-            )
-        else:
-            _prefix = (
-                f'Colour scale: &nbsp;'
-                f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
-                f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
-                f'(hour columns only). &nbsp;'
-                f'<strong>Total</strong> column = full-day sum per procedure.'
-            )
-        _render_top_n_legend(_prefix)
-
-        # ── Plotly heatmap (replaces the prior st.dataframe HTML table) ─────
-        if _is_forecast_view:
-            _fig = _build_analytics_heatmap(
-                pivot,
-                colorscale="Oranges",
-                hovertemplate=(
-                    "<b>%{y} @ %{customdata[0]}</b><br>"
-                    "Forecast: %{customdata[1]:.1f}<extra></extra>"
-                ),
-            )
-        else:
-            # Build a procedure × hour avg-per-day pivot for the SAME month
-            # (and time basis) so the hover tooltip can compare today's
-            # count against the month average for that cell.
-            _month_df = pd.DataFrame()
-            try:
-                if storage_is_configured():
-                    _m_start = date(selected_date.year, selected_date.month, 1)
-                    _m_end   = date(
-                        selected_date.year, selected_date.month,
-                        _cal.monthrange(selected_date.year, selected_date.month)[1],
-                    )
-                    _month_df = load_analytics_data(
-                        start_date=_m_start,
-                        end_date=_m_end,
-                        resources=_current_resources,
-                        time_basis=time_basis,
-                        _index_hash=_idx_hash,
-                    )
-                else:
-                    _month_df = _local_df
-            except Exception:
-                _month_df = pd.DataFrame()
-            _monthly_avg = load_monthly_avg_for_comparison(
-                _month_df, selected_date, pivot.index.tolist(),
-            )
-
-            _customdata = []
-            for _proc in pivot.index:
-                _row = []
-                for _col in pivot.columns:
-                    _val = int(round(pivot.loc[_proc, _col]))
-                    if _col == "Total":
-                        _row.append(f"Day total: {_val}")
-                    else:
-                        _hour_int = LABEL_TO_HOUR.get(_col)
-                        if (
-                            _hour_int is not None
-                            and not _monthly_avg.empty
-                            and _proc in _monthly_avg.index
-                            and _hour_int in _monthly_avg.columns
-                        ):
-                            _avg = float(_monthly_avg.loc[_proc, _hour_int])
-                            _row.append(f"Today: {_val} | Month avg: {_avg:.1f}")
-                        else:
-                            _row.append(f"Today: {_val}")
-                _customdata.append(_row)
-
-            _fig = _build_analytics_heatmap(
-                pivot,
-                colorscale="Viridis_r",
-                hovertemplate=(
-                    "<b>%{y} @ %{customdata[0]}</b><br>"
-                    "%{customdata[1]}<extra></extra>"
-                ),
-                customdata=_customdata,
-            )
-
-        st.plotly_chart(
-            _fig,
-            use_container_width=True,
-            key="analytics_daily_heatmap",
-            config={
-                "staticPlot": False,
-                "scrollZoom": False,
-                "displayModeBar": False,
-            },
-        )
-
-        # Hourly Volume bar chart (Plotly, USC cardinal). Rendered as a
-        # regular section below the heatmap — replaces the previous
-        # Altair-in-expander chart, the Download PNG/CSV buttons, and
-        # the "Drill into a cell" expander that lived in this section.
-        st.markdown("---")
-
-        st.markdown(
-            f'<div class="section-heading">Hourly volume · {date_str}</div>',
-            unsafe_allow_html=True,
-        )
-
-        _hourly = pivot[_hour_cols].sum().reset_index()
-        _hourly.columns = ["Hour", "Total Volume"]
-        _hourly_fig = go.Figure()
-        _hourly_fig.add_trace(
-            go.Bar(
-                x=_hourly["Hour"],
-                y=_hourly["Total Volume"],
-                marker_color="#790A26",
-                hovertemplate="<b>%{x}</b><br>Volume: %{y}<extra></extra>",
-            )
-        )
-        _hourly_fig.update_layout(
-            height=280,
-            margin=dict(l=10, r=10, t=10, b=40),
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            dragmode=False,
-            xaxis=dict(
-                tickfont=dict(size=10), title=None,
-                fixedrange=True, categoryorder="array",
-                categoryarray=list(_hour_cols),
-            ),
-            yaxis=dict(
-                tickfont=dict(size=10), title="Total volume",
-                fixedrange=True, automargin=True,
-            ),
-            hoverlabel=dict(
-                bgcolor="white",
-                bordercolor="#6F1828",
-                font=dict(
-                    size=12,
-                    family="Inter, system-ui, sans-serif",
-                    color="#1a1a1a",
-                ),
-            ),
-        )
-        st.plotly_chart(
-            _hourly_fig,
-            use_container_width=True,
-            key="analytics_daily_hourly",
-            config={
-                "staticPlot": False,
-                "scrollZoom": False,
-                "displayModeBar": False,
-            },
-        )
-
-    else:  # Monthly view
-        selected_year  = params["selected_year"]
-        selected_month = params["selected_month"]
-        month_name_str = f"{_cal.month_name[selected_month]} {selected_year}"
-        render_header(map_type, month_name_str)
-
-        _month_start = date(selected_year, selected_month, 1)
-        _month_end   = date(selected_year, selected_month,
-                            _cal.monthrange(selected_year, selected_month)[1])
-
-        if storage_is_configured():
-            filtered_df = load_analytics_data(
-                start_date=_month_start,
-                end_date=_month_end,
-                resources=_current_resources,
-                time_basis=time_basis,
-                _index_hash=_idx_hash,
-            )
-        else:
-            resources = ss.resource_assignments[map_type]
-            filtered_df = _local_df[
-                _local_df["Performing Service Resource"].isin(resources) &
-                ~_local_df["Order Procedure"].isin(EXCLUDED_PROCEDURES)
-            ].copy()
-            if time_basis == "In-Lab":
-                _has_inlab = (
-                    "inlab_date" in filtered_df.columns
-                    and filtered_df["inlab_date"].notna().any()
-                )
-                if _has_inlab:
-                    filtered_df = filtered_df[filtered_df["inlab_date"].notna()].copy()
-                    filtered_df["complete_date"] = filtered_df["inlab_date"]
-                    filtered_df["hour"] = filtered_df["inlab_hour"].astype(int)
-                else:
-                    filtered_df = filtered_df.iloc[0:0]
-
-        if time_basis == "In-Lab" and filtered_df.empty:
-            st.warning("No 'Date/Time - In Lab' data available.")
-            return
-
-        monthly_pivot, n_days, month_raw_df = build_monthly_pivot(
-            filtered_df, selected_year, selected_month,
-            top_n=st.session_state.get("analytics_top_n", 10),
-        )
-
-        if monthly_pivot is None:
-            st.warning(f"No data found for **{map_type}** in **{month_name_str}**.")
-            return
-
-        _m_hour_cols   = [c for c in monthly_pivot.columns if c != "Total"]
-        _m_total_vol   = int(round(monthly_pivot["Total"].sum() * n_days))
-        _m_top_proc    = monthly_pivot["Total"].idxmax()
-        _m_peak_col    = monthly_pivot[_m_hour_cols].sum().idxmax()
-        _m_peak_disp   = _m_peak_col.replace("AM", " AM").replace("PM", " PM")
-        _m_n_procs     = len(monthly_pivot)
-        _m_avg_per_day = round(_m_total_vol / max(n_days, 1))
-
-        _mm1, _mm2, _mm3, _mm4 = st.columns(4)
-        with _mm1:
-            st.markdown(metric_card("Total volume", f"{_m_total_vol:,}", accent=True),
-                        unsafe_allow_html=True)
-        with _mm2:
-            # Full procedure name (no truncation) — wraps via .metric-card-long.
-            st.markdown(metric_card("Top procedure", _m_top_proc,
-                        sub=f"highest volume in {month_name_str}"),
-                        unsafe_allow_html=True)
-        with _mm3:
-            st.markdown(metric_card("Peak hour", _m_peak_disp,
-                        sub="highest avg volume"), unsafe_allow_html=True)
-        with _mm4:
-            st.markdown(metric_card("Avg / day", f"{_m_avg_per_day:,}",
-                        sub=f"over {n_days} days"), unsafe_allow_html=True)
-
-        st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
-
-        st.markdown(
-            f'<div class="section-heading">'
-            f'{map_type} — monthly average · {month_name_str} · N = {n_days} days'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-        # Inline legend + Top-N selector (Monthly view). Same
-        # st.button-based design as the Daily branch — preserves
-        # session_state on click. Selection shared with Daily via
-        # `st.session_state["analytics_top_n"]`.
-        _m_prefix = (
-            f'Values = avg completed volume per day in hour. '
-            f'Colour scale: &nbsp;'
-            f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
-            f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
-            f'(hour columns only). &nbsp;'
-            f'<strong>Total</strong> column = avg daily total per procedure.'
-        )
-        _render_top_n_legend(_m_prefix)
-
-        _m_fig = _build_analytics_heatmap(
-            monthly_pivot,
-            colorscale="Viridis_r",
-            hovertemplate=(
-                "<b>%{y} @ %{customdata[0]}</b><br>"
-                "Avg per day: %{customdata[1]:.1f}<extra></extra>"
-            ),
-        )
-        st.plotly_chart(
-            _m_fig,
-            use_container_width=True,
-            key="analytics_monthly_heatmap",
-            config={
-                "staticPlot": False,
-                "scrollZoom": False,
-                "displayModeBar": False,
-            },
-        )
-
-        # Weekday-pattern Plotly heatmap. Replaces the previous
-        # pandas-style dataframe inside an st.expander. The Download
-        # PNG/CSV buttons that lived above this block (monthly) and
-        # below it (weekday) have been removed.
-        st.markdown("---")
-
-        weekday_pivot, _wd_counts = build_weekday_pivot(
-            month_raw_df, selected_year, selected_month
-        )
-
-        if weekday_pivot is None:
-            st.info("No data available for weekday breakdown.")
-        else:
-            _wd_hour_cols    = [c for c in weekday_pivot.columns if c != "Total"]
-            _wd_busiest_day  = weekday_pivot["Total"].idxmax()
-            _wd_lightest_day = weekday_pivot["Total"].idxmin()
-            _wd_peak_hour    = weekday_pivot[_wd_hour_cols].sum().idxmax()
-            _wd_peak_disp    = _wd_peak_hour.replace("AM", " AM").replace("PM", " PM")
-
-            _wc1, _wc2, _wc3 = st.columns(3)
-            with _wc1:
-                st.markdown(
-                    metric_card(
-                        "Busiest day",
-                        _wd_busiest_day.split("  ")[0],
-                        sub=f"avg {int(round(weekday_pivot.loc[_wd_busiest_day, 'Total']))} vol / day",
-                    ),
-                    unsafe_allow_html=True,
-                )
-            with _wc2:
-                st.markdown(
-                    metric_card("Peak hour", _wd_peak_disp,
-                                sub="highest avg volume across weekdays"),
-                    unsafe_allow_html=True,
-                )
-            with _wc3:
-                st.markdown(
-                    metric_card(
-                        "Lightest day",
-                        _wd_lightest_day.split("  ")[0],
-                        sub=f"avg {int(round(weekday_pivot.loc[_wd_lightest_day, 'Total']))} vol / day",
-                    ),
-                    unsafe_allow_html=True,
-                )
-
-            # Same metrics-divider treatment as the main monthly heatmap
-            # above — 32 px above + 32 px below (combined with the section
-            # heading's 12 px margin-top) — so the weekday KPI cards and
-            # the "weekday pattern" heading have proper breathing room.
-            st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
-
-            st.markdown(
-                f'<div class="section-heading">'
-                f'{map_type} — weekday pattern · {month_name_str}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                f'<div class="heatmap-legend">'
-                f'Values = avg completed volume per occurrence of that weekday. '
-                f'Colour scale: &nbsp;'
-                f'<strong style="color:{_VIRIDIS_LOW};">■</strong> low &nbsp;→&nbsp; '
-                f'<strong style="color:{_VIRIDIS_HIGH};">■</strong> high '
-                f'(hour columns only). &nbsp;'
-                f'<strong>Total</strong> column = avg daily total for that weekday.'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-            _wd_fig = _build_analytics_heatmap(
-                weekday_pivot,
-                colorscale="Viridis_r",
-                hovertemplate=(
-                    "<b>%{y} @ %{customdata[0]}</b><br>"
-                    "Avg: %{customdata[1]:.1f}<extra></extra>"
-                ),
-            )
-            # Match the Pre-Analytics cell-uniformity formula:
-            # height = n_rows * 28 + 40, with margin.b = 30 for x-axis
-            # label clearance. Total chrome = 40 px → per-cell = 28 px
-            # uniformly for any n_rows.
-            _wd_n = len(weekday_pivot)
-            _wd_fig.update_layout(
-                height=_wd_n * 28 + 40,
-                margin=dict(l=10, r=10, t=10, b=30),
-            )
-            st.plotly_chart(
-                _wd_fig,
-                use_container_width=True,
-                key="analytics_weekday_heatmap",
-                config={
-                    "staticPlot": False,
-                    "scrollZoom": False,
-                    "displayModeBar": False,
-                },
-            )
+        _render_daily_view(params, ss)
+    else:
+        _render_monthly_view(params, ss)

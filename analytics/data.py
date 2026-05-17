@@ -46,7 +46,7 @@ def load_analytics_data(
     end_date: date,
     resources: tuple,
     time_basis: str,
-    _index_hash: str = "",
+    index_hash: str = "",
 ) -> pd.DataFrame:
     """Load Analytics data scoped to a Testing Bench + date range, with
     per-view post-processing applied.
@@ -60,9 +60,12 @@ def load_analytics_data(
         Bench (e.g. `DEFAULT_RESOURCES["Keck Core"]`).
     time_basis : {"Completed", "In-Lab", "TAT"}
         Drives the post-load transform; see module docstring.
-    _index_hash : str
+    index_hash : str
         Partition-index hash for cache invalidation. Passed through
-        from `storage.get_index_hash()`.
+        from `storage.get_index_hash()`. Plain name (no leading `_`) so
+        Streamlit's @cache_data hashes it into the cache key —
+        underscored names are skipped, which was silently serving stale
+        cross-session data in a prior version.
 
     Returns
     -------
@@ -79,7 +82,7 @@ def load_analytics_data(
         end_date=end_date,
         resources=resources,
         exclude_procs=tuple(sorted(EXCLUDED_PROCEDURES)),
-        _index_hash=_index_hash,
+        index_hash=index_hash,
     )
     if df.empty:
         return df
@@ -103,7 +106,10 @@ def load_analytics_data(
         return df
 
     if time_basis == "TAT":
-        # TAT needs the Drawn timestamp to compute (Complete - Drawn).
+        # TAT needs both timestamps to compute (Complete - Drawn). Filter
+        # rows missing either, and discard negative TATs (data-entry
+        # errors where Drawn > Complete) - those would otherwise drag
+        # the mean down and incorrectly count as "% under 1 hour".
         if "Date/Time - Drawn" not in df.columns:
             return df.iloc[0:0]
         df = df.copy()
@@ -113,13 +119,17 @@ def load_analytics_data(
         df["Date/Time - Drawn"] = pd.to_datetime(
             df["Date/Time - Drawn"], errors="coerce"
         )
-        df = df[df["Date/Time - Drawn"].notna()]
+        df = df[
+            df["Date/Time - Drawn"].notna()
+            & df["Date/Time - Complete"].notna()
+        ]
         if df.empty:
             return df
         tat_seconds = (
             df["Date/Time - Complete"] - df["Date/Time - Drawn"]
         ).dt.total_seconds()
         df = df.assign(TAT_minutes=(tat_seconds / 60.0).astype(float))
+        df = df[df["TAT_minutes"] >= 0]
         return df
 
     # time_basis == "Completed" — return as-is.
@@ -135,8 +145,8 @@ def build_pivot(
     """Build the Daily heatmap pivot.
 
     `top_n` controls how many top-volume procedures the heatmap shows:
-        • int  — keep the top-N procedures by full-day total volume
-        • None — keep ALL procedures (the sidebar's "All" option)
+        - int  -> keep the top-N procedures by full-day total volume
+        - None -> keep ALL procedures (the sidebar's "All" option)
     """
     h_start, h_end = hour_range
     hours   = list(range(h_start, h_end + 1))
@@ -209,13 +219,23 @@ def build_monthly_pivot(
     return avg, n_days, month_df
 
 
+@st.cache_data(show_spinner=False, ttl=300)
 def build_weekday_pivot(
-    month_df: pd.DataFrame, year: int, month: int,
+    _month_df: pd.DataFrame, year: int, month: int,
+    cache_key: str = "",
 ) -> tuple:
-    if month_df.empty:
+    """Build the Monthly weekday-pattern pivot.
+
+    `_month_df` is underscore-prefixed so Streamlit skips hashing the
+    DataFrame (would be expensive for a month-sized frame). `cache_key`
+    carries the (map_type, time_basis, idx_hash) fingerprint that
+    callers must supply so the cache busts when scope changes.
+    """
+    _ = cache_key  # consumed by st.cache_data for cache-key fingerprinting
+    if _month_df.empty:
         return None, {}
 
-    df = month_df.copy()
+    df = _month_df.copy()
     df["weekday"] = pd.to_datetime(df["complete_date"]).dt.dayofweek
 
     pivot = (
@@ -243,12 +263,14 @@ def build_weekday_pivot(
     return pivot, wd_counts
 
 
+@st.cache_data(show_spinner=False, ttl=300)
 def load_monthly_avg_for_comparison(
-    df: pd.DataFrame,
+    _df: pd.DataFrame,
     selected_date: date,
-    procedures: list,
+    procedures: tuple,
+    cache_key: str = "",
 ) -> pd.DataFrame:
-    """Build a procedure × hour-of-day average-per-day pivot for the month
+    """Build a procedure x hour-of-day average-per-day pivot for the month
     that contains `selected_date`, restricted to the given procedures.
 
     Used by the Daily heatmap's hover tooltip in analytics/dashboard.py to
@@ -258,20 +280,26 @@ def load_monthly_avg_for_comparison(
     the month-summed count for that procedure/hour divided by the number
     of distinct dates that have any data in the month.
 
-    Returns an empty DataFrame if `df` has no rows in the selected month or
-    no rows for any of the requested procedures.
+    Returns an empty DataFrame if `_df` has no rows in the selected month
+    or no rows for any of the requested procedures.
+
+    `_df` is underscore-prefixed so Streamlit skips hashing the DataFrame.
+    `procedures` is a tuple (hashable) and acts as part of the cache key.
+    `cache_key` carries the (map_type, time_basis, idx_hash) fingerprint.
     """
-    if df is None or df.empty or not procedures:
+    _ = cache_key  # consumed by st.cache_data for cache-key fingerprinting
+    if _df is None or _df.empty or not procedures:
         return pd.DataFrame()
 
     year, month = selected_date.year, selected_date.month
     month_start = date(year, month, 1)
     month_end   = date(year, month, _cal.monthrange(year, month)[1])
 
-    month_df = df[
-        (df["complete_date"] >= month_start) &
-        (df["complete_date"] <= month_end) &
-        (df["Order Procedure"].isin(procedures))
+    procedures_list = list(procedures)
+    month_df = _df[
+        (_df["complete_date"] >= month_start) &
+        (_df["complete_date"] <= month_end) &
+        (_df["Order Procedure"].isin(procedures_list))
     ]
     if month_df.empty:
         return pd.DataFrame()
@@ -280,7 +308,7 @@ def load_monthly_avg_for_comparison(
         month_df.pivot_table(
             index="Order Procedure", columns="hour",
             values="Complete Volume", aggfunc="sum", fill_value=0,
-        ).reindex(index=procedures, columns=list(range(24)), fill_value=0)
+        ).reindex(index=procedures_list, columns=list(range(24)), fill_value=0)
     )
     n_days = max(int(month_df["complete_date"].nunique()), 1)
     return pivot / n_days
@@ -290,10 +318,21 @@ def load_monthly_avg_for_comparison(
 # TAT METRIC LAYER
 # ════════════════════════════════════════════════════════════════════════════
 
+# Per-priority service-level targets in minutes. The "% within target"
+# stat in the TAT view is computed against the row's own priority
+# target: RT samples vs the 2h SLA, ST/TS vs 1h. To change a target,
+# edit this dict — the summary stats, per-procedure table, bar-chart
+# reference lines, and the dashboard legend all read from here.
+TAT_TARGET_MINUTES: dict[str, int] = {
+    "RT": 120,  # Routine — 2-hour service level
+    "ST": 60,   # Stat — 1-hour
+    "TS": 60,   # Time Study — 1-hour
+}
+
 # Stat columns reported per priority group inside `build_tat_table`'s
 # MultiIndex output. The order here is the order they appear in the
 # rendered table.
-_TAT_STAT_COLS = ["n", "Mean", "% <1h"]
+_TAT_STAT_COLS = ["n", "Mean", "% within target"]
 
 
 def compute_tat_metrics(df: pd.DataFrame) -> pd.DataFrame:
@@ -346,64 +385,94 @@ def build_tat_table(
     """Build a per-procedure TAT statistics table with priority-grouped
     MultiIndex columns.
 
-    Three groups are computed for each procedure:
-      • Routine  — rows where Collection Priority == 'RT'
-      • Stat     — rows where Collection Priority is 'ST' or 'TS'
-                   (TS = Time Study, treated as stat / urgent)
-      • Combined — every row for that procedure regardless of priority
+    Four groups are computed for each procedure:
+      • RT  — Collection Priority == 'RT'   (Routine, target < 2h)
+      • ST  — Collection Priority == 'ST'   (Stat,    target < 1h)
+      • TS  — Collection Priority == 'TS'   (Time Study, target < 1h)
+      • All — every row regardless of priority (weighted % within
+              target: each sample evaluated against its own priority's
+              threshold from TAT_TARGET_MINUTES)
 
-    Per group the function reports n, Mean, and % <1h (percentage of
-    samples with TAT_minutes < 60). Procedures that have no rows in a
-    given group get None for every stat column in that group; rendering
-    displays those as "—".
+    Each group reports n, Mean, and % within target. Procedures with
+    no rows in a given group get None for every stat column in that
+    group; rendering displays those as "-".
 
     The returned DataFrame has one row per procedure in
     `selected_procedures` and a pandas MultiIndex column structure:
 
-        Level 0:  ['Procedure',  'Routine', 'Stat', 'Combined']
-        Level 1:  ['Procedure', then 'n','Mean','% <1h' x 3]
+        Level 0:  ['Procedure', 'RT', 'ST', 'TS', 'All']
+        Level 1:  ['Procedure', then 'n', 'Mean', '% within target' x 4]
 
-    Rows are sorted by Combined n descending; procedures with no
-    Combined samples sort to the bottom.
+    Rows are sorted by All n descending; procedures with no samples
+    sort to the bottom.
     """
     columns = pd.MultiIndex.from_tuples(
         [("Procedure", "Procedure")]
-        + [("Routine",  c) for c in _TAT_STAT_COLS]
-        + [("Stat",     c) for c in _TAT_STAT_COLS]
-        + [("Combined", c) for c in _TAT_STAT_COLS]
+        + [("RT",  c) for c in _TAT_STAT_COLS]
+        + [("ST",  c) for c in _TAT_STAT_COLS]
+        + [("TS",  c) for c in _TAT_STAT_COLS]
+        + [("All", c) for c in _TAT_STAT_COLS]
     )
 
     if tat_df is None or tat_df.empty or not selected_procedures:
         return pd.DataFrame(columns=columns)
 
-    def _group_stats(group_df: pd.DataFrame) -> list:
-        """Return [n, Mean, % <1h] or 3 Nones for an empty group."""
+    def _group_stats(group_df: pd.DataFrame, threshold_minutes: int) -> list:
+        """Return [n, Mean, % within target] for a single-priority
+        subset evaluated against `threshold_minutes`. Three Nones for
+        an empty subset."""
         if group_df.empty:
             return [None, None, None]
         tats = group_df["TAT_minutes"].astype(float)
         return [
             int(len(tats)),
             float(tats.mean()),
-            float((tats < 60).mean() * 100.0),
+            float((tats < threshold_minutes).mean() * 100.0),
         ]
+
+    def _all_stats(proc_rows: pd.DataFrame) -> list:
+        """Return [n, Mean, % within target] for the All aggregate.
+
+        % within target uses each sample's priority-specific threshold
+        (RT vs <2h, ST/TS vs <1h) via vectorized lookup against
+        TAT_TARGET_MINUTES, so the result is the weighted
+        service-level rate across all priorities for this procedure.
+        Samples whose Collection Priority isn't in TAT_TARGET_MINUTES
+        (shouldn't happen post-loader) get NaN thresholds, and
+        `tats < NaN` evaluates False — those count as "not within
+        target" via .fillna(False).
+        """
+        if proc_rows.empty:
+            return [None, None, None]
+        tats = proc_rows["TAT_minutes"].astype(float)
+        n = int(len(proc_rows))
+        mean = float(tats.mean())
+        thresholds = proc_rows["Collection Priority"].map(TAT_TARGET_MINUTES).astype(float)
+        meets = int((tats < thresholds).fillna(False).sum())
+        return [n, mean, float(meets / n * 100.0)]
 
     sel = tat_df[tat_df["Order Procedure"].isin(selected_procedures)]
 
     rows = []
     for proc in selected_procedures:
         proc_rows = sel[sel["Order Procedure"] == proc]
-        rt   = proc_rows[proc_rows["Collection Priority"] == "RT"]
-        stat = proc_rows[proc_rows["Collection Priority"].isin(["ST", "TS"])]
-        comb = proc_rows
+        rt = proc_rows[proc_rows["Collection Priority"] == "RT"]
+        st = proc_rows[proc_rows["Collection Priority"] == "ST"]
+        ts = proc_rows[proc_rows["Collection Priority"] == "TS"]
+
         rows.append(
-            [proc] + _group_stats(rt) + _group_stats(stat) + _group_stats(comb)
+            [proc]
+            + _group_stats(rt, TAT_TARGET_MINUTES["RT"])
+            + _group_stats(st, TAT_TARGET_MINUTES["ST"])
+            + _group_stats(ts, TAT_TARGET_MINUTES["TS"])
+            + _all_stats(proc_rows)
         )
 
     out = pd.DataFrame(rows, columns=columns)
 
-    # Sort by Combined n descending; rows with None n drop to the bottom.
+    # Sort by All n descending; rows with None n drop to the bottom.
     out = (
-        out.sort_values(("Combined", "n"), ascending=False, na_position="last")
+        out.sort_values(("All", "n"), ascending=False, na_position="last")
         .reset_index(drop=True)
     )
     return out

@@ -17,11 +17,11 @@ import requests
 import streamlit as st
 
 from config import (
-    EXCLUDE_PROCS,
     FORECAST_HORIZON,
     MAP_TYPES,
     HOUR_LABELS,
 )
+from analytics.filters import EXCLUDED_PROCEDURES
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -88,7 +88,7 @@ def filter_for_map(df: pd.DataFrame, map_type: str, resource_assignments: dict) 
     """Filter dataset to the resources for one map type."""
     resources = resource_assignments[map_type]
     out = df[df["Performing Service Resource"].isin(resources)].copy()
-    out = out[~out["Order Procedure"].isin(EXCLUDE_PROCS)]
+    out = out[~out["Order Procedure"].isin(EXCLUDED_PROCEDURES)]
     return out
 
 
@@ -237,14 +237,19 @@ def _train_forecasts_streaming(map_type: str, resource_assignments: dict) -> Non
     from storage import iter_partitions
 
     resources = set(resource_assignments[map_type])
-    exclude = EXCLUDE_PROCS
+    exclude = EXCLUDED_PROCEDURES
 
     # Phase 1: Stream partitions and aggregate daily volumes for BOTH bases.
     # daily_agg_complete[(proc, hour)][date] = volume
     # daily_agg_inlab   [(proc, hour)][date] = volume
     daily_agg_complete: dict[tuple[str, int], dict] = {}
     daily_agg_inlab: dict[tuple[str, int], dict] = {}
-    proc_totals: dict[str, float] = {}
+    # Per-basis totals. We rank top-30 separately for each basis (a
+    # procedure can be high-volume by Complete count but low by In-Lab
+    # count or vice versa) and then train on the UNION so neither view
+    # silently drops a procedure that's a top performer for its basis.
+    proc_totals_complete: dict[str, float] = {}
+    proc_totals_inlab: dict[str, float] = {}
     last_data_date_complete = None
     last_data_date_inlab = None
 
@@ -267,15 +272,15 @@ def _train_forecasts_streaming(map_type: str, resource_assignments: dict) -> Non
                 c.groupby(["Order Procedure", "hour", "complete_date"])["Complete Volume"]
                 .sum().reset_index()
             )
-            for _, row in grouped_c.iterrows():
-                proc = row["Order Procedure"]
-                hour = int(row["hour"])
-                d = row["complete_date"]
-                vol = float(row["Complete Volume"])
+            # itertuples is ~50x faster than iterrows on a multi-thousand-row
+            # groupby frame; semantics unchanged.
+            for proc, hour, d, vol in grouped_c.itertuples(index=False, name=None):
+                hour = int(hour)
+                vol = float(vol)
                 key = (proc, hour)
                 daily_agg_complete.setdefault(key, {})
                 daily_agg_complete[key][d] = daily_agg_complete[key].get(d, 0.0) + vol
-                proc_totals[proc] = proc_totals.get(proc, 0.0) + vol
+                proc_totals_complete[proc] = proc_totals_complete.get(proc, 0.0) + vol
             del grouped_c
 
         # ── In-Lab basis ────────────────────────────────────────────────
@@ -292,14 +297,13 @@ def _train_forecasts_streaming(map_type: str, resource_assignments: dict) -> Non
                     il.groupby(["Order Procedure", "_ih", "inlab_date"])["Complete Volume"]
                     .sum().reset_index()
                 )
-                for _, row in grouped_i.iterrows():
-                    proc = row["Order Procedure"]
-                    hour = int(row["_ih"])
-                    d = row["inlab_date"]
-                    vol = float(row["Complete Volume"])
+                for proc, hour, d, vol in grouped_i.itertuples(index=False, name=None):
+                    hour = int(hour)
+                    vol = float(vol)
                     key = (proc, hour)
                     daily_agg_inlab.setdefault(key, {})
                     daily_agg_inlab[key][d] = daily_agg_inlab[key].get(d, 0.0) + vol
+                    proc_totals_inlab[proc] = proc_totals_inlab.get(proc, 0.0) + vol
                 del grouped_i
 
         del filt
@@ -307,15 +311,27 @@ def _train_forecasts_streaming(map_type: str, resource_assignments: dict) -> Non
     if last_data_date_complete is None and last_data_date_inlab is None:
         return
 
-    # Top-30 procedures ranked by Completed totals (same ranking for both bases)
-    top30 = sorted(proc_totals.keys(), key=lambda p: proc_totals[p], reverse=True)[:30]
+    # Top-30 by EACH basis, unioned. Without this, a procedure that's
+    # high-volume by In-Lab but low by Complete would be dropped from
+    # the In-Lab forecast view entirely.
+    top30_complete = sorted(
+        proc_totals_complete.keys(),
+        key=lambda p: proc_totals_complete[p],
+        reverse=True,
+    )[:30]
+    top30_inlab = sorted(
+        proc_totals_inlab.keys(),
+        key=lambda p: proc_totals_inlab[p],
+        reverse=True,
+    )[:30]
+    top_procs = sorted(set(top30_complete) | set(top30_inlab))
 
     predictions_complete = _train_models_for_basis(
-        top30, daily_agg_complete, last_data_date_complete
+        top_procs, daily_agg_complete, last_data_date_complete
     ) if last_data_date_complete is not None else {}
 
     predictions_inlab = _train_models_for_basis(
-        top30, daily_agg_inlab, last_data_date_inlab
+        top_procs, daily_agg_inlab, last_data_date_inlab
     ) if last_data_date_inlab is not None else {}
 
     # Use the later of the two as the "canonical" last/forecast-end date.
@@ -410,34 +426,41 @@ def _train_models_for_basis(
 # FORECAST PIVOT BUILDER
 # ═════════════════════════════════════════════════════════════════════════════
 
+@st.cache_data(show_spinner=False, ttl=300)
 def build_forecast_pivot(
-    fc_data: dict,
+    _fc_data: dict,
     selected_date: date,
     hour_range: tuple[int, int],
     time_basis: str = "Completed",
     top_n: int | None = 30,
+    cache_key: str = "",
 ) -> tuple[pd.DataFrame | None, list[int]]:
     """Build a procedure x hour pivot from forecast predictions for a future date.
 
     time_basis selects which prediction set to use:
-      - "Completed" → predictions_complete (based on Date/Time - Complete)
-      - "In-Lab"    → predictions_inlab    (based on Date/Time - In Lab)
+      - "Completed" -> predictions_complete (based on Date/Time - Complete)
+      - "In-Lab"    -> predictions_inlab    (based on Date/Time - In Lab)
     Legacy payloads without split predictions fall back to "predictions".
 
     `top_n` caps the returned procedure rows:
-      • int  — keep the top-N forecasted procedures by full-day sum
-      • None — keep every forecasted procedure (the sidebar's "All" option).
+      - int  -> keep the top-N forecasted procedures by full-day sum
+      - None -> keep every forecasted procedure (the sidebar's "All" option).
     Forecasts are only trained for the top 30 procedures by historical
     volume (train_forecasts uses head(30)), so the effective ceiling
-    is 30 even when top_n is None or > 30 — the function returns
-    whatever the forecast payload contains.
+    is 30 even when top_n is None or > 30.
+
+    `_fc_data` is underscore-prefixed so Streamlit skips hashing the dict
+    (would be expensive for a 720+ key forecast payload). `cache_key`
+    carries the (map_type, last_data_date) fingerprint that callers must
+    supply so the cache busts when forecasts are retrained.
     """
+    _ = cache_key  # consumed by st.cache_data for cache-key fingerprinting
     h_start, h_end = hour_range
     hours = list(range(h_start, h_end + 1))
     if time_basis == "In-Lab":
-        preds = fc_data.get("predictions_inlab") or fc_data.get("predictions", {})
+        preds = _fc_data.get("predictions_inlab") or _fc_data.get("predictions", {})
     else:
-        preds = fc_data.get("predictions_complete") or fc_data.get("predictions", {})
+        preds = _fc_data.get("predictions_complete") or _fc_data.get("predictions", {})
 
     rows: dict = {}
     for (proc, hour), date_map in preds.items():
