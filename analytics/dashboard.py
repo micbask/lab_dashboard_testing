@@ -809,11 +809,18 @@ def _render_tat_view(params: dict) -> None:
         return
 
     # ── Summary by priority (Plotly go.Table) ─────────────────────────────
-    # Four rows (RT, ST, TS, All), five columns (Priority, n, Mean TAT,
-    # Target, % within target). RT's % is computed against its 2h SLA,
-    # ST/TS against 1h, and the All row aggregates with per-sample
-    # threshold lookup. The Target cell for All shows "-" since the
-    # aggregate has no single scalar threshold.
+    # Six rows × six columns: Priority, n, Mean TAT, Target, % within
+    # target, Range. RT's % is computed against its 2h SLA, ST/TS
+    # against 1h, and the All row aggregates with per-sample threshold
+    # lookup. The Target cell for All shows "-" since the aggregate has
+    # no single scalar threshold. Range = min–max TAT across that
+    # priority's samples (formatted via `format_range` — same compact
+    # form as the procedure table below for visual continuity).
+    #
+    # Each row is row-tinted in its priority's colour (~0.08 alpha) so
+    # the eye locks onto a single priority horizontally without losing
+    # the row context. The Priority cell itself uses a deeper alpha to
+    # make the row anchor pop.
     st.markdown(
         '<div class="section-heading">Summary by priority</div>',
         unsafe_allow_html=True,
@@ -826,11 +833,19 @@ def _render_tat_view(params: dict) -> None:
         "TS":  _TAT_TS_COLOR,
         "All": _TAT_COMBINED_COLOR,
     }
-    _priority_fills_map = {
-        "RT":  "rgba(0, 102, 204, 0.10)",
-        "ST":  "rgba(204, 102, 0, 0.10)",
-        "TS":  "rgba(10, 147, 150, 0.10)",
-        "All": "rgba(68, 68, 68, 0.10)",
+    # Strong tint for the Priority cell (visual anchor) + light tint
+    # for the rest of the row (continuity, doesn't fight the data).
+    _priority_fills_anchor = {
+        "RT":  "rgba(0, 102, 204, 0.18)",
+        "ST":  "rgba(204, 102, 0, 0.18)",
+        "TS":  "rgba(10, 147, 150, 0.18)",
+        "All": "rgba(68, 68, 68, 0.18)",
+    }
+    _priority_fills_row = {
+        "RT":  "rgba(0, 102, 204, 0.08)",
+        "ST":  "rgba(204, 102, 0, 0.08)",
+        "TS":  "rgba(10, 147, 150, 0.08)",
+        "All": "rgba(68, 68, 68, 0.08)",
     }
     _priority_target_labels = {
         "RT":  f"&lt; {_rt_target_h}h",
@@ -845,7 +860,9 @@ def _render_tat_view(params: dict) -> None:
         return f"{int(v):,}"
 
     # Compute per-priority + All stats. The All row uses the same
-    # weighted threshold logic as build_tat_table._all_stats.
+    # weighted threshold logic as build_tat_table._all_stats. Min/Max
+    # are added so the Range column has data; they default to None when
+    # the priority has no samples.
     _summary_rows: list[tuple] = []
     for _prio in _priorities_order:
         if _prio == "All":
@@ -853,52 +870,64 @@ def _render_tat_view(params: dict) -> None:
         else:
             _subset = tat_df[tat_df["Collection Priority"] == _prio]
         if _subset.empty:
-            _summary_rows.append((_prio, None, None, None))
+            _summary_rows.append((_prio, None, None, None, None, None))
             continue
+        _tats = _subset["TAT_minutes"].astype(float)
         _n = int(len(_subset))
-        _mean = float(_subset["TAT_minutes"].mean())
+        _mean = float(_tats.mean())
+        _mn = float(_tats.min())
+        _mx = float(_tats.max())
         if _prio == "All":
             _thresholds = _subset["Collection Priority"].map(
                 TAT_TARGET_MINUTES
             ).astype(float)
             _meets = int(
-                (_subset["TAT_minutes"].astype(float) < _thresholds)
-                .fillna(False)
-                .sum()
+                (_tats < _thresholds).fillna(False).sum()
             )
             _pct = float(_meets / _n * 100.0)
         else:
             _threshold = TAT_TARGET_MINUTES[_prio]
-            _pct = float((_subset["TAT_minutes"] < _threshold).mean() * 100.0)
-        _summary_rows.append((_prio, _n, _mean, _pct))
+            _pct = float((_tats < _threshold).mean() * 100.0)
+        _summary_rows.append((_prio, _n, _mean, _pct, _mn, _mx))
 
     _summary_priority_col = [
         f"<b><span style='color:{_priority_colors_map[p]}'>{p}</span></b>"
-        for p, _, _, _ in _summary_rows
+        for p, *_ in _summary_rows
     ]
-    _summary_n_col    = [_fmt_n_table(n) for _, n, _, _ in _summary_rows]
-    _summary_mean_col = [format_tat(m) for _, _, m, _ in _summary_rows]
-    _summary_targ_col = [_priority_target_labels[p] for p, _, _, _ in _summary_rows]
-    _summary_pct_col  = [format_pct(pct) for _, _, _, pct in _summary_rows]
+    _summary_n_col     = [_fmt_n_table(r[1]) for r in _summary_rows]
+    _summary_mean_col  = [format_tat(r[2])   for r in _summary_rows]
+    _summary_targ_col  = [_priority_target_labels[r[0]] for r in _summary_rows]
+    _summary_pct_col   = [format_pct(r[3])   for r in _summary_rows]
+    _summary_range_col = [
+        format_range(r[4], r[5]) for r in _summary_rows
+    ]
 
-    # Tint the Priority cell per row; other cells white. Plotly's
-    # cells.fill_color expects column-major 2D arrays.
-    _summary_priority_fills_list = [
-        _priority_fills_map[p] for p, _, _, _ in _summary_rows
-    ]
+    # Row-tint pattern (column-major). Priority column uses the deeper
+    # anchor fill; every other column uses the lighter row fill so the
+    # entire row reads as one priority block.
+    _per_row_anchor = [_priority_fills_anchor[r[0]] for r in _summary_rows]
+    _per_row_light  = [_priority_fills_row[r[0]]    for r in _summary_rows]
     _summary_cell_fills = [
-        _summary_priority_fills_list,
-        ["#ffffff"] * len(_summary_rows),
-        ["#ffffff"] * len(_summary_rows),
-        ["#ffffff"] * len(_summary_rows),
-        ["#ffffff"] * len(_summary_rows),
+        _per_row_anchor,   # Priority
+        _per_row_light,    # n
+        _per_row_light,    # Mean TAT
+        _per_row_light,    # Target
+        _per_row_light,    # % within target
+        _per_row_light,    # Range
     ]
 
+    # Column widths sized to actual content: Priority and Target hold
+    # short labels (RT / ST / TS / All; "< 1h" / "< 2h" / "-") so they
+    # stay tight; Mean and Range are the widest data ("1h 12m" /
+    # "1h12–3h45") so they get more room. % is medium.
     _summary_fig = go.Figure(
         data=go.Table(
-            columnwidth=[1.2, 0.7, 1.0, 0.8, 1.4],
+            columnwidth=[1.0, 0.7, 1.0, 0.7, 1.2, 1.4],
             header=dict(
-                values=["Priority", "n", "Mean TAT", "Target", "% within target"],
+                values=[
+                    "Priority", "n", "Mean TAT", "Target",
+                    "% within target", "Range",
+                ],
                 fill_color="#ffffff",
                 line_color="#e2e8f0",
                 align="center",
@@ -916,10 +945,11 @@ def _render_tat_view(params: dict) -> None:
                     _summary_mean_col,
                     _summary_targ_col,
                     _summary_pct_col,
+                    _summary_range_col,
                 ],
                 fill_color=_summary_cell_fills,
                 line_color="#eef0f3",
-                align=["center", "right", "right", "center", "right"],
+                align=["center", "right", "right", "center", "right", "right"],
                 font=dict(
                     family="Inter, system-ui, sans-serif",
                     size=12,
@@ -1030,21 +1060,25 @@ def _render_tat_view(params: dict) -> None:
     ]
 
     # Column-tinted header / cell fills so the priority groups read as
-    # visual blocks. Cells use a much paler 0.04 alpha so the data still
-    # dominates the eye. 4 cells per group now (n, Mean, %, Range).
+    # visual blocks. The previous 0.10/0.04 alpha pair was too subtle
+    # — groups blended into each other and the eye had to count column
+    # positions. Bumped to 0.18 alpha on headers and 0.08 on cells:
+    # group colours now register as distinct blocks at a glance while
+    # data text still reads as the dominant element. 4 cells per group
+    # (n, Mean, %, Range).
     _hdr_fill_cells = (
         ["#ffffff"]
-        + ["rgba(0, 102, 204, 0.10)"]   * 4   # RT
-        + ["rgba(204, 102, 0, 0.10)"]   * 4   # ST
-        + ["rgba(10, 147, 150, 0.10)"]  * 4   # TS
-        + ["rgba(68, 68, 68, 0.10)"]    * 4   # All
+        + ["rgba(0, 102, 204, 0.18)"]   * 4   # RT
+        + ["rgba(204, 102, 0, 0.18)"]   * 4   # ST
+        + ["rgba(10, 147, 150, 0.18)"]  * 4   # TS
+        + ["rgba(68, 68, 68, 0.18)"]    * 4   # All
     )
     _cell_fill_cols = (
         ["#ffffff"]
-        + ["rgba(0, 102, 204, 0.04)"]   * 4
-        + ["rgba(204, 102, 0, 0.04)"]   * 4
-        + ["rgba(10, 147, 150, 0.04)"]  * 4
-        + ["rgba(68, 68, 68, 0.04)"]    * 4
+        + ["rgba(0, 102, 204, 0.08)"]   * 4
+        + ["rgba(204, 102, 0, 0.08)"]   * 4
+        + ["rgba(10, 147, 150, 0.08)"]  * 4
+        + ["rgba(68, 68, 68, 0.08)"]    * 4
     )
 
     def _fmt_n(v):
@@ -1092,13 +1126,22 @@ def _render_tat_view(params: dict) -> None:
     _aligns = ["left"] + ["right"] * 16
     _header_font_colors = ["#6F1828"] + ["#1a1a1a"] * 16
 
-    # Column widths: 17 columns total. Procedure shrunk from 3 to 2
-    # units (short aliases like "CBC w diff" still fit comfortably in
-    # ~130 px); each stat column gets 1 unit. Total = 18 units, so
-    # Procedure ≈ 11% of width, stat cols ≈ 5.5% each.
+    # Column widths sized to actual content rather than uniform 1-unit:
+    # Range is the widest stat ("1h12–3h45" ≈ 9 chars), so it gets the
+    # biggest stat slice; n is just 2-3 digits so it shrinks. Per-group
+    # total stays at 4.0 units so each priority block occupies the
+    # same proportion of width — that keeps the colour blocks visually
+    # equal-sized despite the asymmetric stat columns inside them.
+    # Procedure gets 2.4 units (≈13% of width) — enough for the short
+    # aliases ("CBC w diff", "Lactic Acid") with margin.
+    #   Procedure 2.4 / n 0.7 / Mean 1.0 / % 0.9 / Range 1.4 × 4 = 18.4
+    _proc_w   = 2.4
+    _stat_ws  = [0.7, 1.0, 0.9, 1.4]   # n, Mean, %, Range — one block
+    _column_widths = [_proc_w] + _stat_ws * 4
+
     _tat_table_fig = go.Figure(
         data=go.Table(
-            columnwidth=[2] + [1] * 16,
+            columnwidth=_column_widths,
             header=dict(
                 values=_tat_headers,
                 fill_color=_hdr_fill_cells,
@@ -1124,14 +1167,18 @@ def _render_tat_view(params: dict) -> None:
                     size=12,
                     color="#1a1a1a",
                 ),
-                height=32,
+                # 36 px (was 32) gives the data more vertical breathing
+                # room so values read as the dominant element against
+                # the stronger group tints.
+                height=36,
             ),
         )
     )
 
     # Total height = header + n_rows × row_height + small bottom buffer.
     _n_rows = max(1, len(table_df))
-    _table_h = 56 + _n_rows * 32 + 24
+    # 56 px header + 36 px per row (matches cells.height) + 24 px buffer.
+    _table_h = 56 + _n_rows * 36 + 24
     _tat_table_fig.update_layout(
         height=_table_h,
         margin=dict(l=4, r=4, t=4, b=4),
