@@ -976,7 +976,7 @@ def _render_tat_view(params: dict) -> None:
                 align="center",
                 font=dict(
                     family="Inter, system-ui, sans-serif",
-                    size=14,
+                    size=12,
                     color="#6F1828",
                 ),
                 height=_HEADER_H,
@@ -995,7 +995,7 @@ def _render_tat_view(params: dict) -> None:
                 align="center",
                 font=dict(
                     family="Inter, system-ui, sans-serif",
-                    size=15,
+                    size=13,
                     color=_summary_font_colors,
                 ),
                 height=_ROW_H,
