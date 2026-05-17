@@ -587,8 +587,8 @@ def render(params: dict, ss) -> None:
                             _ad = _d["active_days"].get(_tech, 0)
                             if _v > 0:
                                 _detail = (
-                                    f"{_v:.1f} avg draws · "
-                                    f"{_sv:.1f} avg samples · "
+                                    f"{_v:.1f} avg draws<br>"
+                                    f"{_sv:.1f} avg samples<br>"
                                     f"N = {_ad} active day"
                                     f"{'s' if _ad != 1 else ''}"
                                 )
