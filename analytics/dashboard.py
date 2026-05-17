@@ -695,15 +695,14 @@ def _fmt_tat_compact(minutes) -> str:
 
 
 def format_range(min_v, max_v) -> str:
-    """Format a (min, max) TAT pair as 'min: X<br>max: Y' for two-line
-    display inside narrow Plotly Table cells.
+    """Format a (min, max) TAT pair on two lines so it fits the narrow
+    uniform-width stat cells in the procedure table.
 
-    Using two lines lets every stat column share a uniform width
-    without the Range value getting clipped. Plotly Table cells
-    render <br> as a line break (verified — the procedure table's
-    column headers already use the same mechanism). Compact
-    formatter drops the space between hours and minutes ('1h12'
-    instead of '1h 12m') so each line stays short.
+    Format: '{min} -<br>{max}', e.g. '8m -' / '5h 54m'. Uses
+    `format_tat` (with the space + 'm') for consistency with the
+    Mean column — the values read as the same kind of number even
+    though Range has two of them. <br> renders as a line break in
+    Plotly Table cells (same mechanism the column headers use).
 
     Returns '-' if either bound is missing.
     """
@@ -712,10 +711,7 @@ def format_range(min_v, max_v) -> str:
         or pd.isna(min_v) or pd.isna(max_v)
     ):
         return "-"
-    return (
-        f"min: {_fmt_tat_compact(min_v)}<br>"
-        f"max: {_fmt_tat_compact(max_v)}"
-    )
+    return f"{format_tat(min_v)} -<br>{format_tat(max_v)}"
 
 
 def _render_tat_view(params: dict) -> None:
