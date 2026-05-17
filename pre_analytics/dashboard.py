@@ -321,6 +321,16 @@ def render(params: dict, ss) -> None:
 
         render_header(pa_location, _pa_date_label)
 
+        # Source-data caveat: the underlying dataset is completed
+        # orders only. Recent days look thinner than they really are
+        # because draws on samples still in-progress are silently
+        # excluded until those samples complete. Surfaced here, above
+        # the KPI cards, so users see it before reading the numbers.
+        st.caption(
+            "Data reflects completed orders only. Recent draws on "
+            "samples still in progress are not yet included."
+        )
+
         _idx_hash = get_index_hash() if storage_is_configured() else ""
         _draw_df = load_draw_data(_pa_ds, pa_view, index_hash=_idx_hash)
 
