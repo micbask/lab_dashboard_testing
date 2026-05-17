@@ -318,16 +318,42 @@ def load_monthly_avg_for_comparison(
 # TAT METRIC LAYER
 # ════════════════════════════════════════════════════════════════════════════
 
-# Per-priority service-level targets in minutes. The "% within target"
-# stat in the TAT view is computed against the row's own priority
-# target: RT samples vs the 2h SLA, ST/TS vs 1h. To change a target,
-# edit this dict — the summary stats, per-procedure table, bar-chart
-# reference lines, and the dashboard legend all read from here.
+# Default per-priority service-level targets in minutes. The "% within
+# target" stat in the TAT view is computed against the row's own
+# priority target: RT samples vs the 2h SLA, ST/TS vs 1h. To change a
+# default target, edit this dict — the summary stats, per-procedure
+# table, bar-chart reference lines, and the dashboard legend all read
+# from `get_tat_targets(bench)` which falls back to this dict.
 TAT_TARGET_MINUTES: dict[str, int] = {
     "RT": 120,  # Routine — 2-hour service level
     "ST": 60,   # Stat — 1-hour
     "TS": 60,   # Time Study — 1-hour
 }
+
+# Per-bench target overrides. Send-out / specialty work has a 48-hour
+# SLA across all priorities (RT/ST/TS lose their meaning when samples
+# are batched and shipped to a reference lab), so Norris Specialty
+# gets a single flat target. Add new entries here for any future
+# bench-specific SLAs.
+TAT_TARGET_OVERRIDES: dict[str, dict[str, int]] = {
+    "Norris Specialty": {
+        "RT": 48 * 60,
+        "ST": 48 * 60,
+        "TS": 48 * 60,
+    },
+}
+
+
+def get_tat_targets(bench: str | None) -> dict[str, int]:
+    """Resolve the per-priority TAT targets for `bench`.
+
+    Returns the override dict if `bench` has one, else the default
+    TAT_TARGET_MINUTES. Always returns a fresh copy so callers can
+    mutate without leaking back into the module-level dicts.
+    """
+    if bench and bench in TAT_TARGET_OVERRIDES:
+        return dict(TAT_TARGET_OVERRIDES[bench])
+    return dict(TAT_TARGET_MINUTES)
 
 # Stat columns reported per priority group inside `build_tat_table`'s
 # MultiIndex output. The order here is the order they appear in the
@@ -381,6 +407,7 @@ def get_top_procedures_by_volume(
 def build_tat_table(
     tat_df: pd.DataFrame,
     selected_procedures: list,
+    targets: dict[str, int] | None = None,
 ) -> pd.DataFrame:
     """Build a per-procedure TAT statistics table with priority-grouped
     MultiIndex columns.
@@ -422,6 +449,8 @@ def build_tat_table(
     if tat_df is None or tat_df.empty or not selected_procedures:
         return pd.DataFrame(columns=columns)
 
+    _targets = targets if targets is not None else TAT_TARGET_MINUTES
+
     def _group_stats(group_df: pd.DataFrame, threshold_minutes: int) -> list:
         """Return [n, Mean, % within target, Min, Max] for a
         single-priority subset evaluated against `threshold_minutes`.
@@ -442,20 +471,19 @@ def build_tat_table(
         aggregate.
 
         % within target uses each sample's priority-specific threshold
-        (RT vs <2h, ST/TS vs <1h) via vectorized lookup against
-        TAT_TARGET_MINUTES, so the result is the weighted
-        service-level rate across all priorities for this procedure.
-        Samples whose Collection Priority isn't in TAT_TARGET_MINUTES
-        (shouldn't happen post-loader) get NaN thresholds, and
-        `tats < NaN` evaluates False — those count as "not within
-        target" via .fillna(False).
+        via vectorized lookup against the resolved `_targets` dict, so
+        the result is the weighted service-level rate across all
+        priorities for this procedure. Samples whose Collection
+        Priority isn't in `_targets` (shouldn't happen post-loader)
+        get NaN thresholds, and `tats < NaN` evaluates False — those
+        count as "not within target" via .fillna(False).
         """
         if proc_rows.empty:
             return [None, None, None, None, None]
         tats = proc_rows["TAT_minutes"].astype(float)
         n = int(len(proc_rows))
         mean = float(tats.mean())
-        thresholds = proc_rows["Collection Priority"].map(TAT_TARGET_MINUTES).astype(float)
+        thresholds = proc_rows["Collection Priority"].map(_targets).astype(float)
         meets = int((tats < thresholds).fillna(False).sum())
         return [
             n,
@@ -476,9 +504,9 @@ def build_tat_table(
 
         rows.append(
             [proc]
-            + _group_stats(rt, TAT_TARGET_MINUTES["RT"])
-            + _group_stats(st, TAT_TARGET_MINUTES["ST"])
-            + _group_stats(ts, TAT_TARGET_MINUTES["TS"])
+            + _group_stats(rt, _targets["RT"])
+            + _group_stats(st, _targets["ST"])
+            + _group_stats(ts, _targets["TS"])
             + _all_stats(proc_rows)
         )
 

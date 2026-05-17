@@ -32,7 +32,7 @@ from analytics.data import (
     build_pivot, build_monthly_pivot, build_weekday_pivot,
     load_monthly_avg_for_comparison,
     compute_tat_metrics, get_top_procedures_by_volume, build_tat_table,
-    TAT_TARGET_MINUTES,
+    TAT_TARGET_MINUTES, get_tat_targets,
 )
 
 
@@ -762,13 +762,16 @@ def _render_tat_view(params: dict) -> None:
 
     # ── Priority legend ────────────────────────────────────────────────────
     # Colored dot + abbreviation + target, one row under the dashboard
-    # subtitle. Targets are read from TAT_TARGET_MINUTES (analytics/data.py)
-    # so changing a threshold in one place updates the legend, the
-    # summary table, the per-procedure column headers, and the bar
-    # chart reference lines together.
-    _rt_target_h = TAT_TARGET_MINUTES["RT"] // 60
-    _st_target_h = TAT_TARGET_MINUTES["ST"] // 60
-    _ts_target_h = TAT_TARGET_MINUTES["TS"] // 60
+    # subtitle. Targets are resolved via get_tat_targets(bench) — most
+    # benches use the default RT=2h / ST=TS=1h; Norris Specialty
+    # overrides all three to 48h (send-out SLA). Every downstream
+    # consumer (summary stats, headers, bar chart, build_tat_table)
+    # reads from the same `_tat_targets` dict so changing the
+    # override map updates everything together.
+    _tat_targets = get_tat_targets(_bench)
+    _rt_target_h = _tat_targets["RT"] // 60
+    _st_target_h = _tat_targets["ST"] // 60
+    _ts_target_h = _tat_targets["TS"] // 60
 
     def _legend_chip(color: str, label: str) -> str:
         return (
@@ -889,14 +892,14 @@ def _render_tat_view(params: dict) -> None:
         _mx = float(_tats.max())
         if _prio == "All":
             _thresholds = _subset["Collection Priority"].map(
-                TAT_TARGET_MINUTES
+                _tat_targets
             ).astype(float)
             _meets = int(
                 (_tats < _thresholds).fillna(False).sum()
             )
             _pct = float(_meets / _n * 100.0)
         else:
-            _threshold = TAT_TARGET_MINUTES[_prio]
+            _threshold = _tat_targets[_prio]
             _pct = float((_tats < _threshold).mean() * 100.0)
         _summary_rows.append((_prio, _n, _mean, _pct, _mn, _mx))
 
@@ -1070,7 +1073,7 @@ def _render_tat_view(params: dict) -> None:
     if not _selected:
         _selected = _default_top
 
-    table_df = build_tat_table(tat_df, _selected)
+    table_df = build_tat_table(tat_df, _selected, targets=_tat_targets)
 
     # ── TAT table (Plotly go.Table) ────────────────────────────────────────
     # 13 columns: Procedure + 4 priority groups × (n, Mean, % within
@@ -1414,26 +1417,29 @@ def _render_tat_view(params: dict) -> None:
         hovertemplate=_bar_hover(_all_means_raw, "All"),
     ))
 
-    # Reference lines at each priority's target. Annotations sit at
-    # the top of the plot so they don't overlap bars.
-    _bar_fig.add_vline(
-        x=TAT_TARGET_MINUTES["ST"],
-        line_dash="dash",
-        line_color="#aaaaaa",
-        line_width=1,
-        annotation_text=f"ST/TS target ({TAT_TARGET_MINUTES['ST']}m)",
-        annotation_position="top",
-        annotation_font=dict(size=10, color="#666666"),
-    )
-    _bar_fig.add_vline(
-        x=TAT_TARGET_MINUTES["RT"],
-        line_dash="dash",
-        line_color="#aaaaaa",
-        line_width=1,
-        annotation_text=f"RT target ({TAT_TARGET_MINUTES['RT']}m)",
-        annotation_position="top",
-        annotation_font=dict(size=10, color="#666666"),
-    )
+    # Reference lines at each priority's target. Draw one line per
+    # UNIQUE target value with a label naming the priorities that
+    # share it. For the default bench config this gives two lines
+    # (ST/TS at 60m + RT at 120m); for Norris Specialty all three
+    # priorities share 2880m, so a single line is drawn.
+    def _fmt_target_label(minutes: int) -> str:
+        if minutes >= 60 and minutes % 60 == 0:
+            return f"{minutes // 60}h"
+        return f"{minutes}m"
+
+    _grouped_targets: dict[int, list[str]] = {}
+    for _p in ("RT", "ST", "TS"):
+        _grouped_targets.setdefault(_tat_targets[_p], []).append(_p)
+    for _t_min, _prios in _grouped_targets.items():
+        _bar_fig.add_vline(
+            x=_t_min,
+            line_dash="dash",
+            line_color="#aaaaaa",
+            line_width=1,
+            annotation_text=f"{'/'.join(_prios)} target ({_fmt_target_label(_t_min)})",
+            annotation_position="top",
+            annotation_font=dict(size=10, color="#666666"),
+        )
 
     # 60 px per procedure group accommodates 4 bars + group gap; the
     # +100 covers the legend + axis labels chrome.
