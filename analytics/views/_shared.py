@@ -137,10 +137,17 @@ def build_analytics_heatmap(
     x_hours_coords = list(range(len(hour_cols)))
     x_total_coord  = len(hour_cols)
 
+    # NaN-mask zero cells so Plotly renders them as transparent gaps
+    # rather than painting them the bottom-of-gradient pale colour.
+    # Combined with hoverongaps=False below, empty cells become truly
+    # empty (no fill, no hover). Matches the pre-analytics heatmap
+    # behaviour so "no data" reads as absence rather than zero-volume.
+    z_hours_masked = np.where(z_hours == 0, np.nan, z_hours).tolist()
+
     fig = go.Figure()
     fig.add_trace(
         go.Heatmap(
-            z=z_hours,
+            z=z_hours_masked,
             x=x_hours_coords,
             y=y,
             text=text_hours,
