@@ -1558,6 +1558,24 @@ html body [class*="st-key-top_n_btn_"] button div {
     margin: 32px 0 20px 0 !important;
     height: 0 !important;
 }
+/* st.info disclaimer banner — used for the forecast notice on
+   analytics Daily view and the completed-orders caveat on every
+   pre-analytics view. Streamlit's default vertical padding is too
+   generous for single-line text and lands the banner right on top
+   of the following KPI cards with no breathing room. Tighten the
+   internal padding (keeps the text size unchanged — only the
+   blue background height shrinks) and add a bottom margin so the
+   banner reads as a compact callout. data-testid covers both the
+   outer alert wrapper and the inner content container that
+   Streamlit ≥ 1.50 introduced — belt + braces so the override
+   sticks across the version we're on. */
+[data-testid="stAlert"],
+[data-testid="stAlertContainer"],
+[data-testid="stNotification"] {
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+    margin-bottom: 1.75rem !important;
+}
 .status-chip {
     display: inline-block;
     background: #DCFCE7;
