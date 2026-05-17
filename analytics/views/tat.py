@@ -184,7 +184,7 @@ def render_tat_view(params: dict) -> None:
             _pct = float((_tats <= _threshold).mean() * 100.0)
         _summary_rows.append((_prio, _n, _mean, _pct, _mn, _mx))
 
-    _summary_priority_col = [r[0] for r in _summary_rows]
+    _summary_priority_col = [f"<b>{r[0]}</b>" for r in _summary_rows]
     _summary_n_col     = [_fmt_n_table(r[1]) for r in _summary_rows]
     _summary_mean_col  = [format_tat(r[2])   for r in _summary_rows]
     _summary_targ_col  = [_priority_target_labels[r[0]] for r in _summary_rows]
@@ -311,22 +311,22 @@ def render_tat_view(params: dict) -> None:
 
     _tat_headers = [
         "Procedure",
-        f"<span style='color:{TAT_ROUTINE_COLOR}'>RT</span><br>n",
-        f"<span style='color:{TAT_ROUTINE_COLOR}'>RT</span><br>Mean",
-        f"<span style='color:{TAT_ROUTINE_COLOR}'>RT</span><br>% ≤{_rt_target_h}h",
-        f"<span style='color:{TAT_ROUTINE_COLOR}'>RT</span><br>Range",
-        f"<span style='color:{TAT_STAT_COLOR}'>ST</span><br>n",
-        f"<span style='color:{TAT_STAT_COLOR}'>ST</span><br>Mean",
-        f"<span style='color:{TAT_STAT_COLOR}'>ST</span><br>% ≤{_st_target_h}h",
-        f"<span style='color:{TAT_STAT_COLOR}'>ST</span><br>Range",
-        f"<span style='color:{TAT_TS_COLOR}'>TS</span><br>n",
-        f"<span style='color:{TAT_TS_COLOR}'>TS</span><br>Mean",
-        f"<span style='color:{TAT_TS_COLOR}'>TS</span><br>% ≤{_ts_target_h}h",
-        f"<span style='color:{TAT_TS_COLOR}'>TS</span><br>Range",
-        f"<span style='color:{TAT_COMBINED_COLOR}'>All</span><br>n",
-        f"<span style='color:{TAT_COMBINED_COLOR}'>All</span><br>Mean",
-        f"<span style='color:{TAT_COMBINED_COLOR}'>All</span><br>%",
-        f"<span style='color:{TAT_COMBINED_COLOR}'>All</span><br>Range",
+        f"<span style='color:{TAT_ROUTINE_COLOR}'><b>RT</b></span><br>n",
+        f"<span style='color:{TAT_ROUTINE_COLOR}'><b>RT</b></span><br>Mean",
+        f"<span style='color:{TAT_ROUTINE_COLOR}'><b>RT</b></span><br>% ≤{_rt_target_h}h",
+        f"<span style='color:{TAT_ROUTINE_COLOR}'><b>RT</b></span><br>Range",
+        f"<span style='color:{TAT_STAT_COLOR}'><b>ST</b></span><br>n",
+        f"<span style='color:{TAT_STAT_COLOR}'><b>ST</b></span><br>Mean",
+        f"<span style='color:{TAT_STAT_COLOR}'><b>ST</b></span><br>% ≤{_st_target_h}h",
+        f"<span style='color:{TAT_STAT_COLOR}'><b>ST</b></span><br>Range",
+        f"<span style='color:{TAT_TS_COLOR}'><b>TS</b></span><br>n",
+        f"<span style='color:{TAT_TS_COLOR}'><b>TS</b></span><br>Mean",
+        f"<span style='color:{TAT_TS_COLOR}'><b>TS</b></span><br>% ≤{_ts_target_h}h",
+        f"<span style='color:{TAT_TS_COLOR}'><b>TS</b></span><br>Range",
+        f"<span style='color:{TAT_COMBINED_COLOR}'><b>All</b></span><br>n",
+        f"<span style='color:{TAT_COMBINED_COLOR}'><b>All</b></span><br>Mean",
+        f"<span style='color:{TAT_COMBINED_COLOR}'><b>All</b></span><br>%",
+        f"<span style='color:{TAT_COMBINED_COLOR}'><b>All</b></span><br>Range",
     ]
 
     _hdr_fill_cells = (
