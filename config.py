@@ -52,7 +52,7 @@ SITE_CONFIG: dict[str, dict] = {
         "resources": [
             "PAS Cellavision", "PAS COBAS", "PAS Cobas U411",
             "PAS HEME Man Diff", "PAS HEME Orders", "PAS HEME Results",
-            "PAS IRIS", "PAS XN2000 1", "PAS XN2000 2",
+            "PAS IRIS", "PAS XN2000 1", "PAS XN2000 2", "PAS Beckman LH500",
             "PAS Manual Chemistry Bench", "PAS Manual Hematology Bench",
             "PAS Manual Urinalysis Bench",
         ],
