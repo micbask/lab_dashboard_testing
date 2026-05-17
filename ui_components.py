@@ -27,6 +27,55 @@ def inject_css() -> None:
     st.markdown(_GLOBAL_CSS, unsafe_allow_html=True)
 
 
+def inject_sidebar_resize_kill() -> None:
+    """Defensive JS shim that removes the sidebar's resize cursor.
+
+    Streamlit ≥1.50 renders the sidebar via the `re-resizable` library,
+    which sets `style="cursor: col-resize"` INLINE on the right-edge
+    handle div and re-applies it on every rerender via styled-components.
+    CSS alone (see _GLOBAL_CSS) catches the common cases, but the
+    inline style can race the stylesheet on rerender. This shim
+    installs a MutationObserver that aggressively overrides any
+    `cursor: *-resize` inline style inside the sidebar.
+
+    Implemented via `st.components.v1.html(height=0)` so the script
+    runs once at app load. The iframe is height-zero so it's
+    visually invisible. window.parent.document reaches across the
+    iframe boundary (same-origin on Streamlit Cloud).
+    """
+    import streamlit.components.v1 as _components
+    _components.html(
+        """
+        <script>
+        (function () {
+            const root = window.parent && window.parent.document;
+            if (!root) return;
+            const kill = () => {
+                const sb = root.querySelector('[data-testid="stSidebar"]');
+                if (!sb) return;
+                sb.querySelectorAll('div').forEach((el) => {
+                    const c = el.style && el.style.cursor;
+                    if (c && c.indexOf('resize') !== -1) {
+                        el.style.setProperty('cursor', 'default', 'important');
+                        el.style.setProperty('pointer-events', 'none', 'important');
+                        el.style.setProperty('display', 'none', 'important');
+                    }
+                });
+            };
+            kill();
+            new MutationObserver(kill).observe(root.body, {
+                subtree: true,
+                attributes: true,
+                attributeFilter: ['style', 'class'],
+                childList: true,
+            });
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+
 _GLOBAL_CSS = """
 <style>
 /* ═══════════════════════════════════════════════════════
@@ -288,9 +337,25 @@ section[data-testid="stSidebar"] {
         width: 320px !important;
     }
 }
+/* Streamlit ≥1.50 rewrote the sidebar to use the `re-resizable`
+   library. The right-edge drag handle is now a child of
+   [data-testid="stSidebar"] with `cursor: col-resize` set INLINE on
+   the wrapper div (no data-testid, no role="separator" anymore).
+   Inline styles beat external CSS unless we match them on the style
+   attribute and use !important. Hide everything we can identify as
+   the handle:
+     • `div[style*="col-resize"]` — the inline-styled wrapper.
+     • Legacy `[data-testid="stSidebarResizer"]` and
+       `div[role="separator"]` for older Streamlit builds. */
+[data-testid="stSidebar"] div[style*="col-resize"],
+[data-testid="stSidebar"] div[style*="col-resize"] *,
+section[data-testid="stSidebar"] div[style*="col-resize"],
+section[data-testid="stSidebar"] div[style*="col-resize"] *,
+[data-testid="stSidebar"] [data-testid="stSidebarResizer"],
 section[data-testid="stSidebar"] [data-testid="stSidebarResizer"],
 section[data-testid="stSidebar"] div[role="separator"] {
     display: none !important;
+    cursor: default !important;
     pointer-events: none !important;
 }
 /* Force the cursor to default everywhere on the sidebar — Streamlit

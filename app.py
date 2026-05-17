@@ -13,7 +13,7 @@ import streamlit as st
 import streamlit.components.v1 as _components
 
 from config import DEFAULT_RESOURCES
-from ui_components import inject_css
+from ui_components import inject_css, inject_sidebar_resize_kill
 import analytics.dashboard as _analytics
 import pre_analytics.dashboard as _pre_analytics
 
@@ -168,6 +168,7 @@ _components.html(
 )
 
 inject_css()
+inject_sidebar_resize_kill()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
