@@ -223,3 +223,72 @@ def build_draw_pivot(
         _pivot = _pivot / max(_n_days, 1)
 
     return _pivot
+
+
+def build_draw_count_pivot(
+    draw_df: pd.DataFrame,
+    location: str,
+    shift: "str | None",
+) -> tuple:
+    """Return (counts_pivot, active_days_per_tech) for a (location, shift).
+
+    Unlike `build_draw_pivot`, this never averages — the cells are raw
+    draw counts. The companion `active_days_per_tech` dict maps each
+    rostered tech's display_name to the number of distinct calendar
+    dates that tech had at least one draw in the slice. The dashboard
+    uses these together to compute per-tech-active-day averages:
+    `cell / active_days[tech]`, which is more honest than dividing
+    every tech by calendar days (the latter penalises techs who
+    weren't scheduled every day of the month).
+
+    Both return values are indexed by the full staff roster for the
+    (location, shift), with 0/0 entries for rostered techs who had
+    no draws in this slice — same convention as `build_draw_pivot`,
+    so callers can reuse the index identically.
+    """
+    _staff = load_phlebotomy_staff()
+
+    _all_techs = sorted(
+        info["display_name"]
+        for info in _staff.values()
+        if info["location"] == location and info["shift"] == shift
+    )
+
+    _hours = list(range(24))
+    _empty_active_days = {t: 0 for t in _all_techs}
+
+    if draw_df.empty:
+        return (
+            pd.DataFrame(0, index=_all_techs, columns=_hours),
+            _empty_active_days,
+        )
+
+    if shift is None:
+        _sub = draw_df[draw_df["location"] == location].copy()
+    else:
+        _sub = draw_df[
+            (draw_df["location"] == location) & (draw_df["shift"] == shift)
+        ].copy()
+
+    if _sub.empty:
+        return (
+            pd.DataFrame(0, index=_all_techs, columns=_hours),
+            _empty_active_days,
+        )
+
+    _counts = (
+        _sub.pivot_table(
+            index="display_name", columns="hour",
+            values="samples", aggfunc="count", fill_value=0,
+        ).reindex(index=_all_techs, columns=_hours, fill_value=0)
+    )
+
+    _active_days = (
+        _sub.groupby("display_name")["draw_datetime"]
+        .apply(lambda x: x.dt.date.nunique())
+        .reindex(_all_techs, fill_value=0)
+        .astype(int)
+        .to_dict()
+    )
+
+    return _counts, _active_days
