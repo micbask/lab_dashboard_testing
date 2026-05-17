@@ -477,10 +477,7 @@ def render(params: dict, ss) -> None:
                 })
 
             if not _shift_data:
-                st.info(
-                    f"No data for **{location}** on "
-                    f"**{_pa_date_label}** in the selected hour range."
-                )
+                st.info("No data found.")
                 return
 
             # Global zmax for consistent YlOrBr gradient across subplots.
@@ -882,10 +879,7 @@ def render(params: dict, ss) -> None:
             )
 
             if _df.empty:
-                st.info(
-                    f"No draws to chart for **{location}** on "
-                    f"**{date_label}** in the selected hour range."
-                )
+                st.info("No data found.")
                 return
 
             # Aggregate per hour: total draws, total samples, distinct techs.

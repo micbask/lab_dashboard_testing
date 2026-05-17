@@ -1691,15 +1691,9 @@ def _render_daily_view(params: dict, ss) -> None:
 
     if pivot is None:
         if _is_forecast_view:
-            st.warning(
-                f"No forecast predictions available for **{map_type}** on **{date_str}** "
-                f"within the selected hour range."
-            )
+            st.warning("No forecast predictions available.")
         else:
-            st.warning(
-                f"No data found for **{map_type}** on **{date_str}** "
-                f"within the selected hour range.  Try widening the hour slider."
-            )
+            st.warning("No data found.")
         return
 
     _hour_cols = [c for c in pivot.columns if c != "Total"]
