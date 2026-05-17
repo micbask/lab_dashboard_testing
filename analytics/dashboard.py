@@ -675,12 +675,15 @@ def format_pct(pct) -> str:
 
 
 def _fmt_tat_compact(minutes) -> str:
-    """Compact TAT format used inside the Range column.
+    """No-space TAT format used inside the Range column. Same numbers
+    as `format_tat` but the hour/minute separator is dropped so
+    values are shorter and fit narrow uniform-width cells.
 
-    Drops the space between hours and minutes ('1h12' instead of
-    '1h 12m') so values like '1h12–3h45' fit in the table's narrow
-    Range cells. Returns '-' for None/NaN, 'Xm' when under an hour,
-    'Xh' when exactly on the hour, 'XhY' otherwise.
+    '8' min       → '8m'
+    '60' min      → '1h'
+    '354' min     → '5h54m'  (vs format_tat's '5h 54m')
+
+    Returns '-' for None/NaN.
     """
     if minutes is None or pd.isna(minutes):
         return "-"
@@ -691,17 +694,16 @@ def _fmt_tat_compact(minutes) -> str:
         return f"{m}m"
     if m == 0:
         return f"{h}h"
-    return f"{h}h{m}"
+    return f"{h}h{m}m"
 
 
 def format_range(min_v, max_v) -> str:
-    """Format a (min, max) TAT pair on ONE line, e.g. '8m - 5h 54m'.
+    """Format a (min, max) TAT pair on ONE line, e.g. '8m-5h54m'.
 
-    Single-line so the value reads as one connected number. The
-    procedure table's Range column is sized wide enough (via the
-    column-width weighting below) to fit even the longest expected
-    pair without clipping. Uses `format_tat` for consistency with
-    the Mean column — both read as the same kind of TAT number.
+    No spaces — pairs the no-space hour/minute format from
+    `_fmt_tat_compact` with a single bare hyphen so the value is
+    as compact as possible for the procedure table's narrow
+    uniform-width Range cells.
 
     Returns '-' if either bound is missing.
     """
@@ -710,7 +712,7 @@ def format_range(min_v, max_v) -> str:
         or pd.isna(min_v) or pd.isna(max_v)
     ):
         return "-"
-    return f"{format_tat(min_v)} - {format_tat(max_v)}"
+    return f"{_fmt_tat_compact(min_v)}-{_fmt_tat_compact(max_v)}"
 
 
 def _render_tat_view(params: dict) -> None:
@@ -981,21 +983,20 @@ def _render_tat_view(params: dict) -> None:
                 align=["center", "right", "right", "center", "right", "right"],
                 font=dict(
                     family="Inter, system-ui, sans-serif",
-                    # 11 px matches the procedure table below so the
+                    # 10 px matches the procedure table below so the
                     # two tables read as one visual unit.
-                    size=11,
+                    size=10,
                     color=_summary_font_colors,
                 ),
-                # 32 px fits a single-line value at 11 px font with
-                # margin. Range is now single-line ("8m - 5h 54m")
-                # so we no longer need extra height for two lines.
-                height=32,
+                # 30 px fits a single-line value at 10 px font with
+                # margin.
+                height=30,
             ),
         )
     )
-    # 40 px header + 32 px per row + 16 px buffer.
+    # 40 px header + 30 px per row + 16 px buffer.
     _summary_fig.update_layout(
-        height=40 + len(_summary_rows) * 32 + 16,
+        height=40 + len(_summary_rows) * 30 + 16,
         margin=dict(l=4, r=4, t=4, b=4),
         paper_bgcolor="rgba(0,0,0,0)",
     )
@@ -1161,41 +1162,52 @@ def _render_tat_view(params: dict) -> None:
     _aligns = ["left"] + ["right"] * 16
     _header_font_colors = ["#6F1828"] + ["#1a1a1a"] * 16
 
-    # Column widths — Range gets ~2.5× the other stat columns so
-    # the single-line value ("8m - 5h 54m" up to "47h 23m - 263h
-    # 46m" worst case) fits cleanly without clipping. The other
-    # stat columns hold short numeric content (e.g. "175", "1h 12m",
-    # "100.0%") that only needs a narrow slot.
-    #   Procedure 2.2 / n 0.8 / Mean 1.0 / % 0.9 / Range 2.5 × 4 = 22.2
-    # On a 1200 px container Range = 2.5/22.2 = 11.3% → ~135 px,
-    # which fits 22+ chars at the 11 px cell font.
-    _proc_w   = 2.2
-    _stat_ws  = [0.8, 1.0, 0.9, 2.5]   # n, Mean, %, Range — one block
-    _column_widths = [_proc_w] + _stat_ws * 4
+    # All 17 columns get equal width. Strict uniform reads as a
+    # tidier grid than content-weighted widths, and the smaller
+    # font (10 px) + no-space Range format ("8m-5h54m") below
+    # frees up enough horizontal room that even the widest cells
+    # fit without dedicated extra width.
+    _column_widths = [1] * 17
 
-    # Row height — sized to fit a single-line Range plus any
-    # procedure-name wrapping. Plotly Table's `cells.height` accepts
-    # one number only (per-row lists raise ValueError), so we pick
-    # the max of the per-row estimates and apply it everywhere.
-    # Most rows are single-line (~36 px); a long Norris-Specialty
-    # procedure name that wraps to 2-3 lines is what makes a row
-    # tall — and when one row is tall, every row is.
+    # Row height — Plotly Table's `cells.height` is one number for
+    # the whole table, so we estimate per-row line counts (driven
+    # by either procedure-name wrap OR Range value wrap) and use
+    # the max. When ANY cell in ANY row wraps to N lines, every
+    # row gets the height of N lines. Short-name rows then have
+    # extra whitespace — that's the acceptable trade vs an
+    # internal scrollbar that overlaps the header.
+    #
+    # Width math: on a 1200 px container each column gets 1/17
+    # ≈ 5.9% → ~70 px. At 10 px Inter (~5.5 px/char average)
+    # that's ~12 chars per line.
     import math as _math_tat
-    _CHARS_PER_LINE = 18      # ~18 chars/line at 11 px in ~135 px Procedure col
-    _LINE_PX        = 20      # 11 px Inter ≈ 20 px line-height
-    _ROW_PADDING_PX = 12
-    _MIN_ROW_PX     = _LINE_PX + _ROW_PADDING_PX   # 32 px floor for 1-line rows
+    _CHARS_PER_LINE = 12      # ~70 px column / ~5.5 px per char at 10 px Inter
+    _LINE_PX        = 18      # 10 px Inter ≈ 18 px line-height
+    _ROW_PADDING_PX = 10
+    _MIN_ROW_PX     = _LINE_PX + _ROW_PADDING_PX   # 28 px
 
-    _row_h_estimates = [
+    def _est_lines(text):
+        n = max(1, len(str(text)))
+        return _math_tat.ceil(n / _CHARS_PER_LINE)
+
+    # Per-row line count: the max of procedure name + all 4 group
+    # Range cells (those are the variable-width columns most prone
+    # to wrap). n / Mean / % cells are always short numerics that
+    # fit on 1 line.
+    _row_line_counts = [
         max(
-            _MIN_ROW_PX,
-            _math_tat.ceil(max(1, len(str(p))) / _CHARS_PER_LINE)
-            * _LINE_PX
-            + _ROW_PADDING_PX,
+            _est_lines(_proc_col[i]),
+            _est_lines(_rt_range[i]),
+            _est_lines(_st_range[i]),
+            _est_lines(_ts_range[i]),
+            _est_lines(_all_range[i]),
         )
-        for p in _proc_col
+        for i in range(len(_proc_col))
     ]
-    _row_height = max(_row_h_estimates) if _row_h_estimates else _MIN_ROW_PX
+    _row_height = max(
+        _MIN_ROW_PX,
+        max(_row_line_counts, default=1) * _LINE_PX + _ROW_PADDING_PX,
+    )
 
     _tat_table_fig = go.Figure(
         data=go.Table(
@@ -1221,9 +1233,10 @@ def _render_tat_view(params: dict) -> None:
                 align=_aligns,
                 font=dict(
                     family="Inter, system-ui, sans-serif",
-                    # 11 px (down from 12) gives ~7% more horizontal
-                    # room per character.
-                    size=11,
+                    # 10 px (down from 11) gives ~9% more horizontal
+                    # room per character, helping uniform-width
+                    # columns fit the longest stat values.
+                    size=10,
                     color="#1a1a1a",
                 ),
                 height=_row_height,
