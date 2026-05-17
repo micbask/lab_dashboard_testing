@@ -51,33 +51,38 @@ from analytics.views.monthly import render_monthly_view
 def render_sidebar(ss) -> dict:
     """Render analytics sidebar widgets. Returns params dict for render()."""
     # ── URL → session_state hydration ──────────────────────────────────
-    # Pull bench / basis / view / date from query params on the FIRST
-    # render of the script so a shared link lands on the same view. Done
-    # BEFORE the widgets instantiate — Streamlit won't let us mutate a
-    # widget-keyed session_state value after the widget renders.
+    # Pull bench / basis / view / date from query params ONLY on the
+    # first render where the widget's session_state key doesn't exist
+    # yet. After that, the widget owns the value — re-reading the URL
+    # on every rerun would clobber the user's click (the URL still
+    # holds the OLD value until we sync it at the end of this function,
+    # so a naive re-read snaps state back). A fresh page load (new tab
+    # from a shared link) still hydrates correctly because session_state
+    # starts empty there.
     _qp = st.query_params
     _qp_bench = _qp.get("bench")
-    if _qp_bench and _qp_bench in BENCH_LABEL_TO_VALUE:
-        st.session_state.setdefault("analytics_bench_short", _qp_bench)
-        # Allow URL to drive the widget even after initial mount, but only
-        # when the current value differs — avoids fighting user clicks.
-        if st.session_state.get("analytics_bench_short") != _qp_bench:
-            st.session_state["analytics_bench_short"] = _qp_bench
+    if (
+        _qp_bench
+        and _qp_bench in BENCH_LABEL_TO_VALUE
+        and "analytics_bench_short" not in st.session_state
+    ):
+        st.session_state["analytics_bench_short"] = _qp_bench
     _qp_basis = _qp.get("basis")
-    if _qp_basis in ("Completed", "In-Lab", "TAT"):
-        st.session_state.setdefault("time_basis", _qp_basis)
-        if st.session_state.get("time_basis") != _qp_basis:
-            st.session_state["time_basis"] = _qp_basis
+    if (
+        _qp_basis in ("Completed", "In-Lab", "TAT")
+        and "time_basis" not in st.session_state
+    ):
+        st.session_state["time_basis"] = _qp_basis
     _qp_view = _qp.get("view")
-    if _qp_view in ("Daily", "Monthly"):
-        st.session_state.setdefault("analytics_view_mode", _qp_view)
-        if st.session_state.get("analytics_view_mode") != _qp_view:
-            st.session_state["analytics_view_mode"] = _qp_view
+    if (
+        _qp_view in ("Daily", "Monthly")
+        and "analytics_view_mode" not in st.session_state
+    ):
+        st.session_state["analytics_view_mode"] = _qp_view
     _qp_date = _qp.get("date")
-    if _qp_date:
+    if _qp_date and "date_picker" not in st.session_state:
         try:
-            _parsed = date.fromisoformat(_qp_date)
-            st.session_state.setdefault("date_picker", _parsed)
+            st.session_state["date_picker"] = date.fromisoformat(_qp_date)
         except ValueError:
             pass
 

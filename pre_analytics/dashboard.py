@@ -24,22 +24,29 @@ from pre_analytics.views._shared import (
 def render_sidebar(ss) -> dict:
     """Render pre-analytics sidebar widgets. Returns params dict for render()."""
     # ── URL → session_state hydration ──────────────────────────────────
-    # Same pattern as analytics: pull loc / view / date from query_params
-    # before widgets instantiate so a shared link lands on the same view.
+    # Same pattern as analytics: hydrate ONLY when the widget's
+    # session_state key is absent (first render or fresh tab from a
+    # shared link). Re-reading on every rerun would clobber the user's
+    # click because the URL still holds the OLD value until the END of
+    # this function syncs the new one back.
     _qp = st.query_params
     _qp_loc = _qp.get("loc")
-    if _qp_loc and _qp_loc in PRE_ANALYTICS_LOCATIONS:
-        if st.session_state.get("pa_location_radio") != _qp_loc:
-            st.session_state["pa_location_radio"] = _qp_loc
+    if (
+        _qp_loc
+        and _qp_loc in PRE_ANALYTICS_LOCATIONS
+        and "pa_location_radio" not in st.session_state
+    ):
+        st.session_state["pa_location_radio"] = _qp_loc
     _qp_view = _qp.get("view")
-    if _qp_view in ("Daily", "Monthly"):
-        if st.session_state.get("pa_view_radio") != _qp_view:
-            st.session_state["pa_view_radio"] = _qp_view
+    if (
+        _qp_view in ("Daily", "Monthly")
+        and "pa_view_radio" not in st.session_state
+    ):
+        st.session_state["pa_view_radio"] = _qp_view
     _qp_date = _qp.get("date")
-    if _qp_date:
+    if _qp_date and "pa_date_picker" not in st.session_state:
         try:
-            _parsed = date.fromisoformat(_qp_date)
-            st.session_state.setdefault("pa_date_picker", _parsed)
+            st.session_state["pa_date_picker"] = date.fromisoformat(_qp_date)
         except ValueError:
             pass
 
