@@ -1,5 +1,4 @@
 import calendar as _cal
-from copy import deepcopy
 from datetime import date, timedelta
 
 import numpy as np
@@ -8,7 +7,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from config import (
-    DEFAULT_RESOURCES, VMAX, ALL_RESOURCES, MAP_TYPES,
+    DEFAULT_RESOURCES, MAP_TYPES,
     HOUR_LABELS, LABEL_TO_HOUR,
 )
 from storage import (
@@ -381,19 +380,12 @@ def render_sidebar(ss) -> dict:
             if view_mode == "Daily":
                 if time_basis == "TAT":
                     _fc_data = None
-                    forecast_dates: list = []
                     _fc_max_d = _max_d
                 else:
                     _fc_data = load_forecasts(map_type)
-                    forecast_dates = []
                     _fc_max_d = _max_d
                     if _fc_data:
-                        _fc_start_d = _max_d + timedelta(days=1)
                         _fc_end_d   = _fc_data["forecast_end"]
-                        forecast_dates = [
-                            _fc_start_d + timedelta(days=_i)
-                            for _i in range((_fc_end_d - _fc_start_d).days + 1)
-                        ]
                         _fc_max_d = _fc_end_d
 
                 # Prev/Next clicks write `_pending_date` and rerun;

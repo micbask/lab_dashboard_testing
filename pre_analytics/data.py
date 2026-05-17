@@ -1,12 +1,10 @@
 import re as _re
-import base64 as _b64
-import io as _io
 from datetime import date
 
 import pandas as pd
 import streamlit as st
 
-from storage import load_filtered_data, get_index_hash, storage_is_configured
+from storage import load_filtered_data
 
 
 _NAME_STOPWORDS = {"jr", "sr", "ii", "iii", "iv", "md", "phd", "rn"}
@@ -108,7 +106,7 @@ def load_phlebotomy_staff() -> dict:
 
 
 @st.cache_data(show_spinner=False, ttl=300)
-def load_draw_data(date_str: str, view: str, index_hash: str = "") -> tuple:
+def load_draw_data(date_str: str, view: str, index_hash: str = "") -> pd.DataFrame:
     """Load phlebotomy draws scoped to the selected day/month.
 
     `index_hash` is a plain (non-underscored) kwarg so Streamlit's
@@ -143,33 +141,18 @@ def load_draw_data(date_str: str, view: str, index_hash: str = "") -> tuple:
         date_basis="drawn",
     )
 
-    _debug: dict = {
-        "raw_drawn_tech": [],
-        "staff_keys": [],
-        "rows_before": 0,
-        "rows_after": 0,
-    }
-
     if _raw.empty or "Drawn Tech" not in _raw.columns or "Date/Time - Drawn" not in _raw.columns:
-        return _empty, _debug
-
-    _debug["raw_drawn_tech"] = (
-        _raw["Drawn Tech"].dropna().astype(str).head(10).tolist()
-    )
+        return _empty
 
     _df = _raw[["Drawn Tech", "Date/Time - Drawn"]].copy()
     _df["_norm"] = _df["Drawn Tech"].apply(normalize_name)
     _df = _df[_df["_norm"].notna()].copy()
 
     _staff = load_phlebotomy_staff()
-    _debug["staff_keys"] = list(_staff.keys())[:10]
-    _debug["rows_before"] = len(_df)
-
     _df = _df[_df["_norm"].isin(_staff)].copy()
-    _debug["rows_after"] = len(_df)
 
     if _df.empty:
-        return _empty, _debug
+        return _empty
 
     _df["Date/Time - Drawn"] = pd.to_datetime(_df["Date/Time - Drawn"])
 
@@ -188,8 +171,7 @@ def load_draw_data(date_str: str, view: str, index_hash: str = "") -> tuple:
 
     return (
         _grp[["display_name", "location", "shift", "draw_datetime", "hour", "samples"]]
-        .reset_index(drop=True),
-        _debug,
+        .reset_index(drop=True)
     )
 
 

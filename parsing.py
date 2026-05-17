@@ -14,7 +14,6 @@ Handles:
 """
 
 import io
-import re
 import xml.etree.ElementTree as ET
 
 import pandas as pd

@@ -279,7 +279,7 @@ def render(params: dict, ss) -> None:
         render_header(pa_location, _pa_date_label)
 
         _idx_hash = get_index_hash() if storage_is_configured() else ""
-        _draw_df, _draw_debug = load_draw_data(_pa_ds, pa_view, index_hash=_idx_hash)
+        _draw_df = load_draw_data(_pa_ds, pa_view, index_hash=_idx_hash)
 
         # KPI cards reflect the selected hour range: filter both by
         # location and by hour ∈ [pa_h_start, pa_h_end].

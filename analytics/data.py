@@ -6,7 +6,6 @@ import streamlit as st
 
 from config import HOUR_LABELS
 from storage import load_filtered_data, get_index_hash, storage_is_configured
-from forecasting import load_forecasts, build_forecast_pivot
 from analytics.filters import EXCLUDED_PROCEDURES
 
 

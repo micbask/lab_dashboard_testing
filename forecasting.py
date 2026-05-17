@@ -5,7 +5,8 @@ Forecasts are:
   - DECOUPLED from upload — only retrained when the user clicks
     "Refresh Forecast" in the Data Management panel.
   - Stored as pickle files on GitHub (data/forecasts_<MapType>.pkl).
-  - Cached in session state for fast access during the same session.
+  - Cached process-wide via @st.cache_data on load_forecasts() (TTL 10 min)
+    so payloads don't accumulate per-session in session_state.
 """
 
 import base64
@@ -84,109 +85,6 @@ def _read_forecast_from_github(map_type: str) -> dict | None:
 # FORECAST TRAINING
 # ═════════════════════════════════════════════════════════════════════════════
 
-def filter_for_map(df: pd.DataFrame, map_type: str, resource_assignments: dict) -> pd.DataFrame:
-    """Filter dataset to the resources for one map type."""
-    resources = resource_assignments[map_type]
-    out = df[df["Performing Service Resource"].isin(resources)].copy()
-    out = out[~out["Order Procedure"].isin(EXCLUDED_PROCEDURES)]
-    return out
-
-
-def train_and_cache_forecasts(
-    df: pd.DataFrame,
-    map_type: str,
-    resource_assignments: dict,
-) -> None:
-    """Train one Prophet model per procedure x hour for the top-30 procedures.
-
-    Payload written to GitHub and stored in session state.
-    Sparse combinations (<7 non-zero days) fall back to weekday averages.
-    """
-    from prophet import Prophet
-
-    filtered = filter_for_map(df, map_type, resource_assignments)
-    if filtered.empty:
-        return
-
-    last_data_date: date = filtered["complete_date"].max()
-    forecast_end:   date = last_data_date + timedelta(days=FORECAST_HORIZON)
-
-    top30 = (
-        filtered.groupby("Order Procedure")["Complete Volume"]
-        .sum().sort_values(ascending=False).head(30).index.tolist()
-    )
-    filtered = filtered[filtered["Order Procedure"].isin(top30)].copy()
-
-    predictions: dict[tuple[str, int], dict[date, float]] = {}
-
-    for proc in top30:
-        proc_df = filtered[filtered["Order Procedure"] == proc]
-        for hour in range(24):
-            hour_df = proc_df[proc_df["hour"] == hour]
-            daily = (
-                hour_df.groupby("complete_date")["Complete Volume"]
-                .sum().reset_index()
-            )
-            daily.columns = ["ds", "y"]
-            daily["ds"] = pd.to_datetime(daily["ds"])
-
-            if not daily.empty:
-                full_range = pd.date_range(daily["ds"].min(), last_data_date)
-                daily = (
-                    daily.set_index("ds")
-                    .reindex(full_range, fill_value=0)
-                    .reset_index()
-                    .rename(columns={"index": "ds"})
-                )
-
-            non_zero = int((daily["y"] > 0).sum()) if not daily.empty else 0
-
-            if non_zero < 7:
-                if daily.empty:
-                    preds = {
-                        last_data_date + timedelta(days=d): 0.0
-                        for d in range(1, FORECAST_HORIZON + 1)
-                    }
-                else:
-                    daily["weekday"] = daily["ds"].dt.dayofweek
-                    wd_avg = daily.groupby("weekday")["y"].mean().to_dict()
-                    preds = {}
-                    for d in range(1, FORECAST_HORIZON + 1):
-                        fdate = last_data_date + timedelta(days=d)
-                        preds[fdate] = max(
-                            0.0, round(wd_avg.get(pd.Timestamp(fdate).dayofweek, 0.0), 1)
-                        )
-                predictions[(proc, hour)] = preds
-            else:
-                m = Prophet(
-                    weekly_seasonality=True,
-                    daily_seasonality=False,
-                    yearly_seasonality=False,
-                    changepoint_prior_scale=0.05,
-                )
-                m.fit(daily)
-                future = m.make_future_dataframe(periods=FORECAST_HORIZON)
-                fc = m.predict(future)
-                fc = fc[fc["ds"] > pd.Timestamp(last_data_date)]
-                preds = {
-                    row["ds"].date(): max(0.0, round(row["yhat"], 1))
-                    for _, row in fc.iterrows()
-                }
-                predictions[(proc, hour)] = preds
-
-    payload = {
-        "last_data_date": last_data_date,
-        "forecast_end":   forecast_end,
-        "predictions":    predictions,
-    }
-
-    _write_forecast_to_github(map_type, payload)
-    # Bust the read cache so the next call to load_forecasts() pulls
-    # the freshly-written payload from GitHub instead of returning
-    # a stale cached copy.
-    load_forecasts.clear()
-
-
 @st.cache_data(show_spinner=False, ttl=600)
 def load_forecasts(map_type: str) -> dict | None:
     """Return the cached forecast payload for map_type, or None.
@@ -202,20 +100,6 @@ def load_forecasts(map_type: str) -> dict | None:
     return _read_forecast_from_github(map_type)
 
 
-def retrain_all_forecasts(df: pd.DataFrame, resource_assignments: dict) -> None:
-    """Train and cache forecasts for every map type (in-memory df version)."""
-    # Bust the read cache up front so any reads during training don't
-    # return stale data. The individual train_and_cache_forecasts call
-    # also clears, but doing it once here covers the early-failure
-    # window too.
-    load_forecasts.clear()
-    for mt in MAP_TYPES:
-        try:
-            train_and_cache_forecasts(df, mt, resource_assignments)
-        except Exception as _fc_err:
-            st.write(f"Forecast training skipped for {mt}: {_fc_err}")
-
-
 def retrain_all_forecasts_streaming(resource_assignments: dict) -> None:
     """Train forecasts by streaming partitions — never loads full dataset.
 
@@ -226,8 +110,6 @@ def retrain_all_forecasts_streaming(resource_assignments: dict) -> None:
       3. Determine top-30 procedures by total volume
       4. Train Prophet models on the aggregated daily series
     """
-    from storage import iter_partitions
-
     # Bust the read cache up front so any reads during training don't
     # return stale data; the per-map _train_forecasts_streaming call
     # also clears after each successful write.

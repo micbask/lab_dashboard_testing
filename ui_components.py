@@ -15,8 +15,6 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from config import NAVY, GOLD, STEEL
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CSS INJECTION
@@ -2124,32 +2122,3 @@ def render_data_management_sidebar(
         ):
             ss["pending_reset"] = True
             st.rerun()
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# PIVOT STYLING
-# ═════════════════════════════════════════════════════════════════════════════
-
-def style_pivot(pivot: pd.DataFrame, vmax: int, cmap: str = "viridis_r"):
-    """Apply colormap background-gradient styling to the pivot DataFrame."""
-    hour_cols = [c for c in pivot.columns if c != "Total"]
-    return (
-        pivot.style
-        .background_gradient(cmap=cmap, vmin=0, vmax=vmax, subset=hour_cols)
-        .format("{:.0f}")
-        .set_properties(**{"text-align": "center"})
-        .set_properties(subset=["Total"], **{
-            "font-weight": "bold",
-            "font-size":   "13px",
-            "border-left": "2px solid #888",
-        })
-        .set_table_styles([
-            {"selector": "th",            "props": [("text-align", "center"), ("font-size", "12px")]},
-            {"selector": "th.row_heading","props": [("text-align", "left"),   ("min-width", "220px")]},
-        ])
-    )
-
-
-def style_forecast_pivot(pivot: pd.DataFrame, vmax: int):
-    """Style forecast pivot with Oranges colormap (issue #8)."""
-    return style_pivot(pivot, vmax, cmap="Oranges")

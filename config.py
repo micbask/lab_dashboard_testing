@@ -5,8 +5,6 @@ All per-site configuration, resource remaps, exclusions, and shared
 helpers live here.  To add a new lab site, add one entry to SITE_CONFIG.
 """
 
-from copy import deepcopy
-
 # ═════════════════════════════════════════════════════════════════════════════
 # BRANDING COLOURS
 # ═════════════════════════════════════════════════════════════════════════════
@@ -111,15 +109,6 @@ DATETIME_COLUMNS: list[str] = [
     "Date/Time - In Lab",
     "Date/Time - Complete",
 ]
-
-# Legacy minimal required columns (for backward compat with old parquets)
-LEGACY_REQUIRED_COLS: set[str] = {
-    "Performing Service Resource",
-    "Order Procedure",
-    "Date/Time - Complete",
-    "Date/Time - In Lab",
-    "Complete Volume",
-}
 
 # ═════════════════════════════════════════════════════════════════════════════
 # HOUR HELPERS
