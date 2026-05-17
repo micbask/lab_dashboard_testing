@@ -997,16 +997,30 @@ def _render_tat_view(params: dict) -> None:
             ),
         )
     )
+    _summary_total_h = _HEADER_H + len(_summary_rows) * _ROW_H + 8
     _summary_fig.update_layout(
-        height=_HEADER_H + len(_summary_rows) * _ROW_H + 8,
+        height=_summary_total_h,
         margin=dict(l=4, r=4, t=4, b=4),
         paper_bgcolor="rgba(0,0,0,0)",
+        autosize=True,
     )
-    st.plotly_chart(
+    # Embed via components.html at a pinned iframe height to bypass
+    # Streamlit's plotly wrapper min-height (which otherwise stretches
+    # the figure and top-anchors cell text). Plotly.js loaded via CDN.
+    import plotly.io as _pio_summary
+    import streamlit.components.v1 as _components_summary
+    _summary_html = _pio_summary.to_html(
         _summary_fig,
-        use_container_width=True,
+        include_plotlyjs="cdn",
+        full_html=False,
         config={"displayModeBar": False},
-        key="tat_summary_table",
+        default_width="100%",
+        default_height=f"{_summary_total_h}px",
+    )
+    _components_summary.html(
+        _summary_html,
+        height=_summary_total_h + 8,
+        scrolling=False,
     )
 
     # ── Procedure filter ───────────────────────────────────────────────────
