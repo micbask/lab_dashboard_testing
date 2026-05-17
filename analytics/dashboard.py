@@ -936,13 +936,13 @@ def _render_tat_view(params: dict) -> None:
         _summary_default_text_colors,    # Range
     ]
 
-    # Column widths sized to actual content: Priority and Target hold
-    # short labels (RT / ST / TS / All; "< 1h" / "< 2h" / "-") so they
-    # stay tight; Mean and Range are the widest data ("1h 12m" /
-    # "1h12–3h45") so they get more room. % is medium.
+    # Uniform column widths — all 6 columns get equal slices. The
+    # summary has only 4 rows so there's plenty of horizontal room
+    # everywhere; equal widths read as a tidier grid than content-
+    # weighted widths on such a sparse table.
     _summary_fig = go.Figure(
         data=go.Table(
-            columnwidth=[1.0, 0.7, 1.0, 0.7, 1.2, 1.4],
+            columnwidth=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
             header=dict(
                 values=[
                     "Priority", "n", "Mean TAT", "Target",
@@ -1162,27 +1162,32 @@ def _render_tat_view(params: dict) -> None:
     _stat_ws  = [0.7, 1.0, 0.9, 1.4]   # n, Mean, %, Range — one block
     _column_widths = [_proc_w] + _stat_ws * 4
 
-    # Per-row heights so Norris-Specialty's long procedure names
-    # (e.g. "Leukemia Lymphoma Evaluation Flow Cytome", 40+ chars)
-    # wrap to 2-3 lines and get the vertical room they need. A
-    # uniform 36 px height was clipping wrapped content + creating
-    # an internal scrollbar that overlapped the sticky header.
+    # Uniform row height — but tall enough to fit the longest
+    # procedure name in the current selection. Norris Specialty
+    # selects names like "Leukemia Lymphoma Evaluation Flow Cytome"
+    # (40+ chars) that wrap to 2-3 lines in the narrowed Procedure
+    # column; if we leave height at 36 px those rows get clipped
+    # and Plotly inserts an internal scrollbar that overlaps the
+    # header band. (Plotly Table's `cells.height` accepts a single
+    # number only — per-row lists raise ValueError on this version,
+    # so we can't right-size short-name rows; we pick the max
+    # estimate and accept a bit of vertical whitespace on the
+    # shorter-name rows in exchange for never clipping the
+    # longest.)
     #
-    # Width math: on a 1200 px container the Procedure column gets
-    # ≈ 2.4/18.4 = 13% → ~156 px. At 13 px Inter, average char width
-    # is ~7 px, so ~22 chars fit per line. We estimate lines from
-    # name length / 22 (rounded up) and allocate ~22 px per line +
-    # 14 px vertical padding, floored at 36 px for short names. The
-    # estimate is generous (favours over- not under-sizing) so the
-    # row never clips when the actual wrap point differs slightly
-    # from the estimate.
+    # Width math: on a 1200 px container Procedure gets
+    # ≈ 2.4/18.4 = 13% → ~156 px. At 12 px Inter, char width is
+    # ~7 px → ~22 chars per line. Estimate lines = ceil(chars/22),
+    # height = lines × 22 px line-height + 14 px padding, floored
+    # at 36 px. Generous so a slight wrap-point mismatch doesn't
+    # clip the bottom of the longest row.
     import math as _math_tat
     _CHARS_PER_LINE = 22
     _LINE_PX        = 22
     _ROW_PADDING_PX = 14
     _MIN_ROW_PX     = 36
 
-    _row_heights = [
+    _row_h_estimates = [
         max(
             _MIN_ROW_PX,
             _math_tat.ceil(max(1, len(str(p))) / _CHARS_PER_LINE)
@@ -1191,6 +1196,7 @@ def _render_tat_view(params: dict) -> None:
         )
         for p in _proc_col
     ]
+    _row_height = max(_row_h_estimates) if _row_h_estimates else _MIN_ROW_PX
 
     _tat_table_fig = go.Figure(
         data=go.Table(
@@ -1220,21 +1226,21 @@ def _render_tat_view(params: dict) -> None:
                     size=12,
                     color="#1a1a1a",
                 ),
-                # Per-row height list (vs a single int) so long
-                # procedure names get extra vertical space — see
-                # _row_heights computation above.
-                height=_row_heights,
+                # Single uniform height (see above) — Plotly Table
+                # rejects per-row lists on this version.
+                height=_row_height,
             ),
         )
     )
 
     # Total height = header + n_rows × row_height + small bottom buffer.
-    # 56 px header + actual sum of per-row heights + 24 px buffer.
-    # Summing the dynamic list (vs the historic n_rows × fixed-height
-    # formula) is what stops the internal scrollbar + header overlap
-    # — when rows had to grow to fit wrapped procedure names, the
-    # cells exceeded the layout.height and Plotly auto-scrolled.
-    _table_h = 56 + (sum(_row_heights) if _row_heights else _MIN_ROW_PX) + 24
+    _n_rows = max(1, len(table_df))
+    # 56 px header + n_rows × max row height + 24 px buffer. _row_height
+    # is sized to the longest procedure name in the selection (see
+    # estimate above), so all rows share the same height and the
+    # layout never under-sizes the figure → no internal scrollbar →
+    # no header overlap.
+    _table_h = 56 + _n_rows * _row_height + 24
     _tat_table_fig.update_layout(
         height=_table_h,
         margin=dict(l=4, r=4, t=4, b=4),
