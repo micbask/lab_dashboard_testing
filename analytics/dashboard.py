@@ -61,6 +61,7 @@ BENCH_LABEL_TO_VALUE = {
     "Keck":      "Keck Core",
     "Norris":    "Norris Core",
     "Specialty": "Norris Specialty",
+    "PMOB":      "PMOB",
 }
 
 
@@ -1043,7 +1044,7 @@ def _render_tat_view(params: dict) -> None:
     _CORE_PANEL_DEFAULTS = [
         "CBC w diff", "CBC no diff", "BMP", "CMP", "Lactic Acid",
     ]
-    if _bench in ("Keck Core", "Norris Core"):
+    if _bench in ("Keck Core", "Norris Core", "PMOB"):
         _present = set(_all_procs)
         _default_top = [p for p in _CORE_PANEL_DEFAULTS if p in _present]
         if not _default_top:

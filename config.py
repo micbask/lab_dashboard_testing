@@ -48,6 +48,16 @@ SITE_CONFIG: dict[str, dict] = {
         ],
         "vmax": 20,
     },
+    "PMOB": {
+        "resources": [
+            "PAS Cellavision", "PAS Cobas c303 A", "PAS Cobas c303 B",
+            "PAS HEME Man Diff", "PAS HEME Orders", "PAS HEME Results",
+            "PAS IRIS", "PAS XN2000 1", "PAS XN2000 2",
+            "PAS Manual Chemistry Bench", "PAS Manual Hematology Bench",
+            "PAS Manual Urinalysis Bench",
+        ],
+        "vmax": 30,
+    },
 }
 
 # Derived helpers

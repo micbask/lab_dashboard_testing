@@ -54,7 +54,7 @@ def render_sidebar(ss) -> dict:
             unsafe_allow_html=True,
         )
         pa_location = st.radio(
-            "Location", ["Keck", "Norris", "HC3"],
+            "Location", ["Keck", "Norris", "HC3", "PMOB"],
             horizontal=True, label_visibility="collapsed",
             key="pa_location_radio",
         )
