@@ -121,6 +121,7 @@ def render_monthly_view(params: dict, ss) -> None:
     _m_fig = build_analytics_heatmap(
         monthly_pivot,
         colorscale="Viridis_r",
+        text_decimals=1,
         hovertemplate=(
             "<b>%{y} @ %{customdata[0]}</b><br>"
             "Avg per day: %{customdata[1]:.1f}<extra></extra>"
@@ -202,6 +203,7 @@ def render_monthly_view(params: dict, ss) -> None:
     _wd_fig = build_analytics_heatmap(
         weekday_pivot,
         colorscale="Viridis_r",
+        text_decimals=1,
         hovertemplate=(
             "<b>%{y} @ %{customdata[0]}</b><br>"
             "Avg: %{customdata[1]:.1f}<extra></extra>"

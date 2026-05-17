@@ -63,6 +63,7 @@ def build_analytics_heatmap(
     colorscale: str,
     hovertemplate: str,
     customdata=None,
+    text_decimals: int = 0,
 ) -> go.Figure:
     """Render the analytics dashboard heatmap as a Plotly figure.
 
@@ -129,8 +130,15 @@ def build_analytics_heatmap(
     zmax_hours = float(np.percentile(_nz, 95)) if _nz.size else 1.0
     zmax_hours = max(zmax_hours, 1.0)
 
+    # Cell text format: integer for Daily (raw counts), `text_decimals`
+    # for Monthly (per-day averages, typically fractional). Same divisor
+    # convention pre-analytics uses for its monthly view.
+    _fmt = (
+        (lambda v: str(int(round(v)))) if text_decimals == 0
+        else (lambda v: f"{v:.{text_decimals}f}")
+    )
     text_hours = [
-        [str(int(round(v))) if v > 0 else "" for v in row]
+        [_fmt(v) if v > 0 else "" for v in row]
         for row in z_hours
     ]
 
@@ -166,7 +174,7 @@ def build_analytics_heatmap(
 
     if z_total is not None:
         text_total = [
-            [str(int(round(v))) if v > 0 else "" for v in row]
+            [_fmt(v) if v > 0 else "" for v in row]
             for row in z_total
         ]
         fig.add_trace(
