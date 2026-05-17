@@ -900,16 +900,26 @@ def _render_tat_view(params: dict) -> None:
         _summary_rows.append((_prio, _n, _mean, _pct, _mn, _mx))
 
     # PLAIN text for the Priority column — no HTML. The deployed
-    # Plotly Table version doesn't render HTML in cells (previous
-    # builds did, but the renderer changed and the literal markup
-    # was leaking through, e.g. "<span style='color:#0066cc'>RT").
+    # Plotly Table version doesn't render <span> tags in cells
+    # (previous builds did, but the renderer changed and the literal
+    # markup was leaking through, e.g. "<span style='color:#0066cc'>RT").
     # Per-cell colour is set via cells.font.color as a 2-D list
     # below, which is the native Plotly Table mechanism.
-    _summary_priority_col = [r[0] for r in _summary_rows]
-    _summary_n_col     = [_fmt_n_table(r[1]) for r in _summary_rows]
-    _summary_mean_col  = [format_tat(r[2])   for r in _summary_rows]
-    _summary_targ_col  = [_priority_target_labels[r[0]] for r in _summary_rows]
-    _summary_pct_col   = [format_pct(r[3])   for r in _summary_rows]
+    #
+    # Single-line cells get a leading <br> so they sit visually
+    # closer to the middle of the 2-line-tall row (Range cells are
+    # already two lines; same vertical-centering pattern as the
+    # procedure table below).
+    def _vb(s):
+        if "<br>" in str(s):
+            return s
+        return f"<br>{s}"
+
+    _summary_priority_col = [_vb(r[0]) for r in _summary_rows]
+    _summary_n_col     = [_vb(_fmt_n_table(r[1])) for r in _summary_rows]
+    _summary_mean_col  = [_vb(format_tat(r[2]))   for r in _summary_rows]
+    _summary_targ_col  = [_vb(_priority_target_labels[r[0]]) for r in _summary_rows]
+    _summary_pct_col   = [_vb(format_pct(r[3]))   for r in _summary_rows]
     _summary_range_col = [
         format_range(r[4], r[5]) for r in _summary_rows
     ]
@@ -981,18 +991,23 @@ def _render_tat_view(params: dict) -> None:
                 align=["center", "right", "right", "center", "right", "right"],
                 font=dict(
                     family="Inter, system-ui, sans-serif",
-                    size=13,
+                    # 11 px matches the procedure table below so the
+                    # two tables read as one visual unit.
+                    size=11,
                     color=_summary_font_colors,
                 ),
-                height=36,
+                # 44 px fits the 2-line Range value with margin (~20
+                # px per line + 4 px padding) and is consistent with
+                # the procedure table's row height target.
+                height=44,
             ),
         )
     )
-    # 40 px header + 36 px per row + 16 px buffer. Cell heights are
-    # uniform now that the Priority column holds plain text instead of
-    # wrapping HTML, so all 4 rows (RT / ST / TS / All) fit cleanly.
+    # 40 px header + 44 px per row + 16 px buffer. Row height bumped
+    # to fit the 2-line Range value cleanly; all 4 rows
+    # (RT / ST / TS / All) fit without internal scrolling.
     _summary_fig.update_layout(
-        height=40 + len(_summary_rows) * 36 + 16,
+        height=40 + len(_summary_rows) * 44 + 16,
         margin=dict(l=4, r=4, t=4, b=4),
         paper_bgcolor="rgba(0,0,0,0)",
     )
@@ -1181,19 +1196,19 @@ def _render_tat_view(params: dict) -> None:
     # which is the acceptable trade vs clipping the Range or
     # producing an internal scrollbar that overlaps the header.
     #
-    # Inputs:
-    #   _LINE_PX   = 22 px per text line at 12-px Inter
-    #   _PADDING   = 14 px (top + bottom) of cell breathing room
-    #   _MIN_RANGE = 2 lines (Range cells: "min: X" + "max: Y")
+    # Inputs (dropped to 11 px cell font so content has more room):
+    #   _LINE_PX   = 20 px per text line at 11-px Inter
+    #   _PADDING   = 12 px (top + bottom) of cell breathing room
+    #   _MIN_RANGE = 2 lines (Range cells: "8m -" + "5h 54m")
     # Procedure-name line count is estimated from char length /
-    # chars-per-line (~22 at the 130 px Procedure column width on
+    # chars-per-line (~22 at the ~130 px Procedure column width on
     # a 1200 px container).
     import math as _math_tat
     _CHARS_PER_LINE = 22
-    _LINE_PX        = 22
-    _ROW_PADDING_PX = 14
+    _LINE_PX        = 20
+    _ROW_PADDING_PX = 12
     _RANGE_LINES    = 2
-    _MIN_ROW_PX     = _RANGE_LINES * _LINE_PX + _ROW_PADDING_PX  # 58
+    _MIN_ROW_PX     = _RANGE_LINES * _LINE_PX + _ROW_PADDING_PX  # 52
 
     _row_h_estimates = [
         max(
@@ -1205,6 +1220,41 @@ def _render_tat_view(params: dict) -> None:
         for p in _proc_col
     ]
     _row_height = max(_row_h_estimates) if _row_h_estimates else _MIN_ROW_PX
+
+    # Vertical-centering helper. Plotly Table has no native `valign`
+    # property — content top-aligns inside the cell, leaving empty
+    # space below in 2-line-tall rows. Prepending a leading <br> to
+    # single-line cells pushes the content down by one line so it
+    # sits closer to the middle of the row. Range cells already
+    # have two lines (split by <br>) and aren't padded further.
+    # Applied to STAT cells only; the procedure column keeps its
+    # natural top-alignment because its values may already span
+    # multiple lines via wrap (and adding a prefix would push the
+    # last line out of the cell on a long name).
+    def _vbalance(s):
+        if "<br>" in str(s):
+            return s
+        return f"<br>{s}"
+
+    _cell_values_balanced = [
+        _proc_col,
+        [_vbalance(v) for v in _rt_n_col],
+        [_vbalance(v) for v in _rt_mean],
+        [_vbalance(v) for v in _rt_pct],
+        [_vbalance(v) for v in _rt_range],
+        [_vbalance(v) for v in _st_n_col],
+        [_vbalance(v) for v in _st_mean],
+        [_vbalance(v) for v in _st_pct],
+        [_vbalance(v) for v in _st_range],
+        [_vbalance(v) for v in _ts_n_col],
+        [_vbalance(v) for v in _ts_mean],
+        [_vbalance(v) for v in _ts_pct],
+        [_vbalance(v) for v in _ts_range],
+        [_vbalance(v) for v in _all_n_col],
+        [_vbalance(v) for v in _all_mean],
+        [_vbalance(v) for v in _all_pct],
+        [_vbalance(v) for v in _all_range],
+    ]
 
     _tat_table_fig = go.Figure(
         data=go.Table(
@@ -1225,13 +1275,16 @@ def _render_tat_view(params: dict) -> None:
                 height=56,
             ),
             cells=dict(
-                values=_cell_values,
+                values=_cell_values_balanced,
                 fill_color=_cell_fill_cols,
                 line_color="#eef0f3",
                 align=_aligns,
                 font=dict(
                     family="Inter, system-ui, sans-serif",
-                    size=12,
+                    # 11 px (down from 12) gives ~7% more horizontal
+                    # room per character — the Range cells were right
+                    # at the clip threshold at 12 px.
+                    size=11,
                     color="#1a1a1a",
                 ),
                 # Uniform height tall enough for the 2-line Range
