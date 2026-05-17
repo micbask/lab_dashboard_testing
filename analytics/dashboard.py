@@ -964,10 +964,13 @@ def _render_tat_view(params: dict) -> None:
                 align="center",
                 font=dict(
                     family="Inter, system-ui, sans-serif",
-                    size=12,
+                    # 14 px header matches the 15 px cell font
+                    # (just a hair smaller so the section heading
+                    # still dominates visually).
+                    size=14,
                     color="#6F1828",
                 ),
-                height=40,
+                height=44,
             ),
             cells=dict(
                 values=[
@@ -983,20 +986,23 @@ def _render_tat_view(params: dict) -> None:
                 align=["center", "right", "right", "center", "right", "right"],
                 font=dict(
                     family="Inter, system-ui, sans-serif",
-                    # 10 px matches the procedure table below so the
-                    # two tables read as one visual unit.
-                    size=10,
+                    # 15 px — the summary table has lots of room (6
+                    # short columns × 4 rows), so we go larger here
+                    # than the procedure table. The two tables don't
+                    # need to share a font size since they serve
+                    # different roles (summary = at-a-glance, proc
+                    # = detailed lookup).
+                    size=15,
                     color=_summary_font_colors,
                 ),
-                # 30 px fits a single-line value at 10 px font with
-                # margin.
-                height=30,
+                # 40 px fits the 15 px value with margin.
+                height=40,
             ),
         )
     )
-    # 40 px header + 30 px per row + 16 px buffer.
+    # 44 px header + 40 px per row + 16 px buffer.
     _summary_fig.update_layout(
-        height=40 + len(_summary_rows) * 30 + 16,
+        height=44 + len(_summary_rows) * 40 + 16,
         margin=dict(l=4, r=4, t=4, b=4),
         paper_bgcolor="rgba(0,0,0,0)",
     )
@@ -1162,38 +1168,36 @@ def _render_tat_view(params: dict) -> None:
     _aligns = ["left"] + ["right"] * 16
     _header_font_colors = ["#6F1828"] + ["#1a1a1a"] * 16
 
-    # All 17 columns get equal width. Strict uniform reads as a
-    # tidier grid than content-weighted widths, and the smaller
-    # font (10 px) + no-space Range format ("8m-5h54m") below
-    # frees up enough horizontal room that even the widest cells
-    # fit without dedicated extra width.
+    # All 17 columns get equal width. The figure is rendered at a
+    # fixed pixel width (_tat_table_fixed_w below) so each column
+    # has enough room for its content; on screens narrower than
+    # that width the table scrolls horizontally instead of squeezing.
     _column_widths = [1] * 17
 
-    # Row height — Plotly Table's `cells.height` is one number for
-    # the whole table, so we estimate per-row line counts (driven
-    # by either procedure-name wrap OR Range value wrap) and use
-    # the max. When ANY cell in ANY row wraps to N lines, every
-    # row gets the height of N lines. Short-name rows then have
-    # extra whitespace — that's the acceptable trade vs an
-    # internal scrollbar that overlaps the header.
-    #
-    # Width math: on a 1200 px container each column gets 1/17
-    # ≈ 5.9% → ~70 px. At 10 px Inter (~5.5 px/char average)
-    # that's ~12 chars per line.
+    # Per-column absolute width in px. 110 px × 17 = 1870 px total
+    # (plus margins). Wide enough for the longest Range value
+    # ("47h23m-263h46m", ~14 chars at 12 px font ≈ 84 px) and the
+    # short procedure aliases ("CBC w diff", ~10 chars ≈ 60 px) on
+    # one line. Norris-Specialty's long procedure names still wrap.
+    _COL_PX = 110
+    _tat_table_fixed_w = _COL_PX * 17 + 20   # +20 for table chrome
+
+    # Row height — uses the per-row max line count across procedure
+    # name + the 4 Range cells (those are the columns most prone to
+    # wrap). When ANY cell in ANY row wraps, every row gets that
+    # height. With the wider columns most content fits on 1 line,
+    # so rows stay compact. Long Norris-Specialty names still wrap
+    # to multiple lines and drive the height.
     import math as _math_tat
-    _CHARS_PER_LINE = 12      # ~70 px column / ~5.5 px per char at 10 px Inter
-    _LINE_PX        = 18      # 10 px Inter ≈ 18 px line-height
-    _ROW_PADDING_PX = 10
-    _MIN_ROW_PX     = _LINE_PX + _ROW_PADDING_PX   # 28 px
+    _CHARS_PER_LINE = 16      # ~110 px column / ~7 px per char at 12 px Inter
+    _LINE_PX        = 20      # 12 px Inter ≈ 20 px line-height
+    _ROW_PADDING_PX = 12
+    _MIN_ROW_PX     = _LINE_PX + _ROW_PADDING_PX   # 32 px
 
     def _est_lines(text):
         n = max(1, len(str(text)))
         return _math_tat.ceil(n / _CHARS_PER_LINE)
 
-    # Per-row line count: the max of procedure name + all 4 group
-    # Range cells (those are the variable-width columns most prone
-    # to wrap). n / Mean / % cells are always short numerics that
-    # fit on 1 line.
     _row_line_counts = [
         max(
             _est_lines(_proc_col[i]),
@@ -1233,10 +1237,11 @@ def _render_tat_view(params: dict) -> None:
                 align=_aligns,
                 font=dict(
                     family="Inter, system-ui, sans-serif",
-                    # 10 px (down from 11) gives ~9% more horizontal
-                    # room per character, helping uniform-width
-                    # columns fit the longest stat values.
-                    size=10,
+                    # 12 px (back up from 10) — readable text. With
+                    # the fixed-width / horizontal-scroll rendering
+                    # below, we don't need to squeeze the font to
+                    # make content fit.
+                    size=12,
                     color="#1a1a1a",
                 ),
                 height=_row_height,
@@ -1254,15 +1259,40 @@ def _render_tat_view(params: dict) -> None:
     _table_h = 56 + _n_rows * _row_height + 24
     _tat_table_fig.update_layout(
         height=_table_h,
+        # Fixed pixel width so columns stay at their full _COL_PX
+        # size regardless of container width. When the page is
+        # narrower than the table, the wrapper div below adds a
+        # horizontal scrollbar instead of squeezing columns.
+        width=_tat_table_fixed_w,
         margin=dict(l=4, r=4, t=4, b=4),
         paper_bgcolor="rgba(0,0,0,0)",
     )
 
-    st.plotly_chart(
+    # Render the Plotly chart as HTML inside a horizontally-scrolling
+    # container. st.plotly_chart with use_container_width=False would
+    # render at the fixed width but the Streamlit column would clip
+    # it on the right; wrapping in components.html lets the inner
+    # div add `overflow-x:auto` so a scrollbar appears when needed.
+    import plotly.io as _pio
+    import streamlit.components.v1 as _components
+
+    _plotly_html = _pio.to_html(
         _tat_table_fig,
-        use_container_width=True,
+        include_plotlyjs="cdn",
+        full_html=False,
         config={"displayModeBar": False},
-        key="tat_table",
+    )
+    _components.html(
+        f"""
+        <div style="overflow-x: auto; width: 100%; padding-bottom: 4px;">
+            {_plotly_html}
+        </div>
+        """,
+        # iframe height = table height + ~24 px for the horizontal
+        # scrollbar (when present). scrolling=False on the iframe
+        # so only the inner div's horizontal scrollbar shows.
+        height=_table_h + 24,
+        scrolling=False,
     )
 
     # ── Mean-TAT bar chart ─────────────────────────────────────────────────
