@@ -23,6 +23,26 @@ from pre_analytics.views._shared import (
 
 def render_sidebar(ss) -> dict:
     """Render pre-analytics sidebar widgets. Returns params dict for render()."""
+    # ── URL → session_state hydration ──────────────────────────────────
+    # Same pattern as analytics: pull loc / view / date from query_params
+    # before widgets instantiate so a shared link lands on the same view.
+    _qp = st.query_params
+    _qp_loc = _qp.get("loc")
+    if _qp_loc and _qp_loc in PRE_ANALYTICS_LOCATIONS:
+        if st.session_state.get("pa_location_radio") != _qp_loc:
+            st.session_state["pa_location_radio"] = _qp_loc
+    _qp_view = _qp.get("view")
+    if _qp_view in ("Daily", "Monthly"):
+        if st.session_state.get("pa_view_radio") != _qp_view:
+            st.session_state["pa_view_radio"] = _qp_view
+    _qp_date = _qp.get("date")
+    if _qp_date:
+        try:
+            _parsed = date.fromisoformat(_qp_date)
+            st.session_state.setdefault("pa_date_picker", _parsed)
+        except ValueError:
+            pass
+
     with st.sidebar:
         # ── Pending background tasks (Issue 2A — DM parity with
         # analytics). Mirror analytics' handler block so that Reset /
@@ -247,6 +267,21 @@ def render_sidebar(ss) -> dict:
                 data_summary=_pa_dm_data_summary,
                 load_err=_pa_dm_load_err,
             )
+
+    # ── session_state → URL sync ───────────────────────────────────────
+    # Only write pre-analytics filters when we're actually on the
+    # pre-analytics dashboard (otherwise the analytics sync would
+    # clobber these keys). _pa_date_str is "YYYY-MM-DD" for Daily and
+    # "YYYY-MM" for Monthly — same value the shared-link consumer will
+    # parse back via date.fromisoformat() (for Daily) or year/month
+    # split (for Monthly).
+    if st.query_params.get("dashboard") == "pre_analytics":
+        st.query_params["loc"]  = pa_location
+        st.query_params["view"] = pa_view
+        if _pa_date_str:
+            st.query_params["date"] = _pa_date_str
+        elif "date" in st.query_params:
+            del st.query_params["date"]
 
     return {
         "pa_location": pa_location,

@@ -50,6 +50,37 @@ from analytics.views.monthly import render_monthly_view
 
 def render_sidebar(ss) -> dict:
     """Render analytics sidebar widgets. Returns params dict for render()."""
+    # ── URL → session_state hydration ──────────────────────────────────
+    # Pull bench / basis / view / date from query params on the FIRST
+    # render of the script so a shared link lands on the same view. Done
+    # BEFORE the widgets instantiate — Streamlit won't let us mutate a
+    # widget-keyed session_state value after the widget renders.
+    _qp = st.query_params
+    _qp_bench = _qp.get("bench")
+    if _qp_bench and _qp_bench in BENCH_LABEL_TO_VALUE:
+        st.session_state.setdefault("analytics_bench_short", _qp_bench)
+        # Allow URL to drive the widget even after initial mount, but only
+        # when the current value differs — avoids fighting user clicks.
+        if st.session_state.get("analytics_bench_short") != _qp_bench:
+            st.session_state["analytics_bench_short"] = _qp_bench
+    _qp_basis = _qp.get("basis")
+    if _qp_basis in ("Completed", "In-Lab", "TAT"):
+        st.session_state.setdefault("time_basis", _qp_basis)
+        if st.session_state.get("time_basis") != _qp_basis:
+            st.session_state["time_basis"] = _qp_basis
+    _qp_view = _qp.get("view")
+    if _qp_view in ("Daily", "Monthly"):
+        st.session_state.setdefault("analytics_view_mode", _qp_view)
+        if st.session_state.get("analytics_view_mode") != _qp_view:
+            st.session_state["analytics_view_mode"] = _qp_view
+    _qp_date = _qp.get("date")
+    if _qp_date:
+        try:
+            _parsed = date.fromisoformat(_qp_date)
+            st.session_state.setdefault("date_picker", _parsed)
+        except ValueError:
+            pass
+
     with st.sidebar:
         # ── 1. Testing Bench (same selector for every Time Basis,
         #      including TAT — TAT now reports turnaround for the
@@ -101,6 +132,7 @@ def render_sidebar(ss) -> dict:
         view_mode = st.radio(
             "View", ["Daily", "Monthly"],
             horizontal=True, label_visibility="collapsed",
+            key="analytics_view_mode",
         )
 
         # ── Pending background tasks (kicked off by buttons on a previous run) ──
@@ -358,6 +390,24 @@ def render_sidebar(ss) -> dict:
             _tat_date_str = selected_date.isoformat()
         else:
             _tat_date_str = f"{selected_year:04d}-{selected_month:02d}"
+
+    # ── session_state → URL sync ───────────────────────────────────────
+    # After all widgets have rendered, mirror their selections into
+    # query_params so the URL is shareable. Only write the analytics
+    # filters when we're on the analytics dashboard; otherwise the
+    # pre-analytics sync would clobber these keys with stale values.
+    if st.query_params.get("dashboard") == "analytics":
+        st.query_params["bench"] = _bench_short
+        st.query_params["basis"] = time_basis
+        st.query_params["view"]  = view_mode
+        if view_mode == "Daily" and _data_exists:
+            st.query_params["date"] = selected_date.isoformat()
+        elif view_mode == "Monthly" and _data_exists:
+            st.query_params["date"] = f"{selected_year:04d}-{selected_month:02d}"
+        else:
+            # No data — drop date so the URL stays clean.
+            if "date" in st.query_params:
+                del st.query_params["date"]
 
     return {
         "map_type": map_type,
