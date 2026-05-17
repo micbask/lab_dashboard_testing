@@ -57,29 +57,17 @@ def clean_procedure_names(df: pd.DataFrame) -> pd.DataFrame:
     if "Order Procedure" not in df.columns:
         return df
 
-    # Pass 1 — collapse \xa0 variants to the canonical double-space form.
-    df["Order Procedure"] = df["Order Procedure"].str.replace(
-        "Complete Blood Count With Auto\xa0 Differen",
-        "Complete Blood Count With Auto  Differen",
-        regex=False,
+    # Rules sourced from procedure_aliases.py so this implementation and
+    # the mirror in scripts/email_ingest.py can't drift silently apart.
+    from procedure_aliases import (
+        PROCEDURE_WHITESPACE_NORMALIZATIONS,
+        PROCEDURE_DISPLAY_ALIASES,
     )
-    df["Order Procedure"] = df["Order Procedure"].str.replace(
-        "Complete Blood Count With Auto\xa0Differen",
-        "Complete Blood Count With Auto  Differen",
-        regex=False,
-    )
-
-    # Pass 2 — apply display aliases. Map is ordered by user-facing
-    # priority (CBC variants first, then panels) but order doesn't
-    # affect correctness since the keys don't overlap as substrings.
-    _aliases = {
-        "Complete Blood Count With Auto  Differen": "CBC w diff",
-        "Complete Blood Count NO Auto Differentia": "CBC no diff",
-        "Comprehensive Metabolic Panel":            "CMP",
-        "Basic Metabolic Panel":                    "BMP",
-    }
-    df["Order Procedure"] = df["Order Procedure"].replace(_aliases)
-
+    for _src, _dst in PROCEDURE_WHITESPACE_NORMALIZATIONS:
+        df["Order Procedure"] = df["Order Procedure"].str.replace(
+            _src, _dst, regex=False,
+        )
+    df["Order Procedure"] = df["Order Procedure"].replace(PROCEDURE_DISPLAY_ALIASES)
     return df
 
 

@@ -9,7 +9,23 @@ import streamlit as st
 from storage import load_filtered_data, get_index_hash, storage_is_configured
 
 
+_NAME_STOPWORDS = {"jr", "sr", "ii", "iii", "iv", "md", "phd", "rn"}
+
+
 def normalize_name(name) -> "str | None":
+    """Canonicalize a "Last, First" tech name for cross-source matching.
+
+    Handles the drift that silently dropped techs in earlier versions:
+      • Whitespace around the comma ("Nunez , Karina" / "Nunez,Karina").
+      • Trailing middle initials ("Smith, Jane M" / "Smith, Jane M.").
+      • Trailing honorifics ("Smith, Jane Jr" / "Smith, Jane RN").
+
+    Limitation: a tech with two distinct middle initials in different
+    sources (e.g. "Jane M Smith" vs "Jane R Smith") would now collapse
+    to the same key. We accept that risk — it's exceedingly rare in
+    practice, and the alternative (silent name-mismatch drops) is
+    worse for data fidelity.
+    """
     if name is None:
         return None
     _s = str(name)
@@ -17,6 +33,21 @@ def normalize_name(name) -> "str | None":
     _s = _re.sub(r'\s+', ' ', _s).strip()
     if not _s or _s == "-" or _s.lower() == "nan":
         return None
+    if "," in _s:
+        _last, _, _rest = _s.partition(",")
+        _last = _last.strip()
+        _rest_parts = _rest.strip().split()
+        # Drop trailing tokens that look like middle initials (≤2 chars
+        # after stripping a trailing dot) or known honorifics. Keep at
+        # least one token so the first name survives.
+        while len(_rest_parts) > 1:
+            _tail = _rest_parts[-1].rstrip(".").lower()
+            if len(_tail) <= 2 or _tail in _NAME_STOPWORDS:
+                _rest_parts.pop()
+            else:
+                break
+        _rest = " ".join(_rest_parts)
+        _s = f"{_last}, {_rest}" if _rest else _last
     return _s.lower()
 
 
@@ -214,7 +245,15 @@ def build_draw_pivot(
 
     if view == "Monthly":
         if year is not None and month is not None:
-            _n_days = _calbdp.monthrange(year, month)[1]
+            # Elapsed-days denominator: matches analytics' semantics.
+            # For a fully-past month this is the full calendar count;
+            # for the current month it's days-so-far so the average
+            # isn't deflated against a not-yet-elapsed month-end.
+            _month_start = date(year, month, 1)
+            _month_end   = date(year, month, _calbdp.monthrange(year, month)[1])
+            _today       = date.today()
+            _eff_end     = min(_month_end, _today)
+            _n_days      = max((_eff_end - _month_start).days + 1, 1)
         else:
             # Fallback: days-with-data. Slightly overstates per-day
             # averages in sparse months; only hit when caller didn't

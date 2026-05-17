@@ -321,6 +321,7 @@ def render(params: dict, ss) -> None:
             "Keck":   ["Early AM", "AM", "PM", "NS"],
             "Norris": ["AM", "PM", "NS"],
             "HC3":    [None],
+            "PMOB":   [None],
         }
 
         def _render_pa_subplot_heatmaps(draw_df, location, view, hour_range,

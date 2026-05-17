@@ -25,7 +25,6 @@ import time
 from datetime import date, timedelta
 from typing import Optional
 
-import duckdb
 import pandas as pd
 import requests
 import streamlit as st
@@ -129,10 +128,18 @@ def _load_partition_index() -> dict:
 
     The index is a tiny JSON file (<1KB) — cache it in session state so
     we only hit GitHub once per session (or after explicit invalidation).
+
+    Returns a DEEP COPY of the cached dict so callers can safely mutate
+    their copy before deciding whether to persist it via
+    `_save_partition_index`. The previous implementation returned the
+    cached reference directly, which meant mid-write failures (a
+    `_gh_put_file` exception after the in-memory mutation) left
+    session_state and the remote out of sync.
     """
+    import copy as _copy
     _ss = st.session_state
     if "_partition_index" in _ss:
-        return _ss["_partition_index"]
+        return _copy.deepcopy(_ss["_partition_index"])
 
     raw, _ = _gh_get_file(PARTITION_INDEX_PATH)
     if raw is None:
@@ -143,7 +150,7 @@ def _load_partition_index() -> dict:
     except Exception:
         index = {}
     _ss["_partition_index"] = index
-    return index
+    return _copy.deepcopy(index)
 
 
 def _invalidate_index_cache() -> None:
@@ -408,95 +415,62 @@ def load_filtered_data(
     if not needed_keys:
         return pd.DataFrame()
 
-    # Read needed partitions (each is individually cached by SHA)
-    frames = []
-    for key in sorted(needed_keys):
-        df = _read_partition(key)
-        if df is not None and not df.empty:
-            frames.append(df)
-
-    if not frames:
-        return pd.DataFrame()
-
-    combined = pd.concat(frames, ignore_index=True)
-
-    # Apply procedure-name aliases (CBC w diff / CMP / BMP / CBC no diff)
-    # AND resource remaps at read time so already-stored Parquet data —
-    # which was written before the current alias / remap rules existed —
-    # renders correctly. New uploads run both passes at parse time
-    # (inside parse_single_file), so the on-disk format eventually
-    # converges; this read-time pass means we don't need a one-time
-    # Parquet rewrite. Resource remaps MUST be applied before the
-    # DuckDB filter below — otherwise rows whose stored resource is
-    # the old name get dropped by the bench-scoped `Performing Service
-    # Resource IN (...)` filter even though the post-remap resource
-    # would have matched. Lazy import to avoid a top-level dependency
-    # from storage.py onto parsing.py.
+    # Stream-filter per partition. Previously this function read every
+    # needed partition, pd.concat'd them all into a single combined
+    # frame (~500k rows × N partitions), then handed the whole thing
+    # to DuckDB to filter down to typically 5-20k rows. Peak memory
+    # was ~3× the filtered output (cached frames + combined + result).
+    #
+    # The streaming pattern below applies the alias/remap passes and
+    # the date/resource/procedure filters TO EACH PARTITION
+    # individually, then accumulates only the small filtered slices.
+    # Peak memory is one partition + the growing list of small slices.
+    # DuckDB is no longer needed — the filter logic is simple boolean
+    # masking that pandas handles natively, and the input frames
+    # already have correct dtypes (object/date from _parquet_bytes_to_df),
+    # so the post-DuckDB dtype-fixup pass is also gone.
+    #
+    # Resource remaps MUST run BEFORE the resource filter — otherwise
+    # rows whose stored resource is the old name get dropped by the
+    # bench-scoped filter even though the post-remap resource would
+    # have matched. Apply aliases too so already-stored partitions
+    # render with the short display names. Lazy import to avoid a
+    # top-level dependency from storage.py onto parsing.py.
     from parsing import (
         clean_procedure_names as _alias_procs,
         apply_resource_remaps as _remap_resources,
     )
-    combined = _alias_procs(combined)
-    combined = _remap_resources(combined)
 
-    # Push down ALL filters via DuckDB — date range, resources, procedure exclusions
-    con = duckdb.connect()
-    con.register("data", combined)
+    resource_set = set(resources) if resources else None
+    exclude_set  = set(exclude_procs) if exclude_procs else None
 
-    resource_list = list(resources)
-    exclude_list = list(exclude_procs)
+    result_frames: list[pd.DataFrame] = []
+    for key in sorted(needed_keys):
+        df = _read_partition(key)
+        if df is None or df.empty:
+            continue
+        # Copy before mutating — apply_resource_remaps uses
+        # df.loc[mask, col] = ... which would otherwise modify the
+        # cached partition frame held by _read_partition_cached.
+        df = df.copy()
+        df = _alias_procs(df)
+        df = _remap_resources(df)
 
-    date_where = f'"{date_col}" >= ? AND "{date_col}" <= ?'
+        if date_col not in df.columns:
+            continue
+        mask = (df[date_col] >= start_date) & (df[date_col] <= end_date)
+        if resource_set is not None and "Performing Service Resource" in df.columns:
+            mask &= df["Performing Service Resource"].isin(resource_set)
+        if exclude_set is not None and "Order Procedure" in df.columns:
+            mask &= ~df["Order Procedure"].isin(exclude_set)
 
-    if resource_list and exclude_list:
-        result = con.execute(
-            f"SELECT * FROM data "
-            f"WHERE {date_where} "
-            "AND \"Performing Service Resource\" IN (SELECT UNNEST(?)) "
-            "AND \"Order Procedure\" NOT IN (SELECT UNNEST(?))",
-            [start_date, end_date, resource_list, exclude_list],
-        ).fetchdf()
-    elif resource_list:
-        result = con.execute(
-            f"SELECT * FROM data "
-            f"WHERE {date_where} "
-            "AND \"Performing Service Resource\" IN (SELECT UNNEST(?))",
-            [start_date, end_date, resource_list],
-        ).fetchdf()
-    else:
-        result = con.execute(
-            f"SELECT * FROM data "
-            f"WHERE {date_where}",
-            [start_date, end_date],
-        ).fetchdf()
+        sub = df.loc[mask]
+        if not sub.empty:
+            result_frames.append(sub)
 
-    con.close()
-
-    # DuckDB's fetchdf() converts DATE columns to datetime64[ns] and Int
-    # columns to nullable Int64. Restore the native dtypes the rest of the
-    # app expects (Python date objects, plain int hours) so downstream
-    # comparisons like `df["complete_date"] >= some_date` work.
-    if "complete_date" in result.columns and not result.empty:
-        result["complete_date"] = pd.to_datetime(result["complete_date"]).dt.date
-    if "hour" in result.columns and not result.empty:
-        result["hour"] = result["hour"].astype(int)
-    if "inlab_date" in result.columns and not result.empty:
-        result["inlab_date"] = pd.to_datetime(
-            result["inlab_date"], errors="coerce"
-        ).dt.date
-    if "inlab_hour" in result.columns and not result.empty:
-        result["inlab_hour"] = pd.to_numeric(
-            result["inlab_hour"], errors="coerce"
-        ).astype("Int64")
-    if "drawn_date" in result.columns and not result.empty:
-        result["drawn_date"] = pd.to_datetime(
-            result["drawn_date"], errors="coerce"
-        ).dt.date
-    if "drawn_hour" in result.columns and not result.empty:
-        result["drawn_hour"] = pd.to_numeric(
-            result["drawn_hour"], errors="coerce"
-        ).astype("Int64")
-    return result
+    if not result_frames:
+        return pd.DataFrame()
+    return pd.concat(result_frames, ignore_index=True)
 
 
 @st.cache_data(show_spinner=False, ttl=300)
@@ -516,9 +490,19 @@ def load_partition_for_month(
 
 
 def get_index_hash() -> str:
-    """Return a short hash of the partition index for cache-busting."""
+    """Return a short, STABLE hash of the partition index for cache-busting.
+
+    Uses SHA-1 (truncated to 16 hex chars) instead of Python's built-in
+    `hash()`, which is randomized per process via PYTHONHASHSEED — two
+    Streamlit Cloud workers (or two sessions on the same worker after a
+    restart) would otherwise produce different cache keys for the same
+    on-disk index, defeating shared caching and making state subtly
+    process-dependent.
+    """
+    import hashlib
     index = _load_partition_index()
-    return str(hash(json.dumps(index, sort_keys=True, default=str)))
+    payload = json.dumps(index, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha1(payload).hexdigest()[:16]
 
 
 def count_rows_in_date_range(start_date: date, end_date: date) -> int:

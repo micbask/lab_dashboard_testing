@@ -2109,6 +2109,12 @@ def render_data_management_sidebar(
             ):
                 ss["pending_upload"] = ss.pop("staged_files")
                 st.rerun()
+        else:
+            # User cleared the uploader (or never picked a file). Drop
+            # any bytes previously staged — otherwise 10s of MB of
+            # uploaded XLSX content sit in session_state indefinitely
+            # whenever someone uploads and then changes their mind.
+            ss.pop("staged_files", None)
 
         st.markdown("---")
         st.markdown("**Danger zone**")

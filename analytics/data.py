@@ -100,9 +100,12 @@ def load_analytics_data(
             # columns so callers can distinguish "no In-Lab data" from
             # "no rows at all" by checking df.empty after filtering.
             return df.iloc[0:0]
-        df = df[df["inlab_date"].notna()].copy()
+        df = df[df["inlab_date"].notna() & df["inlab_hour"].notna()].copy()
         df["complete_date"] = df["inlab_date"]
-        df["hour"] = df["inlab_hour"].astype(int)
+        # inlab_hour is nullable Int64 — go through Int64 first so any
+        # residual <NA> from upstream dtype drift surfaces here as a
+        # filter (above) rather than as an AttributeError at .astype(int).
+        df["hour"] = df["inlab_hour"].astype("Int64").astype(int)
         return df
 
     if time_basis == "TAT":
@@ -211,7 +214,20 @@ def build_monthly_pivot(
         ).reindex(columns=list(range(24)), fill_value=0)
     )
 
-    n_days = int(month_df["complete_date"].nunique())
+    # n_days = days the user expects data for in the displayed period,
+    # NOT just days that happened to have data. Using nunique() of
+    # observed dates inflates the per-day average whenever a weekend
+    # or holiday had no data (Saturday with zero draws should pull the
+    # average DOWN, not be excluded from the denominator). For partial
+    # current months we cap at today so the average reflects elapsed
+    # days only — calendar-days-to-month-end would deflate the
+    # average for a mid-month view.
+    _today = date.today()
+    _effective_end = min(month_end, _today)
+    if _effective_end < month_start:
+        n_days = 1  # future month — defensive denominator
+    else:
+        n_days = (_effective_end - month_start).days + 1
     avg = pivot / n_days
     avg["Total"] = avg.sum(axis=1)
     avg = avg.sort_values("Total", ascending=False)
@@ -312,7 +328,15 @@ def load_monthly_avg_for_comparison(
             values="Complete Volume", aggfunc="sum", fill_value=0,
         ).reindex(columns=list(range(24)), fill_value=0)
     )
-    n_days = max(int(month_df["complete_date"].nunique()), 1)
+    # Match build_monthly_pivot's denominator semantics — elapsed days
+    # in the displayed period, not days with any data. See the
+    # comment in build_monthly_pivot for the rationale.
+    _today = date.today()
+    _effective_end = min(month_end, _today)
+    if _effective_end < month_start:
+        n_days = 1
+    else:
+        n_days = (_effective_end - month_start).days + 1
     return pivot / n_days
 
 
