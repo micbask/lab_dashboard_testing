@@ -12,7 +12,9 @@ from storage import (
 from ui_components import (
     metric_card, render_header, render_data_management_sidebar,
 )
-from pre_analytics.data import load_draw_data, build_draw_pivot
+from pre_analytics.data import (
+    load_draw_data, build_draw_pivot, build_draw_count_pivot,
+)
 
 
 def render_sidebar(ss) -> dict:
@@ -379,13 +381,51 @@ def render(params: dict, ss) -> None:
             )
 
             # Pass 1 — build per-shift bookkeeping (pivot, techs, summary).
+            #
+            # Monthly view uses PER-TECH ACTIVE DAYS as the denominator
+            # (not calendar days), so each tech's averages reflect their
+            # own working pattern. A tech who worked 10 days has cells
+            # showing draws/day across those 10 days, not diluted by 21
+            # days they didn't work. `build_draw_count_pivot` returns
+            # raw counts + a per-tech active-day dict; we divide row by
+            # row. Daily view keeps the simpler `build_draw_pivot` path
+            # since N=1 and active-day math is moot.
             _shift_data = []
             for _shift in _shifts:
-                _pivot = build_draw_pivot(
-                    draw_df, location, _shift, view,
-                    year=_pa_yr, month=_pa_mo,
-                )
-                _pivot = _pivot[_hours_subset]
+                if view == "Monthly":
+                    # Hour-range filter happens AFTER counts/active-days
+                    # are computed at the (location, shift) level — but
+                    # we want per-tech N to reflect days the tech was
+                    # active IN THE HOUR RANGE. So build the count
+                    # pivot from the hour-filtered draw_df slice.
+                    if _shift is None:
+                        _hr_slice = _loc_hr_df
+                    else:
+                        _hr_slice = (
+                            _loc_hr_df[_loc_hr_df["shift"] == _shift]
+                            if not _loc_hr_df.empty else _loc_hr_df
+                        )
+                    _counts_pv, _tech_active_days = build_draw_count_pivot(
+                        _hr_slice if not _hr_slice.empty else draw_df,
+                        location, _shift,
+                    )
+                    _counts_pv = _counts_pv[_hours_subset]
+                    # Avg = count / active_days. Techs with 0 active
+                    # days stay at 0 (no division), so they render as
+                    # empty rows — same as today.
+                    _pivot = _counts_pv.astype(float).copy()
+                    for _t in _pivot.index:
+                        _ad = _tech_active_days.get(_t, 0)
+                        if _ad > 0:
+                            _pivot.loc[_t] = _pivot.loc[_t] / _ad
+                else:
+                    _pivot = build_draw_pivot(
+                        draw_df, location, _shift, view,
+                        year=_pa_yr, month=_pa_mo,
+                    )
+                    _pivot = _pivot[_hours_subset]
+                    _tech_active_days = {}
+
                 _techs = _pivot.index.tolist()
                 if not _techs:
                     continue
@@ -399,16 +439,17 @@ def render(params: dict, ss) -> None:
                     )
 
                 _shift_data.append({
-                    "shift":     _shift,
-                    "pivot":     _pivot,
-                    "techs":     _techs,
-                    "n_techs":   len(_techs),
-                    "shift_df":  _shift_df,
-                    "n_draws":   len(_shift_df),
+                    "shift":         _shift,
+                    "pivot":         _pivot,
+                    "techs":         _techs,
+                    "n_techs":       len(_techs),
+                    "shift_df":      _shift_df,
+                    "n_draws":       len(_shift_df),
                     "n_samples": (
                         int(_shift_df["samples"].sum())
                         if not _shift_df.empty else 0
                     ),
+                    "active_days":   _tech_active_days,
                 })
 
             if not _shift_data:
@@ -465,13 +506,22 @@ def render(params: dict, ss) -> None:
             for _i, _d in enumerate(_shift_data, start=1):
                 _z_arr = _d["pivot"].values.astype(float)
                 _z_masked = _np.where(_z_arr == 0, _np.nan, _z_arr).tolist()
-                _text_hours = [
-                    [str(int(round(v))) if v > 0 else "" for v in row]
-                    for row in _z_arr
-                ]
+                # Cell text: integer counts for Daily (exact values),
+                # one decimal for Monthly (per-tech-active-day averages
+                # are typically fractional and rounding loses signal).
+                if view == "Monthly":
+                    _text_hours = [
+                        [f"{v:.1f}" if v > 0 else "" for v in row]
+                        for row in _z_arr
+                    ]
+                else:
+                    _text_hours = [
+                        [str(int(round(v))) if v > 0 else "" for v in row]
+                        for row in _z_arr
+                    ]
 
                 # Per-cell hover detail (Daily = per-draw breakdown,
-                # Monthly = avg).
+                # Monthly = avg with per-tech N).
                 _details: dict = {}
                 if view == "Daily" and not _d["shift_df"].empty:
                     for (_tech, _hour), _grp in _d["shift_df"].groupby(
@@ -506,10 +556,15 @@ def render(params: dict, ss) -> None:
                         _label = HOUR_LABELS[_h]
                         if view == "Monthly":
                             _v = _d["pivot"].loc[_tech].iloc[_j]
-                            _detail = (
-                                f"Avg draws: {_v:.1f}"
-                                if _v > 0 else "No draws this hour"
-                            )
+                            _ad = _d["active_days"].get(_tech, 0)
+                            if _v > 0:
+                                _detail = (
+                                    f"{_v:.1f} avg draws · "
+                                    f"N = {_ad} active day"
+                                    f"{'s' if _ad != 1 else ''}"
+                                )
+                            else:
+                                _detail = "No draws this hour"
                         else:
                             _detail = _details.get(
                                 (_tech, _h), "No draws this hour"
@@ -562,14 +617,21 @@ def render(params: dict, ss) -> None:
                     )
 
                     if view == "Monthly":
-                        _d_val = _n_d_tech / max(_n_days, 1)
-                        _s_val = _n_s_tech / max(_n_days, 1)
+                        # Per-tech active days as the denominator —
+                        # honest per-active-day averages, not diluted
+                        # by calendar days the tech wasn't working.
+                        _ad = _d["active_days"].get(_tech, 0)
+                        _denom = max(_ad, 1)
+                        _d_val = _n_d_tech / _denom
+                        _s_val = _n_s_tech / _denom
                         _cell_txt = (
                             f"{_d_val:.1f}" if _n_d_tech > 0 else ""
                         )
                         _hover = (
-                            f"{_d_val:.1f} avg draws/day · "
-                            f"{_s_val:.1f} avg samples/day"
+                            f"{_d_val:.1f} avg draws/active day · "
+                            f"{_s_val:.1f} avg samples/active day · "
+                            f"N = {_ad} active day"
+                            f"{'s' if _ad != 1 else ''}"
                         )
                     else:
                         _cell_txt = (
@@ -876,35 +938,31 @@ def render(params: dict, ss) -> None:
 
         def _render_pa_weekday_pattern(draw_df, location, hour_range,
                                        year, month, month_label, key):
-            """Render the Monthly-view weekday × hour heatmap.
+            """Render the Monthly-view day-of-week × hour heatmap.
 
-            Rows = Mon-Sun (with occurrence count appended to the label,
-            e.g. "Monday (×4)"), columns = hours in the selected range
-            plus a right-side Total column.
+            VOLUME-FOCUSED chart (not tech productivity). For each
+            (weekday, hour) slot, the cell shows the average draws on
+            a typical occurrence of that weekday — i.e. total draws /
+            number of times that weekday had data in the month. This
+            is intentionally NOT a per-tech average; that's what the
+            main heatmap is for.
 
-            Hour cell value = avg draws per occurrence of that
-            (weekday, hour) slot, rendered on the YlOrBr gradient.
-            Total cell value = avg DAILY total draws for that weekday
-            (sum across all hours / occurrence count), rendered FLAT
-            NEUTRAL GREY so users don't compare its larger-magnitude
-            daily totals against the hour-cell averages (different
-            scales). Matches the per-shift heatmap's Total column.
+            Layout:
+              - Rows = days of week (Mon-Sun) THAT HAVE DATA. Days the
+                location never operates on (e.g. HC3 weekends) are
+                hidden entirely to declutter.
+              - Each row label appends a "(×N)" occurrence count
+                showing how many dates of that weekday had data in
+                the month — same divisor used for that row's averages.
+              - X-axis = hours in the selected range + a right-side
+                "Total" column (flat neutral grey, no gradient).
+              - Section title shows "N = K data days" where K is the
+                total distinct calendar dates with data this month at
+                this location — exposes the chart's overall coverage.
 
-            Hover surfaces AVERAGES (not totals):
-              - Hour cells: avg draws / avg samples / avg active tech
-                per occurrence of that (weekday, hour) slot.
-              - Total cells: avg daily total draws / avg daily total
-                samples / avg daily active tech for that weekday.
-
-            "Avg active tech" is computed correctly per-occurrence:
-            for each calendar date that falls on that weekday, count
-            distinct techs working the slot on that date, then average
-            across the weekday's occurrences in the month. NOT the
-            same as "distinct techs across all occurrences" (which
-            would overcount).
+            Hover surfaces averages + totals for context. NO tech
+            count (this chart is about volume, not staffing).
             """
-            import calendar as _calwd
-
             _h_start, _h_end = hour_range
             _hours = list(range(_h_start, _h_end + 1))
             _n_hours = len(_hours)
@@ -923,40 +981,13 @@ def render(params: dict, ss) -> None:
                 if not draw_df.empty else draw_df.copy()
             )
 
-            # Count occurrences of each weekday in the month (e.g. 4 or
-            # 5 Mondays). Drives both the y-axis labels and the
-            # average-per-occurrence math below.
-            _wd_counts = {wd: 0 for wd in _weekdays}
-            _n_days_in_month = _calwd.monthrange(year, month)[1]
-            for _day in range(1, _n_days_in_month + 1):
-                _wd_name = _calwd.day_name[
-                    _calwd.weekday(year, month, _day)
-                ]
-                _wd_counts[_wd_name] += 1
-
-            _y_labels = [
-                f"{wd} (×{_wd_counts[wd]})" for wd in _weekdays
-            ]
-
-            st.markdown(
-                f'<div class="section-heading">'
-                f'Weekday pattern · {month_label}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                '<div class="heatmap-legend">'
-                'Values = avg draws per occurrence of that weekday. '
-                'Colour scale: &nbsp;'
-                '<strong style="color:#fff7bc;">■</strong> low &nbsp;→&nbsp; '
-                '<strong style="color:#8c2d04;">■</strong> high '
-                '(hour columns only). &nbsp;'
-                '<strong>Total</strong> column = avg daily total for that weekday.'
-                '</div>',
-                unsafe_allow_html=True,
-            )
-
             if _df.empty:
+                st.markdown(
+                    f'<div class="section-heading">'
+                    f'Day-of-week pattern · {month_label}'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
                 st.info(
                     f"No draws to chart for **{location}** in "
                     f"**{month_label}**."
@@ -971,74 +1002,104 @@ def render(params: dict, ss) -> None:
             ).dt.date
 
             # ─── Per-(weekday, hour) totals: draws, samples ───────────
-            _agg = _df.groupby(["weekday", "hour"]).agg(
-                draws=("display_name", "count"),
-                samples=("samples", "sum"),
-            ).reset_index()
-
-            def _pivot(_src, _col):
-                return _src.pivot_table(
-                    index="weekday", columns="hour",
-                    values=_col, aggfunc="sum", fill_value=0,
-                ).reindex(
-                    index=_weekdays, columns=_hours, fill_value=0,
-                )
-
-            _tot_draws_pv   = _pivot(_agg, "draws")
-            _tot_samples_pv = _pivot(_agg, "samples")
-
-            # ─── Per-(weekday, hour) active techs ─────────────────────
-            # Computed correctly: count distinct techs per OCCURRENCE
-            # date first, then sum across occurrences. Dividing the
-            # sum by _wd_counts gives the true per-occurrence average.
-            # (`distinct across all occurrences` would overcount.)
-            _tech_per_occ = _df.groupby(
-                ["weekday", "hour", "date_only"]
-            )["display_name"].nunique().reset_index(name="techs_that_day")
-
-            _tech_sum_pv = _tech_per_occ.pivot_table(
+            _tot_draws_pv = _df.pivot_table(
                 index="weekday", columns="hour",
-                values="techs_that_day", aggfunc="sum", fill_value=0,
+                values="display_name", aggfunc="count", fill_value=0,
             ).reindex(index=_weekdays, columns=_hours, fill_value=0)
 
-            # ─── Convert to averages per occurrence ───────────────────
+            _tot_samples_pv = _df.pivot_table(
+                index="weekday", columns="hour",
+                values="samples", aggfunc="sum", fill_value=0,
+            ).reindex(index=_weekdays, columns=_hours, fill_value=0)
+
+            # ─── Per-weekday DATA occurrences ─────────────────────────
+            # Count of distinct calendar dates with data per weekday.
+            # Used both as the per-row divisor (e.g. 4 Mondays with
+            # data → divide Monday row by 4) and to filter out rows
+            # with no data (HC3 weekends, etc.).
+            _data_occ = (
+                _df.groupby("weekday")["date_only"]
+                .nunique()
+                .reindex(_weekdays, fill_value=0)
+                .astype(int)
+                .to_dict()
+            )
+
+            # Visible weekdays = those with at least one data day.
+            _visible_wd = [wd for wd in _weekdays if _data_occ[wd] > 0]
+            if not _visible_wd:
+                st.markdown(
+                    f'<div class="section-heading">'
+                    f'Day-of-week pattern · {month_label}'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                st.info(
+                    f"No draws to chart for **{location}** in "
+                    f"**{month_label}**."
+                )
+                return
+
+            # Total distinct data days this month (for the section
+            # heading's "N = X data days"). Sum of per-weekday data
+            # occurrences == count of distinct date_only values, so
+            # either computation works; using nunique for clarity.
+            _n_data_days = int(_df["date_only"].nunique())
+
+            # ─── Section heading + legend (now that we know N) ────────
+            st.markdown(
+                f'<div class="section-heading">'
+                f'Day-of-week pattern · {month_label} · '
+                f'N = {_n_data_days} data day'
+                f'{"s" if _n_data_days != 1 else ""}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<div class="heatmap-legend">'
+                'Values = avg draws per occurrence of that day-of-week. '
+                'Colour scale: &nbsp;'
+                '<strong style="color:#fff7bc;">■</strong> low &nbsp;→&nbsp; '
+                '<strong style="color:#8c2d04;">■</strong> high '
+                '(hour columns only). &nbsp;'
+                '<strong>Total</strong> column = avg daily total for that day-of-week.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+            # Y-labels include the per-row data-occurrence count.
+            _y_labels = [
+                f"{wd} (×{_data_occ[wd]})" for wd in _visible_wd
+            ]
+
+            # ─── Convert totals → per-occurrence averages ─────────────
+            # Hour-cell avg = total / data_occurrences_for_that_weekday
             _avg_draws_pv   = _tot_draws_pv.astype(float).copy()
             _avg_samples_pv = _tot_samples_pv.astype(float).copy()
-            _avg_techs_pv   = _tech_sum_pv.astype(float).copy()
             for _wd in _weekdays:
-                _occ = _wd_counts[_wd]
+                _occ = _data_occ[_wd]
                 if _occ > 0:
                     _avg_draws_pv.loc[_wd]   /= _occ
                     _avg_samples_pv.loc[_wd] /= _occ
-                    _avg_techs_pv.loc[_wd]   /= _occ
 
-            # ─── Daily-total avgs (Total column) ──────────────────────
-            # Per-weekday avg daily total draws/samples = sum across all
-            # hours / occurrence count.
+            # Per-weekday daily totals (Total column) = sum across
+            # hours / data_occurrences. Same divisor as the cells.
             _tot_draws_wd_series   = _tot_draws_pv.sum(axis=1)
             _tot_samples_wd_series = _tot_samples_pv.sum(axis=1)
-
-            # Per-weekday avg daily active tech: count distinct techs
-            # per occurrence date (across all hours in range), sum,
-            # divide by occurrence count.
-            _tech_per_occ_wd = _df.groupby(
-                ["weekday", "date_only"]
-            )["display_name"].nunique().reset_index(name="techs_that_day")
-            _tech_wd_sum = _tech_per_occ_wd.groupby("weekday")[
-                "techs_that_day"
-            ].sum().reindex(_weekdays, fill_value=0)
-
             _avg_draws_wd   = {}
             _avg_samples_wd = {}
-            _avg_techs_wd   = {}
-            for _wd in _weekdays:
-                _occ = max(_wd_counts[_wd], 1)
+            _tot_draws_wd   = {}
+            _tot_samples_wd = {}
+            for _wd in _visible_wd:
+                _occ = max(_data_occ[_wd], 1)
                 _avg_draws_wd[_wd]   = _tot_draws_wd_series[_wd]   / _occ
                 _avg_samples_wd[_wd] = _tot_samples_wd_series[_wd] / _occ
-                _avg_techs_wd[_wd]   = _tech_wd_sum[_wd]           / _occ
+                _tot_draws_wd[_wd]   = int(_tot_draws_wd_series[_wd])
+                _tot_samples_wd[_wd] = int(_tot_samples_wd_series[_wd])
 
-            # ─── Hour cells trace ─────────────────────────────────────
-            _z_arr = _avg_draws_pv.values
+            # ─── Hour cells trace (visible rows only) ─────────────────
+            _avg_draws_visible = _avg_draws_pv.loc[_visible_wd]
+            _z_arr = _avg_draws_visible.values
             _flat_nonzero = [v for row in _z_arr for v in row if v > 0]
             _vmax_hours = (
                 float(_np.percentile(_flat_nonzero, 95))
@@ -1053,16 +1114,18 @@ def render(params: dict, ss) -> None:
             ]
 
             # customdata per hour cell: [hour_label, avg_draws,
-            # avg_samples, avg_active_tech].
+            # avg_samples, total_draws, total_samples]. Hover surfaces
+            # both averages AND the underlying totals for transparency.
             _cd_hours = []
-            for _wd in _weekdays:
+            for _wd in _visible_wd:
                 _row_cd = []
                 for _j, _h in enumerate(_hours):
                     _label = HOUR_LABELS[_h]
-                    _ad = float(_avg_draws_pv.loc[_wd].iloc[_j])
-                    _as = float(_avg_samples_pv.loc[_wd].iloc[_j])
-                    _at = float(_avg_techs_pv.loc[_wd].iloc[_j])
-                    _row_cd.append([_label, _ad, _as, _at])
+                    _av_d = float(_avg_draws_pv.loc[_wd].iloc[_j])
+                    _av_s = float(_avg_samples_pv.loc[_wd].iloc[_j])
+                    _t_d  = int(_tot_draws_pv.loc[_wd].iloc[_j])
+                    _t_s  = int(_tot_samples_pv.loc[_wd].iloc[_j])
+                    _row_cd.append([_label, _av_d, _av_s, _t_d, _t_s])
                 _cd_hours.append(_row_cd)
 
             _fig = _pgo.Figure()
@@ -1085,7 +1148,8 @@ def render(params: dict, ss) -> None:
                         "<b>%{y} @ %{customdata[0]}</b><br>"
                         "%{customdata[1]:.1f} avg draws<br>"
                         "%{customdata[2]:.1f} avg samples<br>"
-                        "%{customdata[3]:.1f} avg active tech"
+                        "<i>%{customdata[3]:,} total draws · "
+                        "%{customdata[4]:,} total samples</i>"
                         "<extra></extra>"
                     ),
                     hoverongaps=False,
@@ -1093,24 +1157,23 @@ def render(params: dict, ss) -> None:
             )
 
             # ─── Total column trace ───────────────────────────────────
-            # Flat neutral grey — the Total column is intentionally
-            # NOT on the YlOrBr gradient so users don't compare its
-            # daily-total magnitudes against the hour-cell averages
-            # (different scales). Matches the per-shift heatmap's
-            # Total column style.
+            # Flat neutral grey — daily-total magnitudes aren't on the
+            # same scale as the per-hour averages, so a gradient here
+            # would mislead users into apples-to-oranges comparisons.
             _x_total_coord = _n_hours
-            _z_totals = [[0] for _ in _weekdays]  # flat colorscale; value irrelevant
+            _z_totals = [[0] for _ in _visible_wd]
             _text_totals = [
                 [f"<b>{_avg_draws_wd[_wd]:.0f}</b>"
                  if _avg_draws_wd[_wd] > 0 else ""]
-                for _wd in _weekdays
+                for _wd in _visible_wd
             ]
             _cd_totals = [
                 [["Total",
                   _avg_draws_wd[_wd],
                   _avg_samples_wd[_wd],
-                  _avg_techs_wd[_wd]]]
-                for _wd in _weekdays
+                  _tot_draws_wd[_wd],
+                  _tot_samples_wd[_wd]]]
+                for _wd in _visible_wd
             ]
 
             _fig.add_trace(
@@ -1132,7 +1195,8 @@ def render(params: dict, ss) -> None:
                         "<b>%{y} @ %{customdata[0]}</b><br>"
                         "%{customdata[1]:.1f} avg daily total draws<br>"
                         "%{customdata[2]:.1f} avg daily total samples<br>"
-                        "%{customdata[3]:.1f} avg daily active tech"
+                        "<i>%{customdata[3]:,} total draws · "
+                        "%{customdata[4]:,} total samples</i>"
                         "<extra></extra>"
                     ),
                     textfont=dict(color="#1a1a1a", size=11),
@@ -1140,7 +1204,7 @@ def render(params: dict, ss) -> None:
             )
 
             _fig.update_layout(
-                height=len(_weekdays) * 32 + 50,
+                height=len(_visible_wd) * 32 + 50,
                 margin=dict(l=10, r=10, t=10, b=40),
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
@@ -1189,19 +1253,12 @@ def render(params: dict, ss) -> None:
         # "Completed Volume by Procedure & Hour" header / legend pair).
         # The YlOrBr swatch colours are the actual low/high stops of the
         # Plotly built-in colorscale used on the heatmaps below.
-        # Monthly view appends "· N = X days" to expose the divisor used
-        # to compute the per-cell per-day averages (calendar days in the
-        # month — matches build_draw_pivot's divisor).
-        if pa_view == "Monthly":
-            _n_days_month = _cal.monthrange(_pa_yr, _pa_mo)[1]
-            _draws_heading = (
-                f"Draws by tech &amp; hour · N = {_n_days_month} days"
-            )
-        else:
-            _draws_heading = "Draws by tech &amp; hour"
-
+        # NOTE: no section-level "N = X days" here because Monthly view
+        # uses PER-TECH active-day denominators (different N per row),
+        # so a single section-level N would be misleading. The N for
+        # each tech is surfaced in the cell hover instead.
         st.markdown(
-            f'<div class="section-heading">{_draws_heading}</div>',
+            '<div class="section-heading">Draws by tech &amp; hour</div>',
             unsafe_allow_html=True,
         )
         st.markdown(
