@@ -946,14 +946,21 @@ def _render_tat_view(params: dict) -> None:
         _summary_default_text_colors,    # Range
     ]
 
-    # Column widths — Range gets ~2× the other columns so the
-    # single-line "X - Y" pair fits without clipping (worst case
-    # is something like "47h 23m - 263h 46m"). Other columns hold
-    # short content (RT/ST/TS/All labels, n counts, short TAT
-    # values, "< 1h" / "< 2h" target labels).
+    # All six columns share equal width. Worst-case Range string
+    # ("47h23m-263h46m") still fits in an equal slot at 15 px font
+    # given the table's typical ~1100 px width.
+    #
+    # Vertical centering: Plotly Table top-anchors text within each
+    # row when the plot area exceeds the sum of cell heights (the
+    # extra space gets appended below). To force true centering we
+    # size the layout height to EXACTLY match the header+cells sum
+    # (plus the 4+4 px margin) — no leftover space, no stretching,
+    # no off-center drift.
+    _HEADER_H = 56
+    _ROW_H    = 64
     _summary_fig = go.Figure(
         data=go.Table(
-            columnwidth=[1.0, 1.0, 1.0, 1.0, 1.0, 2.0],
+            columnwidth=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
             header=dict(
                 values=[
                     "Priority", "n", "Mean TAT", "Target",
@@ -964,13 +971,10 @@ def _render_tat_view(params: dict) -> None:
                 align="center",
                 font=dict(
                     family="Inter, system-ui, sans-serif",
-                    # 14 px header matches the 15 px cell font
-                    # (just a hair smaller so the section heading
-                    # still dominates visually).
                     size=14,
                     color="#6F1828",
                 ),
-                height=44,
+                height=_HEADER_H,
             ),
             cells=dict(
                 values=[
@@ -983,26 +987,18 @@ def _render_tat_view(params: dict) -> None:
                 ],
                 fill_color=_summary_cell_fills,
                 line_color="#eef0f3",
-                align=["center", "right", "right", "center", "right", "right"],
+                align="center",
                 font=dict(
                     family="Inter, system-ui, sans-serif",
-                    # 15 px — the summary table has lots of room (6
-                    # short columns × 4 rows), so we go larger here
-                    # than the procedure table. The two tables don't
-                    # need to share a font size since they serve
-                    # different roles (summary = at-a-glance, proc
-                    # = detailed lookup).
                     size=15,
                     color=_summary_font_colors,
                 ),
-                # 40 px fits the 15 px value with margin.
-                height=40,
+                height=_ROW_H,
             ),
         )
     )
-    # 44 px header + 40 px per row + 16 px buffer.
     _summary_fig.update_layout(
-        height=44 + len(_summary_rows) * 40 + 16,
+        height=_HEADER_H + len(_summary_rows) * _ROW_H + 8,
         margin=dict(l=4, r=4, t=4, b=4),
         paper_bgcolor="rgba(0,0,0,0)",
     )
