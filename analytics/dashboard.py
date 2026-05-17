@@ -695,14 +695,27 @@ def _fmt_tat_compact(minutes) -> str:
 
 
 def format_range(min_v, max_v) -> str:
-    """Format a (min, max) TAT pair as 'min–max' using the compact
-    formatter. Returns '-' if either bound is missing."""
+    """Format a (min, max) TAT pair as 'min: X<br>max: Y' for two-line
+    display inside narrow Plotly Table cells.
+
+    Using two lines lets every stat column share a uniform width
+    without the Range value getting clipped. Plotly Table cells
+    render <br> as a line break (verified — the procedure table's
+    column headers already use the same mechanism). Compact
+    formatter drops the space between hours and minutes ('1h12'
+    instead of '1h 12m') so each line stays short.
+
+    Returns '-' if either bound is missing.
+    """
     if (
         min_v is None or max_v is None
         or pd.isna(min_v) or pd.isna(max_v)
     ):
         return "-"
-    return f"{_fmt_tat_compact(min_v)}–{_fmt_tat_compact(max_v)}"
+    return (
+        f"min: {_fmt_tat_compact(min_v)}<br>"
+        f"max: {_fmt_tat_compact(max_v)}"
+    )
 
 
 def _render_tat_view(params: dict) -> None:
@@ -1149,43 +1162,42 @@ def _render_tat_view(params: dict) -> None:
     _aligns = ["left"] + ["right"] * 16
     _header_font_colors = ["#6F1828"] + ["#1a1a1a"] * 16
 
-    # Column widths sized to actual content rather than uniform 1-unit:
-    # Range is the widest stat ("1h12–3h45" ≈ 9 chars), so it gets the
-    # biggest stat slice; n is just 2-3 digits so it shrinks. Per-group
-    # total stays at 4.0 units so each priority block occupies the
-    # same proportion of width — that keeps the colour blocks visually
-    # equal-sized despite the asymmetric stat columns inside them.
-    # Procedure gets 2.4 units (≈13% of width) — enough for the short
-    # aliases ("CBC w diff", "Lactic Acid") with margin.
-    #   Procedure 2.4 / n 0.7 / Mean 1.0 / % 0.9 / Range 1.4 × 4 = 18.4
-    _proc_w   = 2.4
-    _stat_ws  = [0.7, 1.0, 0.9, 1.4]   # n, Mean, %, Range — one block
-    _column_widths = [_proc_w] + _stat_ws * 4
+    # Uniform stat-column widths so the visual rhythm across the 16
+    # stat cells is regular — previously Range was 1.4× and n was
+    # 0.7×, which made the grid look uneven and put Range right at
+    # the clip threshold. Now every stat column gets 1.0 unit;
+    # Range fits inside that narrower cell because the value is
+    # stacked on two lines ("min: X" / "max: Y") via format_range.
+    # Procedure stays at 2.0 units so short aliases like "CBC w
+    # diff" (~10 chars) fit on one line; long Norris-Specialty
+    # names ("Leukemia Lymphoma Evaluation Flow Cytome") still
+    # wrap, and the row-height estimate below sizes the whole table
+    # to fit them.
+    _proc_w   = 2.0
+    _stat_w   = 1.0
+    _column_widths = [_proc_w] + [_stat_w] * 16
 
-    # Uniform row height — but tall enough to fit the longest
-    # procedure name in the current selection. Norris Specialty
-    # selects names like "Leukemia Lymphoma Evaluation Flow Cytome"
-    # (40+ chars) that wrap to 2-3 lines in the narrowed Procedure
-    # column; if we leave height at 36 px those rows get clipped
-    # and Plotly inserts an internal scrollbar that overlaps the
-    # header band. (Plotly Table's `cells.height` accepts a single
-    # number only — per-row lists raise ValueError on this version,
-    # so we can't right-size short-name rows; we pick the max
-    # estimate and accept a bit of vertical whitespace on the
-    # shorter-name rows in exchange for never clipping the
-    # longest.)
+    # Uniform row height — sized so every row fits BOTH the 2-line
+    # Range value AND any procedure-name wrapping. Plotly Table's
+    # `cells.height` is a single number on this version (per-row
+    # lists raise ValueError), so we pick the tallest required size
+    # and apply it everywhere. Short-name rows get extra whitespace,
+    # which is the acceptable trade vs clipping the Range or
+    # producing an internal scrollbar that overlaps the header.
     #
-    # Width math: on a 1200 px container Procedure gets
-    # ≈ 2.4/18.4 = 13% → ~156 px. At 12 px Inter, char width is
-    # ~7 px → ~22 chars per line. Estimate lines = ceil(chars/22),
-    # height = lines × 22 px line-height + 14 px padding, floored
-    # at 36 px. Generous so a slight wrap-point mismatch doesn't
-    # clip the bottom of the longest row.
+    # Inputs:
+    #   _LINE_PX   = 22 px per text line at 12-px Inter
+    #   _PADDING   = 14 px (top + bottom) of cell breathing room
+    #   _MIN_RANGE = 2 lines (Range cells: "min: X" + "max: Y")
+    # Procedure-name line count is estimated from char length /
+    # chars-per-line (~22 at the 130 px Procedure column width on
+    # a 1200 px container).
     import math as _math_tat
     _CHARS_PER_LINE = 22
     _LINE_PX        = 22
     _ROW_PADDING_PX = 14
-    _MIN_ROW_PX     = 36
+    _RANGE_LINES    = 2
+    _MIN_ROW_PX     = _RANGE_LINES * _LINE_PX + _ROW_PADDING_PX  # 58
 
     _row_h_estimates = [
         max(
@@ -1226,8 +1238,8 @@ def _render_tat_view(params: dict) -> None:
                     size=12,
                     color="#1a1a1a",
                 ),
-                # Single uniform height (see above) — Plotly Table
-                # rejects per-row lists on this version.
+                # Uniform height tall enough for the 2-line Range
+                # value (and any procedure-name wrap that needs more).
                 height=_row_height,
             ),
         )
