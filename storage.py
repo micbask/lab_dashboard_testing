@@ -30,10 +30,33 @@ import requests
 import streamlit as st
 
 from config import (
+    ALL_SOURCE_COLUMNS,
     PARTITION_DIR,
     PARTITION_INDEX_PATH,
     LEGACY_PARQUET_PATH,
 )
+
+
+# Columns that load_filtered_data's result always carries when there's
+# data — the source columns plus the derived date/hour helpers added
+# by _parquet_bytes_to_df. The empty-result helper below uses this
+# list so callers can do `df["complete_date"] == x` on a no-data
+# frame without a KeyError. The pre-Batch-2 DuckDB pipeline preserved
+# the schema implicitly via fetchdf(); after the partition-streaming
+# refactor we have to manufacture it on the empty paths ourselves.
+_RESULT_COLUMNS: list[str] = list(ALL_SOURCE_COLUMNS) + [
+    "complete_date", "hour",
+    "inlab_date",    "inlab_hour",
+    "drawn_date",    "drawn_hour",
+]
+
+
+def _empty_result_frame() -> pd.DataFrame:
+    """Empty DataFrame with the columns load_filtered_data returns when
+    it finds data. Use this on every no-data early-return path so
+    downstream consumers can rely on column presence.
+    """
+    return pd.DataFrame(columns=_RESULT_COLUMNS)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -391,7 +414,7 @@ def load_filtered_data(
     """
     index = _load_partition_index()
     if not index:
-        return pd.DataFrame()
+        return _empty_result_frame()
 
     if date_basis == "drawn":
         date_col = "drawn_date"
@@ -413,7 +436,7 @@ def load_filtered_data(
                 needed_keys.append(key)
 
     if not needed_keys:
-        return pd.DataFrame()
+        return _empty_result_frame()
 
     # Stream-filter per partition. Previously this function read every
     # needed partition, pd.concat'd them all into a single combined
@@ -469,7 +492,7 @@ def load_filtered_data(
             result_frames.append(sub)
 
     if not result_frames:
-        return pd.DataFrame()
+        return _empty_result_frame()
     return pd.concat(result_frames, ignore_index=True)
 
 
