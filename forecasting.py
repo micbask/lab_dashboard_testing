@@ -10,6 +10,7 @@ Forecasts are:
 """
 
 import base64
+import logging
 import pickle
 from datetime import date, timedelta
 
@@ -23,6 +24,8 @@ from config import (
     HOUR_LABELS,
 )
 from analytics.filters import EXCLUDED_PROCEDURES
+
+logger = logging.getLogger(__name__)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -78,6 +81,10 @@ def _read_forecast_from_github(map_type: str) -> dict | None:
             return None
         return pickle.loads(base64.b64decode(resp.json()["content"]))
     except Exception:
+        logger.exception(
+            "Failed to read/unpickle forecast for %s — UI will show 'No forecast available'",
+            map_type,
+        )
         return None
 
 

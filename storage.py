@@ -21,6 +21,7 @@ partition-by-partition).
 import base64
 import io
 import json
+import logging
 import time
 from datetime import date, timedelta
 from typing import Optional
@@ -35,6 +36,8 @@ from config import (
     PARTITION_INDEX_PATH,
     LEGACY_PARQUET_PATH,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # Columns that load_filtered_data's result always carries when there's
@@ -171,6 +174,7 @@ def _load_partition_index() -> dict:
     try:
         index = json.loads(raw.decode("utf-8"))
     except Exception:
+        logger.exception("Partition index parse failed; starting from empty index")
         index = {}
     _ss["_partition_index"] = index
     return _copy.deepcopy(index)
@@ -215,26 +219,36 @@ def df_to_parquet_bytes(df: pd.DataFrame) -> bytes:
 
 
 def _parquet_bytes_to_df(raw: bytes) -> pd.DataFrame:
-    """Deserialise Parquet bytes, ensuring derived helper columns exist."""
+    """Deserialise Parquet bytes, ensuring derived helper columns exist.
+
+    Also localizes the source datetime columns to LAB_TZ — partitions
+    written before the localize-at-ingest fix are tz-naive on disk;
+    this read-time pass yields uniform tz-aware data in memory so
+    concat across mixed-vintage partitions doesn't raise on dtype
+    mismatch. New partitions are already tz-aware on disk; the
+    localize call is idempotent (no-op when tz info is already
+    present). Derived `*_date` / `*_hour` helpers are built off the
+    tz-aware Series so calendar / hour-of-day bucketing reflects
+    LAB_TZ.
+    """
     df = pd.read_parquet(io.BytesIO(raw))
+    # Lazy import to avoid the storage.py → parsing.py top-level dep.
+    from parsing import _localize_lab_datetimes
+    df = _localize_lab_datetimes(df)
     if "complete_date" not in df.columns and "Date/Time - Complete" in df.columns:
-        df["complete_date"] = pd.to_datetime(df["Date/Time - Complete"]).dt.date
+        df["complete_date"] = df["Date/Time - Complete"].dt.date
     if "hour" not in df.columns and "Date/Time - Complete" in df.columns:
-        df["hour"] = pd.to_datetime(df["Date/Time - Complete"]).dt.hour.astype(int)
+        df["hour"] = df["Date/Time - Complete"].dt.hour.astype(int)
     if "Date/Time - In Lab" in df.columns:
         if "inlab_date" not in df.columns:
-            df["inlab_date"] = pd.to_datetime(df["Date/Time - In Lab"], errors="coerce").dt.date
+            df["inlab_date"] = df["Date/Time - In Lab"].dt.date
         if "inlab_hour" not in df.columns:
-            df["inlab_hour"] = pd.to_datetime(
-                df["Date/Time - In Lab"], errors="coerce"
-            ).dt.hour.astype("Int64")
+            df["inlab_hour"] = df["Date/Time - In Lab"].dt.hour.astype("Int64")
     if "Date/Time - Drawn" in df.columns:
         if "drawn_date" not in df.columns:
-            df["drawn_date"] = pd.to_datetime(df["Date/Time - Drawn"], errors="coerce").dt.date
+            df["drawn_date"] = df["Date/Time - Drawn"].dt.date
         if "drawn_hour" not in df.columns:
-            df["drawn_hour"] = pd.to_datetime(
-                df["Date/Time - Drawn"], errors="coerce"
-            ).dt.hour.astype("Int64")
+            df["drawn_hour"] = df["Date/Time - Drawn"].dt.hour.astype("Int64")
     return df
 
 
@@ -287,7 +301,10 @@ def _migrate_legacy_parquet() -> bool:
             _gh_delete_file(LEGACY_PARQUET_PATH, legacy_sha,
                             "Remove legacy monolithic parquet (migrated to partitions)")
         except Exception:
-            pass
+            logger.warning(
+                "Failed to delete legacy parquet after migration — file remains on disk",
+                exc_info=True,
+            )
 
     return True
 
@@ -651,7 +668,10 @@ def delete_date_range(start: date, end: date) -> dict:
                 _gh_delete_file(_partition_path(key), sha,
                                 f"Delete empty partition {key}")
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to delete empty partition %s — orphaned file on disk",
+                    key, exc_info=True,
+                )
             del index[key]
         else:
             pq_bytes = df_to_parquet_bytes(df)
@@ -682,7 +702,10 @@ def reset_all_data() -> None:
             _gh_delete_file(_partition_path(key), meta["sha"],
                             f"Delete partition {key} (full reset)")
         except Exception:
-            pass
+            logger.warning(
+                "Reset: failed to delete partition %s — orphaned on disk",
+                key, exc_info=True,
+            )
 
     _, sha = _gh_get_file(PARTITION_INDEX_PATH)
     if sha:
@@ -690,7 +713,10 @@ def reset_all_data() -> None:
             _gh_delete_file(PARTITION_INDEX_PATH, sha,
                             "Delete partition index (full reset)")
         except Exception:
-            pass
+            logger.warning(
+                "Reset: failed to delete partition index — file remains on disk",
+                exc_info=True,
+            )
 
     _, legacy_sha = _gh_get_file(LEGACY_PARQUET_PATH)
     if legacy_sha:
@@ -698,7 +724,10 @@ def reset_all_data() -> None:
             _gh_delete_file(LEGACY_PARQUET_PATH, legacy_sha,
                             "Delete legacy parquet (full reset)")
         except Exception:
-            pass
+            logger.warning(
+                "Reset: failed to delete legacy parquet — file remains on disk",
+                exc_info=True,
+            )
 
     _invalidate_index_cache()
 

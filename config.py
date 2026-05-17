@@ -128,6 +128,24 @@ LABEL_TO_HOUR = {v: k for k, v in HOUR_LABELS.items()}
 FORECAST_HORIZON = 14  # forecast days ahead
 
 # ═════════════════════════════════════════════════════════════════════════════
+# TIMEZONE
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# All lab timestamps are recorded in local time. Until this constant was
+# introduced the dashboard stored and computed everything tz-naive, which
+# silently mis-handled the two DST transition days per year:
+#   • Spring-forward: 2:00-3:00 AM doesn't exist → a "2:30" timestamp in
+#     that hour gets parsed as something nonsensical or becomes NaT.
+#   • Fall-back: 1:00-2:00 AM occurs twice → "1:30" is ambiguous.
+#
+# parsing.add_derived_columns localizes incoming timestamps to this
+# zone at ingest; storage._parquet_bytes_to_df does the same at read
+# time so partitions written before the localize-at-ingest fix
+# (tz-naive on disk) still surface as tz-aware in memory and the
+# dashboard sees uniform dtypes regardless of partition age.
+LAB_TZ = "America/Los_Angeles"
+
+# ═════════════════════════════════════════════════════════════════════════════
 # PARTITION PATHS
 # ═════════════════════════════════════════════════════════════════════════════
 PARTITION_DIR = "data/partitions"

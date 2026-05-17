@@ -774,9 +774,9 @@ def _render_tat_view(params: dict) -> None:
     st.markdown(
         '<div style="display:flex;flex-wrap:wrap;gap:18px;align-items:center;'
         'font-size:12px;color:rgba(0,0,0,0.6);margin-bottom:16px;">'
-        f'{_legend_chip(_TAT_ROUTINE_COLOR, f"RT (Routine, target &lt; {_rt_target_h}h)")}'
-        f'{_legend_chip(_TAT_STAT_COLOR,    f"ST (Stat, target &lt; {_st_target_h}h)")}'
-        f'{_legend_chip(_TAT_TS_COLOR,      f"TS (Time Study, target &lt; {_ts_target_h}h)")}'
+        f'{_legend_chip(_TAT_ROUTINE_COLOR, f"RT (Routine, target ≤ {_rt_target_h}h)")}'
+        f'{_legend_chip(_TAT_STAT_COLOR,    f"ST (Stat, target ≤ {_st_target_h}h)")}'
+        f'{_legend_chip(_TAT_TS_COLOR,      f"TS (Time Study, target ≤ {_ts_target_h}h)")}'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -851,9 +851,9 @@ def _render_tat_view(params: dict) -> None:
         "All": "rgba(68, 68, 68, 0.08)",
     }
     _priority_target_labels = {
-        "RT":  f"&lt; {_rt_target_h}h",
-        "ST":  f"&lt; {_st_target_h}h",
-        "TS":  f"&lt; {_ts_target_h}h",
+        "RT":  f"≤ {_rt_target_h}h",
+        "ST":  f"≤ {_st_target_h}h",
+        "TS":  f"≤ {_ts_target_h}h",
         "All": "-",
     }
 
@@ -891,13 +891,13 @@ def _render_tat_view(params: dict) -> None:
                 _thresholds = _subset.loc[
                     _known_mask, "Collection Priority"
                 ].map(_tat_targets).astype(float)
-                _meets = int((_known_tats < _thresholds).sum())
+                _meets = int((_known_tats <= _thresholds).sum())
                 _pct = float(_meets / int(_known_mask.sum()) * 100.0)
             else:
                 _pct = None
         else:
             _threshold = _tat_targets[_prio]
-            _pct = float((_tats < _threshold).mean() * 100.0)
+            _pct = float((_tats <= _threshold).mean() * 100.0)
         _summary_rows.append((_prio, _n, _mean, _pct, _mn, _mx))
 
     # PLAIN text for the Priority column — no HTML. The deployed
@@ -1092,20 +1092,20 @@ def _render_tat_view(params: dict) -> None:
     # the All column is self-evident).
     _tat_headers = [
         "Procedure",
-        # RT group (target < 2h)
+        # RT group (target ≤ 2h)
         f"<span style='color:{_TAT_ROUTINE_COLOR}'>RT</span><br>n",
         f"<span style='color:{_TAT_ROUTINE_COLOR}'>RT</span><br>Mean",
-        f"<span style='color:{_TAT_ROUTINE_COLOR}'>RT</span><br>% &lt;{_rt_target_h}h",
+        f"<span style='color:{_TAT_ROUTINE_COLOR}'>RT</span><br>% ≤{_rt_target_h}h",
         f"<span style='color:{_TAT_ROUTINE_COLOR}'>RT</span><br>Range",
-        # ST group (target < 1h)
+        # ST group (target ≤ 1h)
         f"<span style='color:{_TAT_STAT_COLOR}'>ST</span><br>n",
         f"<span style='color:{_TAT_STAT_COLOR}'>ST</span><br>Mean",
-        f"<span style='color:{_TAT_STAT_COLOR}'>ST</span><br>% &lt;{_st_target_h}h",
+        f"<span style='color:{_TAT_STAT_COLOR}'>ST</span><br>% ≤{_st_target_h}h",
         f"<span style='color:{_TAT_STAT_COLOR}'>ST</span><br>Range",
-        # TS group (target < 1h)
+        # TS group (target ≤ 1h)
         f"<span style='color:{_TAT_TS_COLOR}'>TS</span><br>n",
         f"<span style='color:{_TAT_TS_COLOR}'>TS</span><br>Mean",
-        f"<span style='color:{_TAT_TS_COLOR}'>TS</span><br>% &lt;{_ts_target_h}h",
+        f"<span style='color:{_TAT_TS_COLOR}'>TS</span><br>% ≤{_ts_target_h}h",
         f"<span style='color:{_TAT_TS_COLOR}'>TS</span><br>Range",
         # All group (weighted per-sample target)
         f"<span style='color:{_TAT_COMBINED_COLOR}'>All</span><br>n",
@@ -1595,7 +1595,14 @@ def _handle_pending_upload(map_type: str, upload_list, ss) -> None:
             )
 
             ss.pop("pending_upload", None)
-            st.cache_data.clear()
+            # Drop the cached partition index so the next get_index_hash()
+            # call recomputes. The new hash flows through every
+            # @st.cache_data fn that includes idx_hash in its key —
+            # which is every data-loading path — so they re-fetch on
+            # the next access. The previous explicit st.cache_data.clear()
+            # here also nuked unrelated caches (forecasts, phlebotomy
+            # staff, layout caches) shared across all sessions on the
+            # worker, which is overkill for a routine ingest.
             ss.pop("_partition_index", None)
             _upload_status.update(
                 label=f"Done - added {stats['rows_added']:,} rows.",

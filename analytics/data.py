@@ -432,15 +432,15 @@ def get_top_procedures_by_volume(
 def build_tat_table(
     tat_df: pd.DataFrame,
     selected_procedures: list,
-    targets: dict[str, int] | None = None,
+    targets: dict[str, int],
 ) -> pd.DataFrame:
     """Build a per-procedure TAT statistics table with priority-grouped
     MultiIndex columns.
 
     Four groups are computed for each procedure:
-      • RT  — Collection Priority == 'RT'   (Routine, target < 2h)
-      • ST  — Collection Priority == 'ST'   (Stat,    target < 1h)
-      • TS  — Collection Priority == 'TS'   (Time Study, target < 1h)
+      • RT  — Collection Priority == 'RT'   (Routine, target ≤ 2h)
+      • ST  — Collection Priority == 'ST'   (Stat,    target ≤ 1h)
+      • TS  — Collection Priority == 'TS'   (Time Study, target ≤ 1h)
       • All — every row regardless of priority (weighted % within
               target: each sample evaluated against its own priority's
               threshold from TAT_TARGET_MINUTES)
@@ -474,7 +474,7 @@ def build_tat_table(
     if tat_df is None or tat_df.empty or not selected_procedures:
         return pd.DataFrame(columns=columns)
 
-    _targets = targets if targets is not None else TAT_TARGET_MINUTES
+    _targets = targets
 
     def _group_stats(group_df: pd.DataFrame, threshold_minutes: int) -> list:
         """Return [n, Mean, % within target, Min, Max] for a
@@ -486,7 +486,7 @@ def build_tat_table(
         return [
             int(len(tats)),
             float(tats.mean()),
-            float((tats < threshold_minutes).mean() * 100.0),
+            float((tats <= threshold_minutes).mean() * 100.0),
             float(tats.min()),
             float(tats.max()),
         ]
@@ -513,7 +513,7 @@ def build_tat_table(
         if known_mask.any():
             known_tats = tats[known_mask]
             thresholds = proc_rows.loc[known_mask, "Collection Priority"].map(_targets).astype(float)
-            meets = int((known_tats < thresholds).sum())
+            meets = int((known_tats <= thresholds).sum())
             pct = float(meets / int(known_mask.sum()) * 100.0)
         else:
             pct = None

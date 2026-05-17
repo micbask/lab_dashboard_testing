@@ -338,66 +338,24 @@ section[data-testid="stSidebar"] {
 /* Streamlit ≥1.50 rewrote the sidebar to use the `re-resizable`
    library. The right-edge drag handle is now a child of
    [data-testid="stSidebar"] with `cursor: col-resize` set INLINE on
-   the wrapper div (no data-testid, no role="separator" anymore).
-   Inline styles beat external CSS unless we match them on the style
-   attribute and use !important. Hide everything we can identify as
-   the handle:
-     • `div[style*="col-resize"]` — the inline-styled wrapper.
-     • Legacy `[data-testid="stSidebarResizer"]` and
-       `div[role="separator"]` for older Streamlit builds. */
+   the wrapper div (no data-testid, no role="separator" anymore in
+   1.57.0 — confirmed by inspecting the rendered DOM). Inline styles
+   beat external CSS unless we match them on the style attribute and
+   use !important.
+   Companion JS shim (inject_sidebar_resize_kill) installs a
+   MutationObserver that re-applies these overrides on every
+   styled-components rerender — needed because Emotion can race
+   the stylesheet and re-emit the inline style. */
 [data-testid="stSidebar"] div[style*="col-resize"],
-[data-testid="stSidebar"] div[style*="col-resize"] *,
-section[data-testid="stSidebar"] div[style*="col-resize"],
-section[data-testid="stSidebar"] div[style*="col-resize"] *,
-[data-testid="stSidebar"] [data-testid="stSidebarResizer"],
-section[data-testid="stSidebar"] [data-testid="stSidebarResizer"],
-section[data-testid="stSidebar"] div[role="separator"] {
+[data-testid="stSidebar"] div[style*="col-resize"] * {
     display: none !important;
     cursor: default !important;
     pointer-events: none !important;
 }
-/* Force the cursor to default everywhere on the sidebar — Streamlit
-   sets cursor: col-resize / ew-resize on the right-edge resizer
-   element (and on its ::before / ::after pseudo-elements in some
-   versions) which still triggers the double-arrow cursor on hover
-   even when the resizer itself is display:none. We override on every
-   plausible carrier so the right edge feels static. */
-section[data-testid="stSidebar"],
-section[data-testid="stSidebar"]::before,
-section[data-testid="stSidebar"] > div,
-section[data-testid="stSidebar"] [data-testid="stSidebarResizer"],
-section[data-testid="stSidebar"] [data-testid="stSidebarResizer"]::before,
-section[data-testid="stSidebar"] [data-testid="stSidebarResizer"]::after,
-section[data-testid="stSidebar"] div[role="separator"] {
+/* Fallback: any other cursor declarations on the sidebar itself
+   default to arrow. Cheaper than enumerating every nested element. */
+section[data-testid="stSidebar"] {
     cursor: default !important;
-}
-/* Invisible right-edge overlay — final defense against the col-resize
-   cursor. The previous round of fixes targeted every named resizer
-   element we could find (stSidebarResizer, div[role=separator], the
-   section itself + its pseudo-elements) but the cursor still leaked
-   through, which means in this Streamlit version the cursor is being
-   applied to an element we can't enumerate (possibly a sibling outside
-   the section, possibly via inline style set by Streamlit's JS, or via
-   a pseudo-element on a wrapper we don't know the selector for).
-   This overlay sidesteps all that: it's an empty ::after pseudo-element
-   anchored to the sidebar's right edge, extending 6 px outside and
-   6 px inside the edge, with `cursor: default !important`,
-   `pointer-events: auto`, and a high z-index. Any cursor-bearing
-   element underneath is covered by this strip; hovering at the right
-   edge hits the overlay instead and the cursor stays as the default
-   arrow. The strip is fully transparent so it's visually a no-op. */
-section[data-testid="stSidebar"]::after {
-    content: '' !important;
-    display: block !important;
-    position: absolute !important;
-    top: 0 !important;
-    right: -6px !important;
-    width: 12px !important;
-    height: 100% !important;
-    background: transparent !important;
-    cursor: default !important;
-    pointer-events: auto !important;
-    z-index: 99999 !important;
 }
 /* Small muted caption used for date ranges + hour-range readouts under
    their respective inputs. 10 px / 40 % white, no extra spacing.
