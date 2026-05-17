@@ -1513,20 +1513,10 @@ html body [class*="st-key-top_n_btn_"] button div {
    design.
    ═══════════════════════════════════════════════════════ */
 .app-header-stripe {
-    /* 2 px USC cardinal stripe directly under the dark header bar.
-       margin-bottom was 40 px which produced a chasm between the
-       stripe and whatever followed (KPI cards on analytics, the
-       st.info disclaimer on pre-analytics). Streamlit's
-       stElementContainer wrappers prevent margin collapse, so the
-       40 px wins outright over any margin-top the next element sets.
-       Dropped to 8 px so it matches the 0.5rem margin-bottom on
-       st.info — produces a symmetric gap above/below the
-       pre-analytics disclaimer banner and tightens the analytics
-       stripe → KPI cards spacing without making it cramped. */
     height: 2px !important;
     background: #790A26 !important;
     margin-top: 0 !important;
-    margin-bottom: 8px !important;
+    margin-bottom: 40px !important;
     padding: 0 !important;
     border: none !important;
     position: relative !important;
@@ -1584,6 +1574,17 @@ html body [class*="st-key-top_n_btn_"] button div {
 }
 [data-testid="stAlert"] {
     margin-bottom: 0.5rem !important;
+}
+/* Scoped override: the pre-analytics completed-orders disclaimer
+   sits directly under the cardinal stripe, which has a 40 px
+   margin-bottom that we can't shrink globally (analytics views
+   rely on it for KPI breathing room). A negative margin-top here
+   absorbs ~32 px of the stripe's gap so the disclaimer ends up
+   ~8 px below the stripe — symmetric with its own 8 px margin-
+   bottom to the KPI cards. Targeted via st.container(key=...)
+   on the pre-analytics side so the rule only fires there. */
+.st-key-pa_data_caveat [data-testid="stAlert"] {
+    margin-top: -32px !important;
 }
 .status-chip {
     display: inline-block;

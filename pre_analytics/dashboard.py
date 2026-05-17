@@ -328,10 +328,16 @@ def render(params: dict, ss) -> None:
         # to match the forecast disclaimer banner on the analytics
         # dashboard — same visual language for "interpret these
         # numbers with this in mind" callouts across both dashboards.
-        st.info(
-            "Data reflects **completed orders only**. Recent draws on "
-            "samples still in progress are not yet included."
-        )
+        # Wrapped in a keyed container so a scoped CSS rule
+        # (.st-key-pa_data_caveat) can pull it tight against the
+        # cardinal stripe via a negative margin-top — without
+        # affecting the stripe → KPI gap on analytics views, which
+        # need that 40 px of breathing room.
+        with st.container(key="pa_data_caveat"):
+            st.info(
+                "Data reflects **completed orders only**. Recent draws on "
+                "samples still in progress are not yet included."
+            )
 
         _idx_hash = get_index_hash() if storage_is_configured() else ""
         _draw_df = load_draw_data(_pa_ds, pa_view, index_hash=_idx_hash)
