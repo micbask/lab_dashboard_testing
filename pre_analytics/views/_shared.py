@@ -636,6 +636,25 @@ def render_pa_hourly_bar(draw_df, location, hour_range,
             ),
         )
     )
+
+    # Dashed reference line at the day's mean hourly volume. Lets
+    # the user spot above/below-average hours at a glance without
+    # eyeballing every bar height. Computed across hours that had
+    # any draws — the all-zero pre-shift hours would deflate the
+    # mean if included, making most working hours appear "above
+    # average" trivially.
+    _nonzero_y = [v for v in _y_draws if v > 0]
+    if _nonzero_y:
+        _mean_draws = sum(_nonzero_y) / len(_nonzero_y)
+        _fig.add_hline(
+            y=_mean_draws,
+            line_dash="dash",
+            line_color="#aaaaaa",
+            line_width=1,
+            annotation_text=f"avg {_mean_draws:.0f}",
+            annotation_position="top right",
+            annotation_font=dict(size=10, color="#666666"),
+        )
     _fig.update_layout(
         height=280,
         margin=dict(l=10, r=10, t=10, b=40),
