@@ -251,7 +251,9 @@ def build_weekday_pivot(
         return None, {}
 
     df = _month_df.copy()
-    df["weekday"] = pd.to_datetime(df["complete_date"]).dt.dayofweek
+    _complete_dt = pd.to_datetime(df["complete_date"])
+    df["weekday"]   = _complete_dt.dt.dayofweek
+    df["date_only"] = _complete_dt.dt.date
 
     pivot = (
         df.pivot_table(
@@ -260,11 +262,24 @@ def build_weekday_pivot(
         ).reindex(index=list(range(7)), columns=list(range(24)), fill_value=0)
     )
 
-    month_start = date(year, month, 1)
-    month_end   = date(year, month, _cal.monthrange(year, month)[1])
-    wd_counts: dict = {wd: 0 for wd in range(7)}
-    for d in pd.date_range(month_start, month_end):
-        wd_counts[d.dayofweek] += 1
+    # Divisor = count of DISTINCT DATES per weekday that actually
+    # appear in the data, not the count of calendar weekdays in the
+    # month. The calendar-count approach (previously used here) was
+    # wrong on partial months: in May 2026 with data through May 18,
+    # the month has 4 calendar Mondays (May 4/11/18/25) but only ~2
+    # have actually elapsed with data, so dividing accumulated
+    # Monday draws by 4 silently deflated the per-Monday average by
+    # ~2×. Matching the pre-analytics divisor here is also robust to
+    # mid-month data gaps (uploaded data missing a Wednesday is
+    # treated correctly — divisor drops by 1 instead of still using
+    # the calendar count). `year`/`month` no longer needed for the
+    # divisor but kept in the signature for cache-key compatibility
+    # and to keep the call sites unchanged.
+    _ = (year, month)
+    wd_counts: dict = {
+        wd: int(df.loc[df["weekday"] == wd, "date_only"].nunique())
+        for wd in range(7)
+    }
 
     for wd in range(7):
         pivot.loc[wd] = pivot.loc[wd] / max(wd_counts[wd], 1)
