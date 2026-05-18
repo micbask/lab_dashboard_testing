@@ -1502,12 +1502,27 @@ html body [class*="st-key-top_n_btn_"] [data-testid="stBaseButton-primary"] div 
 html body [class*="st-key-top_n_btn_"] button {
     font-size: 12px !important;
     line-height: 1.5 !important;
-    padding: 0 6px !important;
+    padding: 2px 10px !important;
     min-height: 0 !important;
     height: auto !important;
     /* Stop the button label from wrapping mid-word — "10"/"20"/"30"
        and "All" all stay on a single line regardless of viewport. */
     white-space: nowrap !important;
+    /* Subtle pill background so the four buttons read as a
+       clickable control group, not plain numbered text. Active
+       (selected) variant gets the existing primary-button styling
+       (cardinal maroon), which provides the contrast for the
+       active state. Inactive buttons stay neutral but visibly
+       chip-shaped. */
+    background: rgba(0, 0, 0, 0.05) !important;
+    border: 1px solid rgba(0, 0, 0, 0.08) !important;
+    border-radius: 12px !important;
+    color: #555 !important;
+    transition: background 0.15s ease, border-color 0.15s ease !important;
+}
+html body [class*="st-key-top_n_btn_"] button:hover {
+    background: rgba(0, 0, 0, 0.09) !important;
+    border-color: rgba(0, 0, 0, 0.14) !important;
 }
 html body [class*="st-key-top_n_btn_"] button p,
 html body [class*="st-key-top_n_btn_"] button div {
