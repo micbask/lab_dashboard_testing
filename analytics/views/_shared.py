@@ -137,31 +137,10 @@ def build_analytics_heatmap(
         (lambda v: str(int(round(v)))) if text_decimals == 0
         else (lambda v: f"{v:.{text_decimals}f}")
     )
-    # Per-cell text colour: dark (#1a1a1a) on the light end of the
-    # gradient, white on the dark end. Without this, Viridis_r's
-    # high-value cells (deep purple, top ~10% of scale) render dark
-    # text on a dark background — fails WCAG AA contrast (~2.7:1) and
-    # is unreadable for low-vision / sunlit-screen users. plotly's
-    # heatmap textfont.color only accepts a single colour, so we
-    # inline the per-cell styling via <span> in the text array (HTML
-    # is supported in heatmap text).
-    # Threshold at 0.55 * zmax_hours: cells above this point are dark
-    # enough in Viridis_r / similar dark-end gradients that black text
-    # stops working. Light-end gradients like "Oranges" rarely cross
-    # this threshold, so they stay readable too.
-    _switch = 0.55 * zmax_hours
-    text_hours = []
-    for row in z_hours:
-        text_row = []
-        for v in row:
-            if v <= 0:
-                text_row.append("")
-            else:
-                _color = "white" if v > _switch else "#1a1a1a"
-                text_row.append(
-                    f"<span style='color:{_color}'>{_fmt(v)}</span>"
-                )
-        text_hours.append(text_row)
+    text_hours = [
+        [_fmt(v) if v > 0 else "" for v in row]
+        for row in z_hours
+    ]
 
     x_hours_coords = list(range(len(hour_cols)))
     x_total_coord  = len(hour_cols)
