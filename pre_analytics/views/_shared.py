@@ -241,19 +241,16 @@ def render_pa_subplot_heatmaps(draw_df, location, view, hour_range,
     for _i, _d in enumerate(_shift_data, start=1):
         _z_arr = _d["pivot"].values.astype(float)
         _z_masked = np.where(_z_arr == 0, np.nan, _z_arr).tolist()
-        # Cell text: integer counts for Daily (exact values),
-        # one decimal for Monthly (per-tech-active-day averages
-        # are typically fractional and rounding loses signal).
-        if view == "Monthly":
-            _text_hours = [
-                [f"{v:.1f}" if v > 0 else "" for v in row]
-                for row in _z_arr
-            ]
-        else:
-            _text_hours = [
-                [str(int(round(v))) if v > 0 else "" for v in row]
-                for row in _z_arr
-            ]
+        # Cell text: integer counts for both Daily (exact values)
+        # and Monthly (rounded per-tech-active-day averages). The
+        # fractional precision of the underlying Monthly averages
+        # is preserved in the hover popup (which renders avg with
+        # one decimal), so the rounded cells trade only display
+        # noise — not signal — for a cleaner grid.
+        _text_hours = [
+            [str(int(round(v))) if v > 0 else "" for v in row]
+            for row in _z_arr
+        ]
 
         # Per-cell hover detail (Daily = per-draw breakdown,
         # Monthly = avg with per-tech N).
@@ -368,7 +365,7 @@ def render_pa_subplot_heatmaps(draw_df, location, view, hour_range,
                 _d_val = _n_d_tech / _denom
                 _s_val = _n_s_tech / _denom
                 _cell_txt = (
-                    f"{_d_val:.1f}" if _n_d_tech > 0 else ""
+                    str(int(round(_d_val))) if _n_d_tech > 0 else ""
                 )
                 _hover = (
                     f"{_d_val:.1f} avg draws/active day · "
@@ -867,7 +864,7 @@ def render_pa_weekday_pattern(draw_df, location, hour_range,
 
     _z_masked = np.where(_z_arr == 0, np.nan, _z_arr).tolist()
     _text_cells = [
-        [f"{v:.1f}" if v > 0 else "" for v in row]
+        [str(int(round(v))) if v > 0 else "" for v in row]
         for row in _z_arr
     ]
 
