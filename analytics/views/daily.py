@@ -41,6 +41,15 @@ def render_daily_view(params: dict, ss) -> None:
     hour_range         = params["hour_range"]
     _is_forecast_view  = params["is_forecast_date"]
 
+    # Render the header FIRST — before any data load or early-return
+    # branch — so the bench title and Analytics / Pre-Analytics toggle
+    # are always present. Previously this was called after the data
+    # path resolved, which meant the In-Lab-with-no-data return on
+    # line 73-75 (and the no-forecast-data return below) left the
+    # user on a page with no header and no way to switch dashboards.
+    date_str = pd.Timestamp(selected_date).strftime("%B %d, %Y")
+    render_header(map_type, date_str + (" · forecast" if _is_forecast_view else ""))
+
     if _is_forecast_view:
         _fc_panel_data = load_forecasts(map_type)
         if _fc_panel_data is None:
@@ -78,9 +87,6 @@ def render_daily_view(params: dict, ss) -> None:
             filtered_df, selected_date, hour_range,
             top_n=st.session_state.get("analytics_top_n", 10),
         )
-
-    date_str = pd.Timestamp(selected_date).strftime("%B %d, %Y")
-    render_header(map_type, date_str + (" · forecast" if _is_forecast_view else ""))
 
     if _is_forecast_view:
         st.markdown(
