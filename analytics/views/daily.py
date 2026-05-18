@@ -292,6 +292,24 @@ def render_daily_view(params: dict, ss) -> None:
             hovertemplate="<b>%{x}</b><br>Volume: %{y}<extra></extra>",
         )
     )
+
+    # Dashed reference line at the day's mean hourly volume, computed
+    # over NON-ZERO hours only — pre-shift / overnight zeros would
+    # deflate the mean if included, making almost every working hour
+    # appear trivially "above average." Mirrors the same treatment on
+    # the pre-analytics hourly bar.
+    _nonzero_y = [v for v in _hourly["Total Volume"].tolist() if v > 0]
+    if _nonzero_y:
+        _mean_vol = sum(_nonzero_y) / len(_nonzero_y)
+        _hourly_fig.add_hline(
+            y=_mean_vol,
+            line_dash="dash",
+            line_color="#aaaaaa",
+            line_width=1,
+            annotation_text=f"avg {_mean_vol:.0f}",
+            annotation_position="top right",
+            annotation_font=dict(size=10, color="#666666"),
+        )
     _hourly_fig.update_layout(
         height=280,
         margin=dict(l=10, r=10, t=10, b=40),
