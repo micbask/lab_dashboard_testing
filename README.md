@@ -1,6 +1,6 @@
 # Lab Productivity Dashboard
 
-A Streamlit app for USC Keck / Norris Clinical Laboratory operational analytics.
+A Streamlit app for Laboratory operational analytics.
 Two dashboards backed by the same partitioned Parquet store:
 
 - **Analytics** — completed volume, in-lab activity, turnaround-time (TAT)
