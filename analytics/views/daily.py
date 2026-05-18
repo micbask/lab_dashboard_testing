@@ -83,20 +83,29 @@ def render_daily_view(params: dict, ss) -> None:
     render_header(map_type, date_str + (" · forecast" if _is_forecast_view else ""))
 
     if _is_forecast_view:
-        st.markdown(
-            '<div style="background:#1C1917;color:#e0e0e0;border-left:4px solid #FF9800;'
-            'border-radius:6px;padding:0.85rem 1rem;font-size:0.82rem;margin-bottom:0.5rem;">'
-            "This forecast is generated using Prophet, a forecasting ML model trained on all "
-            "available historical data. It learns weekly patterns in procedure "
-            "volume by hour of day. Predictions are based on limited training data and should "
-            "be treated as estimates only."
-            "</div>",
-            unsafe_allow_html=True,
-        )
+        # Single consolidated forecast callout — previously this slot
+        # had TWO near-duplicate warnings stacked (a dark Prophet-
+        # description block + an st.info "viewing forecast" banner)
+        # that said essentially the same thing twice. Now: one
+        # st.info banner with the headline message, Prophet
+        # methodology in a collapsible "Technical details" expander
+        # so the dense paragraph doesn't push the chart down for
+        # users who already know what they're looking at.
         st.info(
-            "Viewing **forecast** - these are predicted values, not actual completions. "
-            "Use the date picker or ◄ Prev / Next ► to return to historical dates."
+            "**Forecast mode** — these are predicted values for "
+            f"**{pd.Timestamp(selected_date).strftime('%B %d, %Y')}**, "
+            "not actual completions. Use the date picker or "
+            "◄ Prev / Next ► to return to historical dates."
         )
+        with st.expander("Technical details"):
+            st.markdown(
+                "Forecasts are generated using **Prophet**, a "
+                "time-series ML model trained on all available "
+                "historical data. It learns weekly patterns in "
+                "procedure volume by hour of day. Predictions are "
+                "based on limited training data and should be "
+                "treated as estimates only."
+            )
 
     if pivot is None:
         if _is_forecast_view:
