@@ -598,6 +598,11 @@ def render_tat_view(params: dict) -> None:
             annotation_text=f"{'/'.join(_prios)} target ({_fmt_target_label(_t_min)})",
             annotation_position="top",
             annotation_font=dict(size=10, color="#666666"),
+            # Push the label ~14 px below where Plotly's "top" position
+            # would otherwise land it (flush with the plot-area top edge,
+            # which collides with the priority legend that sits at
+            # y=1.02). Negative yshift = downward in pixel space.
+            annotation_yshift=-14,
         )
 
     _bar_h = max(320, len(_bar_procs) * 60 + 100)
