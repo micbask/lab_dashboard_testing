@@ -312,7 +312,15 @@ def select_available_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def clean_procedure_names(df: pd.DataFrame) -> pd.DataFrame:
-    """Mirror of parsing.clean_procedure_names — keep in sync.
+    """Mirror of parsing.clean_procedure_names.
+
+    Canonical rules live in `/procedure_aliases.py` at the repo root —
+    if you edit either side (whitespace normalisations or display
+    aliases), update that file AND mirror the change here. This script
+    is intentionally kept free of repo-internal imports so it can run
+    standalone outside the project tree; the read-time alias pass in
+    storage.load_filtered_data acts as a safety net if the two ever
+    drift apart on a future change.
 
     Two passes: collapse \\xa0 variants to a canonical double-space
     form, then apply display aliases (CBC w diff / CBC no diff / CMP /

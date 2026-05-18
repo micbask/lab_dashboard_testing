@@ -410,7 +410,7 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
 
             # Footer beneath the card (stays inside the centered column).
             st.markdown(
-                '<div class="login-footer">v3.1 · May 2026</div>',
+                '<div class="login-footer">v3.2 · May 2026</div>',
                 unsafe_allow_html=True,
             )
 
@@ -464,7 +464,7 @@ else:
 st.markdown(
     '<div style="text-align: center; font-size: 12px; '
     'color: rgba(0, 0, 0, 0.4); padding: 32px 0 16px 0;">'
-    'v3.1 · May 2026'
+    'v3.2 · May 2026'
     '</div>',
     unsafe_allow_html=True,
 )

@@ -44,9 +44,18 @@ def _install_streamlit_stub() -> None:
     def _noop_cache(*dargs, **dkwargs):
         # Supports both `@st.cache_data` and `@st.cache_data(ttl=300, ...)`
         if dargs and callable(dargs[0]) and not dkwargs:
-            return dargs[0]
+            _fn = dargs[0]
+            _fn.clear = lambda: None
+            return _fn
 
         def _decorator(fn):
+            # `.clear()` is attached because storage.py calls
+            # `_read_partition_cached.clear()` after each ingest for
+            # memory hygiene on the Streamlit worker. In this one-shot
+            # GitHub Actions context there's nothing to clear (the
+            # process exits anyway), so a no-op is the right behavior
+            # — but the attribute MUST exist or the call AttributeErrors.
+            fn.clear = lambda: None
             return fn
 
         return _decorator
