@@ -71,41 +71,54 @@ logger = logging.getLogger(__name__)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def clean_procedure_names(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise procedure-name encoding artefacts AND apply display
-    aliases.
+    """Normalise procedure-name encoding artefacts (whitespace only).
 
-    Two passes:
-      1. Collapse the \\xa0 (non-breaking space) variants of
-         "Complete Blood Count With Auto Differen" to a single canonical
-         double-space form. The upstream source emits a few flavours of
-         this name depending on export pathway; we squash them all to
-         one string so downstream filtering / dedup behaves predictably.
+    Collapses the \\xa0 (non-breaking space) variants of "Complete
+    Blood Count With Auto Differen" to a single canonical
+    double-space form. The upstream source emits a few flavours of
+    this name depending on export pathway; we squash them all here
+    so downstream filtering / dedup behaves predictably.
 
-      2. Replace the verbose canonical procedure names with the short
-         display aliases the dashboards use everywhere:
-             "Complete Blood Count With Auto  Differen" → "CBC w diff"
-             "Comprehensive Metabolic Panel"           → "CMP"
-             "Basic Metabolic Panel"                   → "BMP"
-             "Complete Blood Count NO Auto Differentia"→ "CBC no diff"
-         The pass-1 normalisation runs BEFORE the alias rename so the
-         "With Auto  Differen" target lines up with what's actually in
-         the column. The same function is also invoked at read time in
-         storage.load_filtered_data, so already-stored data picks up
-         the new short names without a Parquet migration.
+    This pass is safe to apply at INGEST — it normalises the raw
+    string only, no display-layer aliasing happens here. Verbose
+    canonical names (e.g. "Comprehensive Metabolic Panel") remain
+    intact on disk; the short display labels ("CMP" etc.) are
+    applied at READ time by `apply_display_aliases` and only ever
+    exist in the in-memory dataframes the dashboard renders.
     """
     if "Order Procedure" not in df.columns:
         return df
 
     # Rules sourced from procedure_aliases.py so this implementation and
     # the mirror in scripts/email_ingest.py can't drift silently apart.
-    from procedure_aliases import (
-        PROCEDURE_WHITESPACE_NORMALIZATIONS,
-        PROCEDURE_DISPLAY_ALIASES,
-    )
+    from procedure_aliases import PROCEDURE_WHITESPACE_NORMALIZATIONS
     for _src, _dst in PROCEDURE_WHITESPACE_NORMALIZATIONS:
         df["Order Procedure"] = df["Order Procedure"].str.replace(
             _src, _dst, regex=False,
         )
+    return df
+
+
+def apply_display_aliases(df: pd.DataFrame) -> pd.DataFrame:
+    """Replace verbose canonical procedure names with short display
+    aliases ("Comprehensive Metabolic Panel" → "CMP", etc.).
+
+    Display-only: this pass is called at READ time inside
+    storage.load_filtered_data, never at ingest. The parquet
+    partitions on disk keep the canonical clinical names so the
+    raw-data layer stays a faithful record of what the source
+    exported; the short labels exist only in the in-memory frames
+    the dashboards render. Adding / changing an alias is therefore
+    a code-only change with no Parquet migration.
+
+    Idempotent: aliases map canonical → short, and short labels
+    aren't keys in the dict, so calling this twice (or running it
+    over a partition that already happens to contain a short
+    label) is a no-op for the already-aliased rows.
+    """
+    if "Order Procedure" not in df.columns:
+        return df
+    from procedure_aliases import PROCEDURE_DISPLAY_ALIASES
     df["Order Procedure"] = df["Order Procedure"].replace(PROCEDURE_DISPLAY_ALIASES)
     return df
 

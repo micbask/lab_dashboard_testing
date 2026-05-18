@@ -312,19 +312,20 @@ def select_available_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def clean_procedure_names(df: pd.DataFrame) -> pd.DataFrame:
-    """Mirror of parsing.clean_procedure_names.
+    """Mirror of parsing.clean_procedure_names — whitespace only.
 
-    Canonical rules live in `/procedure_aliases.py` at the repo root —
-    if you edit either side (whitespace normalisations or display
-    aliases), update that file AND mirror the change here. This script
-    is intentionally kept free of repo-internal imports so it can run
-    standalone outside the project tree; the read-time alias pass in
-    storage.load_filtered_data acts as a safety net if the two ever
-    drift apart on a future change.
+    Collapses the \\xa0 (non-breaking space) variants of the CBC
+    w/diff name to a canonical double-space form. Display aliasing
+    (CMP / BMP / CBC w diff / CBC no diff) is INTENTIONALLY not
+    applied here: the parquet partitions on disk keep the verbose
+    canonical clinical names, and the short labels are applied at
+    READ time by storage.apply_display_aliases when the dashboard
+    queries the data.
 
-    Two passes: collapse \\xa0 variants to a canonical double-space
-    form, then apply display aliases (CBC w diff / CBC no diff / CMP /
-    BMP).
+    This script is kept free of repo-internal imports so it can run
+    standalone outside the project tree; the whitespace-normalisation
+    rules are duplicated rather than imported. If the rules in
+    /procedure_aliases.py change, update both files together.
     """
     if "Order Procedure" not in df.columns:
         return df
@@ -338,13 +339,6 @@ def clean_procedure_names(df: pd.DataFrame) -> pd.DataFrame:
         "Complete Blood Count With Auto  Differen",
         regex=False,
     )
-    _aliases = {
-        "Complete Blood Count With Auto  Differen": "CBC w diff",
-        "Complete Blood Count NO Auto Differentia": "CBC no diff",
-        "Comprehensive Metabolic Panel":            "CMP",
-        "Basic Metabolic Panel":                    "BMP",
-    }
-    df["Order Procedure"] = df["Order Procedure"].replace(_aliases)
     return df
 
 
