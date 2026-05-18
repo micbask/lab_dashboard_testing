@@ -598,11 +598,6 @@ def render_tat_view(params: dict) -> None:
             annotation_text=f"{'/'.join(_prios)} target ({_fmt_target_label(_t_min)})",
             annotation_position="top",
             annotation_font=dict(size=10, color="#666666"),
-            # Push the label ~14 px below where Plotly's "top" position
-            # would otherwise land it (flush with the plot-area top edge,
-            # which collides with the priority legend that sits at
-            # y=1.02). Negative yshift = downward in pixel space.
-            annotation_yshift=-14,
         )
 
     _bar_h = max(320, len(_bar_procs) * 60 + 100)
@@ -614,10 +609,16 @@ def render_tat_view(params: dict) -> None:
         dragmode=False,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=10, r=10, t=50, b=30),
+        # Bumped top margin from 50 → 70 px so the legend can sit
+        # higher above the plot area without getting clipped — buys
+        # the breathing room between the legend chips and the
+        # "RT/ST/TS target (Nh)" labels that float at y=1 (plot-area
+        # top edge). Sized so the gap is visible but the chart's
+        # vertical real estate isn't noticeably reduced.
+        margin=dict(l=10, r=10, t=70, b=30),
         legend=dict(
             orientation="h",
-            yanchor="bottom", y=1.02,
+            yanchor="bottom", y=1.12,
             xanchor="left",   x=0,
             font=dict(size=12, family="Inter, system-ui, sans-serif"),
         ),
