@@ -1469,6 +1469,14 @@ html body [class*="st-key-top_n_btn_"] [data-testid="stBaseButton-primary"] div 
         clamped one. */
 [data-testid="stHorizontalBlock"]:has([class*="st-key-top_n_btn_"]) {
     align-items: baseline !important;
+    /* On narrow viewports the six-column layout (legend prose +
+       "Showing top" label + four Top-N buttons) used to compress
+       past its minimum, with button text breaking mid-word ("10"
+       wrapping to "1" / "0") and the "Showing top" prefix splitting
+       across two lines. flex-wrap lets the row drop to a second
+       line cleanly when it can't fit horizontally. */
+    flex-wrap: wrap !important;
+    row-gap: 4px !important;
 }
 [data-testid="stHorizontalBlock"]:has([class*="st-key-top_n_btn_"])
     > [data-testid="stColumn"] {
@@ -1485,6 +1493,11 @@ html body [class*="st-key-top_n_btn_"] [data-testid="stBaseButton-primary"] div 
 .top-n-label {
     text-align: right;
     padding-right: 4px !important;
+    /* Keeps "Showing top" together so the prefix label is never
+       broken across lines on narrow viewports. Paired with the
+       parent flex-wrap above, the WHOLE label drops to a new line
+       if the row can't fit. */
+    white-space: nowrap !important;
 }
 html body [class*="st-key-top_n_btn_"] button {
     font-size: 12px !important;
@@ -1492,6 +1505,9 @@ html body [class*="st-key-top_n_btn_"] button {
     padding: 0 6px !important;
     min-height: 0 !important;
     height: auto !important;
+    /* Stop the button label from wrapping mid-word — "10"/"20"/"30"
+       and "All" all stay on a single line regardless of viewport. */
+    white-space: nowrap !important;
 }
 html body [class*="st-key-top_n_btn_"] button p,
 html body [class*="st-key-top_n_btn_"] button div {

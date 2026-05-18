@@ -259,6 +259,10 @@ def render_tat_view(params: dict) -> None:
         height=_summary_total_h,
         margin=dict(l=4, r=4, t=4, b=4),
         paper_bgcolor="rgba(0,0,0,0)",
+        # Let the chart's width track its iframe container so it
+        # shrinks with the viewport instead of overflowing and being
+        # clipped (the iframe runs with scrolling=False below).
+        autosize=True,
     )
     import plotly.io as _pio_summary
     import streamlit.components.v1 as _components_summary
@@ -266,7 +270,12 @@ def render_tat_view(params: dict) -> None:
         _summary_fig,
         include_plotlyjs="cdn",
         full_html=False,
-        config={"displayModeBar": False, "responsive": False},
+        # responsive=True enables plotly.js's window-resize listener
+        # so the table re-lays out when the user narrows the browser.
+        # Without it, the chart stays at its default-computed width
+        # and the right-most columns ("% within target", "Range")
+        # get clipped on narrow viewports.
+        config={"displayModeBar": False, "responsive": True},
     )
     _components_summary.html(
         _summary_html,
