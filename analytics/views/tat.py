@@ -219,9 +219,14 @@ def render_tat_view(params: dict) -> None:
         data=go.Table(
             columnwidth=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
             header=dict(
+                # "% within target" promoted to position 3 (right
+                # after n) — it's the headline compliance KPI for
+                # this table; Mean TAT / Target / Range are
+                # supporting context. Previous order buried the KPI
+                # in column 5.
                 values=[
-                    "Priority", "n", "Mean TAT", "Target",
-                    "% within target", "Range",
+                    "Priority", "n", "% within target",
+                    "Mean TAT", "Target", "Range",
                 ],
                 fill_color="#ffffff",
                 line_color="#e2e8f0",
@@ -237,9 +242,9 @@ def render_tat_view(params: dict) -> None:
                 values=[
                     _summary_priority_col,
                     _summary_n_col,
+                    _summary_pct_col,
                     _summary_mean_col,
                     _summary_targ_col,
-                    _summary_pct_col,
                     _summary_range_col,
                 ],
                 fill_color=_summary_cell_fills,
