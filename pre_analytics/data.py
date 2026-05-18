@@ -1,3 +1,5 @@
+import calendar as _cal
+import os as _os
 import re as _re
 from datetime import date
 
@@ -63,7 +65,6 @@ def load_phlebotomy_staff() -> dict:
     two comma-separated fields are Location and Shift; everything before
     that is the name.
     """
-    import os as _os
     _path = _os.path.join(
         _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
         "config", "phlebotomy_staff.csv",
@@ -115,8 +116,6 @@ def load_draw_data(date_str: str, view: str, index_hash: str = "") -> pd.DataFra
     change (otherwise users would see stale draw data for up to 5 min
     after an ingest from a separate session).
     """
-    import calendar as _cal2
-
     _empty = pd.DataFrame(
         columns=["display_name", "location", "shift", "draw_datetime", "hour", "samples"]
     )
@@ -127,7 +126,7 @@ def load_draw_data(date_str: str, view: str, index_hash: str = "") -> pd.DataFra
     else:
         _yr, _mo = int(date_str[:4]), int(date_str[5:7])
         _start = date(_yr, _mo, 1)
-        _end   = date(_yr, _mo, _cal2.monthrange(_yr, _mo)[1])
+        _end   = date(_yr, _mo, _cal.monthrange(_yr, _mo)[1])
 
     # Pre-Analytics scopes by Date/Time - Drawn (the column the heatmap's
     # hour axis is built from). Analytics uses the default
@@ -192,8 +191,6 @@ def build_draw_pivot(
     months (a 30-day month with 22 active days would inflate the avg
     by ~36%).
     """
-    import calendar as _calbdp
-
     _staff = load_phlebotomy_staff()
 
     _all_techs = sorted(
@@ -232,7 +229,7 @@ def build_draw_pivot(
             # for the current month it's days-so-far so the average
             # isn't deflated against a not-yet-elapsed month-end.
             _month_start = date(year, month, 1)
-            _month_end   = date(year, month, _calbdp.monthrange(year, month)[1])
+            _month_end   = date(year, month, _cal.monthrange(year, month)[1])
             _today       = date.today()
             _eff_end     = min(_month_end, _today)
             _n_days      = max((_eff_end - _month_start).days + 1, 1)

@@ -39,6 +39,7 @@ from ui_components import (
     render_header, render_data_management_sidebar,
 )
 from analytics.views._shared import VALID_TOP_N
+from formatting import format_hour_12h
 from analytics.views.tat import render_tat_view
 from analytics.views.daily import render_daily_view
 from analytics.views.monthly import render_monthly_view
@@ -311,17 +312,12 @@ def render_sidebar(ss) -> dict:
                         unsafe_allow_html=True,
                     )
 
-                    def _fmt_h(h: int) -> str:
-                        hr12 = 12 if h % 12 == 0 else h % 12
-                        suf  = "AM" if h < 12 else "PM"
-                        return f"{hr12}:00 {suf}"
-
                     hour_range = st.slider(
                         "Hours", 0, 23, (0, 23), label_visibility="collapsed"
                     )
                     st.markdown(
                         f'<div class="sidebar-meta-caption">'
-                        f'{_fmt_h(hour_range[0])} → {_fmt_h(hour_range[1])}'
+                        f'{format_hour_12h(hour_range[0])} → {format_hour_12h(hour_range[1])}'
                         f'</div>',
                         unsafe_allow_html=True,
                     )

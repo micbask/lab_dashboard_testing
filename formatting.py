@@ -70,3 +70,16 @@ def format_range(min_v, max_v) -> str:
     ):
         return "-"
     return f"{format_tat_compact(min_v)}-{format_tat_compact(max_v)}"
+
+
+def format_hour_12h(h: int) -> str:
+    """Format a 24-hour integer as a 12-hour clock label (e.g. 14 → '2:00 PM').
+
+    Used by the sidebar hour-range slider readouts on both dashboards
+    — previously each dashboard had its own nested copy of this
+    function inside render_sidebar (_fmt_h / _pa_fmt_h, both
+    byte-identical).
+    """
+    hr12 = 12 if h % 12 == 0 else h % 12
+    suf  = "AM" if h < 12 else "PM"
+    return f"{hr12}:00 {suf}"

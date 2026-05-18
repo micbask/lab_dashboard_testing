@@ -70,8 +70,6 @@ def render_pa_subplot_heatmaps(draw_df, location, view, hour_range,
     findBin hover-precision threshold (~120 px), so cell tooltips
     may be flaky on those — trade-off for uniform cell sizing.
     """
-    import calendar as _calp
-
     _h_start, _h_end = hour_range
     _hours_subset = list(range(_h_start, _h_end + 1))
     _n_hours = len(_hours_subset)

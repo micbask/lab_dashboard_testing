@@ -19,6 +19,7 @@ from pre_analytics.views._shared import (
     render_pa_subplot_heatmaps, render_pa_hourly_bar,
     render_pa_weekday_pattern,
 )
+from formatting import format_hour_12h
 
 
 def render_sidebar(ss) -> dict:
@@ -240,11 +241,6 @@ def render_sidebar(ss) -> dict:
             unsafe_allow_html=True,
         )
 
-        def _pa_fmt_h(h: int) -> str:
-            hr12 = 12 if h % 12 == 0 else h % 12
-            suf  = "AM" if h < 12 else "PM"
-            return f"{hr12}:00 {suf}"
-
         pa_hour_range = st.slider(
             "Hours", 0, 23, (0, 23),
             label_visibility="collapsed",
@@ -252,7 +248,7 @@ def render_sidebar(ss) -> dict:
         )
         st.markdown(
             f'<div class="sidebar-meta-caption">'
-            f'{_pa_fmt_h(pa_hour_range[0])} → {_pa_fmt_h(pa_hour_range[1])}'
+            f'{format_hour_12h(pa_hour_range[0])} → {format_hour_12h(pa_hour_range[1])}'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -311,9 +307,8 @@ def render(params: dict, ss) -> None:
         # Monthly-view per-day averaging in build_draw_pivot uses
         # calendar days rather than days-with-data.
         if len(_pa_ds) == 7:
-            import calendar as _calpa
             _pa_yr, _pa_mo = int(_pa_ds[:4]), int(_pa_ds[5:7])
-            _pa_date_label = f"{_calpa.month_name[_pa_mo]} {_pa_yr}"
+            _pa_date_label = f"{_cal.month_name[_pa_mo]} {_pa_yr}"
         else:
             _pa_d = pd.Timestamp(_pa_ds).to_pydatetime().date()
             _pa_yr, _pa_mo = _pa_d.year, _pa_d.month
