@@ -191,11 +191,7 @@ def render_pa_subplot_heatmaps(draw_df, location, view, hour_range,
         })
 
     if not _shift_data:
-        st.info(
-            "No draws recorded for this date / hour range. "
-            "Try a different date or widen the **Hour Range** "
-            "slider in the sidebar."
-        )
+        st.info("No data found.")
         return
 
     # Global zmax for consistent YlOrBr gradient across subplots.
@@ -601,10 +597,7 @@ def render_pa_hourly_bar(draw_df, location, hour_range,
     )
 
     if _df.empty:
-        st.info(
-            "No hourly draws to chart for this date and hour range. "
-            "Try a different date or widen the **Hour Range** slider."
-        )
+        st.info("No data found.")
         return
 
     # Aggregate per hour: total draws, total samples, distinct techs.

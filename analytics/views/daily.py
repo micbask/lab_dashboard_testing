@@ -71,13 +71,7 @@ def render_daily_view(params: dict, ss) -> None:
             )
 
         if time_basis == "In-Lab" and filtered_df.empty:
-            st.warning(
-                "No **In-Lab** start times recorded for this date. "
-                "This usually means samples haven't been received yet "
-                "or the time field is missing from your data uploads — "
-                "try switching **Time Basis** to **Completed** to see "
-                "data based on completion times instead."
-            )
+            st.warning("No 'Date/Time - In Lab' data available.")
             return
 
         pivot, _df_date_hour, _df_date, hours = build_pivot(
@@ -115,17 +109,9 @@ def render_daily_view(params: dict, ss) -> None:
 
     if pivot is None:
         if _is_forecast_view:
-            st.warning(
-                "No forecast predictions available for this date. "
-                "Try a date within the forecast horizon, or switch to "
-                "a past date to view historical completions."
-            )
+            st.warning("No forecast predictions available.")
         else:
-            st.warning(
-                "No data found for this date. Pick a different date "
-                "from the sidebar, or upload more data via "
-                "**Data Management** in the sidebar."
-            )
+            st.warning("No data found.")
         return
 
     _hour_cols = [c for c in pivot.columns if c != "Total"]

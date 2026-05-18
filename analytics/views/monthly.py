@@ -59,11 +59,7 @@ def render_monthly_view(params: dict, ss) -> None:
         )
 
     if time_basis == "In-Lab" and filtered_df.empty:
-        st.warning(
-            "No **In-Lab** start times recorded for this month. "
-            "Try switching **Time Basis** to **Completed** in the "
-            "sidebar to see data based on completion times instead."
-        )
+        st.warning("No 'Date/Time - In Lab' data available.")
         return
 
     monthly_pivot, n_days, month_raw_df = build_monthly_pivot(
