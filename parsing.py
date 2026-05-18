@@ -14,7 +14,7 @@ Handles:
 """
 
 import io
-import re
+import logging
 import xml.etree.ElementTree as ET
 
 import pandas as pd
@@ -23,8 +23,47 @@ from config import (
     ALL_SOURCE_COLUMNS,
     DATETIME_COLUMNS,
     FORWARD_FILL_COLS,
+    LAB_TZ,
     RESOURCE_REMAPS,
 )
+
+
+def _localize_lab_datetimes(df: pd.DataFrame) -> pd.DataFrame:
+    """Localize every DATETIME_COLUMNS column to LAB_TZ in place.
+
+    No-op for columns already tz-aware (idempotent). Naive timestamps
+    are assumed to be in LAB_TZ. DST edge cases:
+      • Nonexistent times (spring-forward 2-3 AM) become NaT —
+        clinical timestamps almost never fall in that hour and the
+        few that do are data-entry errors worth surfacing as NaT.
+      • Ambiguous times (fall-back 1-2 AM appears twice) are
+        disambiguated as `infer` first; on infer failure they too
+        become NaT rather than crash. `dt.hour` / `dt.date` on
+        tz-aware data still return values in LAB_TZ so downstream
+        bucketing logic doesn't change.
+    """
+    for col in DATETIME_COLUMNS:
+        if col not in df.columns:
+            continue
+        s = df[col]
+        if s.dtype.kind != "M":
+            continue
+        # Already tz-aware? skip — re-localizing would raise.
+        if getattr(s.dt, "tz", None) is not None:
+            continue
+        try:
+            df[col] = s.dt.tz_localize(
+                LAB_TZ, nonexistent="NaT", ambiguous="infer",
+            )
+        except Exception:
+            # Some pandas versions / inputs can't infer ambiguous
+            # times; fall back to NaT for those.
+            df[col] = s.dt.tz_localize(
+                LAB_TZ, nonexistent="NaT", ambiguous="NaT",
+            )
+    return df
+
+logger = logging.getLogger(__name__)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -32,19 +71,55 @@ from config import (
 # ═════════════════════════════════════════════════════════════════════════════
 
 def clean_procedure_names(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise known procedure-name encoding artefacts (\\xa0 variants)."""
+    """Normalise procedure-name encoding artefacts (whitespace only).
+
+    Collapses the \\xa0 (non-breaking space) variants of "Complete
+    Blood Count With Auto Differen" to a single canonical
+    double-space form. The upstream source emits a few flavours of
+    this name depending on export pathway; we squash them all here
+    so downstream filtering / dedup behaves predictably.
+
+    This pass is safe to apply at INGEST — it normalises the raw
+    string only, no display-layer aliasing happens here. Verbose
+    canonical names (e.g. "Comprehensive Metabolic Panel") remain
+    intact on disk; the short display labels ("CMP" etc.) are
+    applied at READ time by `apply_display_aliases` and only ever
+    exist in the in-memory dataframes the dashboard renders.
+    """
     if "Order Procedure" not in df.columns:
         return df
-    df["Order Procedure"] = df["Order Procedure"].str.replace(
-        "Complete Blood Count With Auto\xa0 Differen",
-        "Complete Blood Count With Auto  Differen",
-        regex=False,
-    )
-    df["Order Procedure"] = df["Order Procedure"].str.replace(
-        "Complete Blood Count With Auto\xa0Differen",
-        "Complete Blood Count With Auto  Differen",
-        regex=False,
-    )
+
+    # Rules sourced from procedure_aliases.py so this implementation and
+    # the mirror in scripts/email_ingest.py can't drift silently apart.
+    from procedure_aliases import PROCEDURE_WHITESPACE_NORMALIZATIONS
+    for _src, _dst in PROCEDURE_WHITESPACE_NORMALIZATIONS:
+        df["Order Procedure"] = df["Order Procedure"].str.replace(
+            _src, _dst, regex=False,
+        )
+    return df
+
+
+def apply_display_aliases(df: pd.DataFrame) -> pd.DataFrame:
+    """Replace verbose canonical procedure names with short display
+    aliases ("Comprehensive Metabolic Panel" → "CMP", etc.).
+
+    Display-only: this pass is called at READ time inside
+    storage.load_filtered_data, never at ingest. The parquet
+    partitions on disk keep the canonical clinical names so the
+    raw-data layer stays a faithful record of what the source
+    exported; the short labels exist only in the in-memory frames
+    the dashboards render. Adding / changing an alias is therefore
+    a code-only change with no Parquet migration.
+
+    Idempotent: aliases map canonical → short, and short labels
+    aren't keys in the dict, so calling this twice (or running it
+    over a partition that already happens to contain a short
+    label) is a no-op for the already-aliased rows.
+    """
+    if "Order Procedure" not in df.columns:
+        return df
+    from procedure_aliases import PROCEDURE_DISPLAY_ALIASES
+    df["Order Procedure"] = df["Order Procedure"].replace(PROCEDURE_DISPLAY_ALIASES)
     return df
 
 
@@ -291,12 +366,32 @@ def apply_resource_remaps(df: pd.DataFrame) -> pd.DataFrame:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def add_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Add hour, complete_date, inlab_hour, inlab_date derived columns."""
+    """Add hour, complete_date, inlab_hour, inlab_date derived columns.
+
+    Datetime columns are coerced via pd.to_datetime then localized to
+    LAB_TZ (America/Los_Angeles) so DST transition timestamps surface
+    as NaT rather than silently producing the wrong hour. The derived
+    `*_date` / `*_hour` helpers are then read off the tz-aware Series
+    so the calendar-date / hour-of-day bucketing reflects LAB_TZ.
+    """
+    df = _localize_lab_datetimes(df)
     if "Date/Time - Complete" in df.columns:
         df["Date/Time - Complete"] = pd.to_datetime(
             df["Date/Time - Complete"], errors="coerce"
         )
+        df = _localize_lab_datetimes(df)
+        _before = len(df)
         df = df.dropna(subset=["Date/Time - Complete"])
+        _dropped = _before - len(df)
+        if _dropped:
+            # Rows with unparseable Date/Time - Complete get silently
+            # discarded; surface the count so operators can spot
+            # upstream format drift.
+            logger.warning(
+                "add_derived_columns dropped %d/%d rows with NaT in "
+                "'Date/Time - Complete' (unparseable timestamp)",
+                _dropped, _before,
+            )
         df["hour"] = df["Date/Time - Complete"].dt.hour.astype(int)
         df["complete_date"] = df["Date/Time - Complete"].dt.date
 
@@ -304,6 +399,7 @@ def add_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
         df["Date/Time - In Lab"] = pd.to_datetime(
             df["Date/Time - In Lab"], errors="coerce"
         )
+        df = _localize_lab_datetimes(df)
         df["inlab_hour"] = df["Date/Time - In Lab"].dt.hour.astype("Int64")
         df["inlab_date"] = df["Date/Time - In Lab"].dt.date
     else:

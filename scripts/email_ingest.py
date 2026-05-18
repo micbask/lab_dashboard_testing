@@ -312,6 +312,21 @@ def select_available_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def clean_procedure_names(df: pd.DataFrame) -> pd.DataFrame:
+    """Mirror of parsing.clean_procedure_names — whitespace only.
+
+    Collapses the \\xa0 (non-breaking space) variants of the CBC
+    w/diff name to a canonical double-space form. Display aliasing
+    (CMP / BMP / CBC w diff / CBC no diff) is INTENTIONALLY not
+    applied here: the parquet partitions on disk keep the verbose
+    canonical clinical names, and the short labels are applied at
+    READ time by storage.apply_display_aliases when the dashboard
+    queries the data.
+
+    This script is kept free of repo-internal imports so it can run
+    standalone outside the project tree; the whitespace-normalisation
+    rules are duplicated rather than imported. If the rules in
+    /procedure_aliases.py change, update both files together.
+    """
     if "Order Procedure" not in df.columns:
         return df
     df["Order Procedure"] = df["Order Procedure"].str.replace(

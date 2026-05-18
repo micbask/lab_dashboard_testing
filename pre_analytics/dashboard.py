@@ -4,7 +4,7 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
-from config import HOUR_LABELS
+from config import HOUR_LABELS, PRE_ANALYTICS_LOCATIONS
 from storage import (
     storage_is_configured, get_data_summary, ensure_partitioned_storage,
     reset_all_data, delete_date_range, get_index_hash,
@@ -12,11 +12,45 @@ from storage import (
 from ui_components import (
     metric_card, render_header, render_data_management_sidebar,
 )
-from pre_analytics.data import load_draw_data, build_draw_pivot
+from pre_analytics.data import (
+    load_draw_data, build_draw_pivot, build_draw_count_pivot,
+)
+from pre_analytics.views._shared import (
+    render_pa_subplot_heatmaps, render_pa_hourly_bar,
+    render_pa_weekday_pattern,
+)
+from formatting import format_hour_12h
 
 
 def render_sidebar(ss) -> dict:
     """Render pre-analytics sidebar widgets. Returns params dict for render()."""
+    # ── URL → session_state hydration ──────────────────────────────────
+    # Same pattern as analytics: hydrate ONLY when the widget's
+    # session_state key is absent (first render or fresh tab from a
+    # shared link). Re-reading on every rerun would clobber the user's
+    # click because the URL still holds the OLD value until the END of
+    # this function syncs the new one back.
+    _qp = st.query_params
+    _qp_loc = _qp.get("loc")
+    if (
+        _qp_loc
+        and _qp_loc in PRE_ANALYTICS_LOCATIONS
+        and "pa_location_radio" not in st.session_state
+    ):
+        st.session_state["pa_location_radio"] = _qp_loc
+    _qp_view = _qp.get("view")
+    if (
+        _qp_view in ("Daily", "Monthly")
+        and "pa_view_radio" not in st.session_state
+    ):
+        st.session_state["pa_view_radio"] = _qp_view
+    _qp_date = _qp.get("date")
+    if _qp_date and "pa_date_picker" not in st.session_state:
+        try:
+            st.session_state["pa_date_picker"] = date.fromisoformat(_qp_date)
+        except ValueError:
+            pass
+
     with st.sidebar:
         # ── Pending background tasks (Issue 2A — DM parity with
         # analytics). Mirror analytics' handler block so that Reset /
@@ -52,7 +86,7 @@ def render_sidebar(ss) -> dict:
             unsafe_allow_html=True,
         )
         pa_location = st.radio(
-            "Location", ["Keck", "Norris", "HC3"],
+            "Location", PRE_ANALYTICS_LOCATIONS,
             horizontal=True, label_visibility="collapsed",
             key="pa_location_radio",
         )
@@ -207,11 +241,6 @@ def render_sidebar(ss) -> dict:
             unsafe_allow_html=True,
         )
 
-        def _pa_fmt_h(h: int) -> str:
-            hr12 = 12 if h % 12 == 0 else h % 12
-            suf  = "AM" if h < 12 else "PM"
-            return f"{hr12}:00 {suf}"
-
         pa_hour_range = st.slider(
             "Hours", 0, 23, (0, 23),
             label_visibility="collapsed",
@@ -219,7 +248,7 @@ def render_sidebar(ss) -> dict:
         )
         st.markdown(
             f'<div class="sidebar-meta-caption">'
-            f'{_pa_fmt_h(pa_hour_range[0])} → {_pa_fmt_h(pa_hour_range[1])}'
+            f'{format_hour_12h(pa_hour_range[0])} → {format_hour_12h(pa_hour_range[1])}'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -242,6 +271,21 @@ def render_sidebar(ss) -> dict:
                 load_err=_pa_dm_load_err,
             )
 
+    # ── session_state → URL sync ───────────────────────────────────────
+    # Only write pre-analytics filters when we're actually on the
+    # pre-analytics dashboard (otherwise the analytics sync would
+    # clobber these keys). _pa_date_str is "YYYY-MM-DD" for Daily and
+    # "YYYY-MM" for Monthly — same value the shared-link consumer will
+    # parse back via date.fromisoformat() (for Daily) or year/month
+    # split (for Monthly).
+    if st.query_params.get("dashboard") == "pre_analytics":
+        st.query_params["loc"]  = pa_location
+        st.query_params["view"] = pa_view
+        if _pa_date_str:
+            st.query_params["date"] = _pa_date_str
+        elif "date" in st.query_params:
+            del st.query_params["date"]
+
     return {
         "pa_location": pa_location,
         "pa_view": pa_view,
@@ -258,16 +302,13 @@ def render(params: dict, ss) -> None:
     pa_h_start, pa_h_end = params.get("pa_hour_range", (0, 23))
 
     try:
-        import plotly.graph_objects as _pgo
-        import numpy as _np
 
         # Parse the active date string into year/month so the
         # Monthly-view per-day averaging in build_draw_pivot uses
         # calendar days rather than days-with-data.
         if len(_pa_ds) == 7:
-            import calendar as _calpa
             _pa_yr, _pa_mo = int(_pa_ds[:4]), int(_pa_ds[5:7])
-            _pa_date_label = f"{_calpa.month_name[_pa_mo]} {_pa_yr}"
+            _pa_date_label = f"{_cal.month_name[_pa_mo]} {_pa_yr}"
         else:
             _pa_d = pd.Timestamp(_pa_ds).to_pydatetime().date()
             _pa_yr, _pa_mo = _pa_d.year, _pa_d.month
@@ -275,8 +316,26 @@ def render(params: dict, ss) -> None:
 
         render_header(pa_location, _pa_date_label)
 
+        # Source-data caveat: the underlying dataset is completed
+        # orders only. Recent days look thinner than they really are
+        # because draws on samples still in-progress are silently
+        # excluded until those samples complete. Rendered via st.info
+        # to match the forecast disclaimer banner on the analytics
+        # dashboard — same visual language for "interpret these
+        # numbers with this in mind" callouts across both dashboards.
+        # Wrapped in a keyed container so a scoped CSS rule
+        # (.st-key-pa_data_caveat) can pull it tight against the
+        # cardinal stripe via a negative margin-top — without
+        # affecting the stripe → KPI gap on analytics views, which
+        # need that 40 px of breathing room.
+        with st.container(key="pa_data_caveat"):
+            st.info(
+                "Data reflects **completed orders only**. Recent draws on "
+                "samples still in progress are not yet included."
+            )
+
         _idx_hash = get_index_hash() if storage_is_configured() else ""
-        _draw_df, _draw_debug = load_draw_data(_pa_ds, pa_view, index_hash=_idx_hash)
+        _draw_df = load_draw_data(_pa_ds, pa_view, index_hash=_idx_hash)
 
         # KPI cards reflect the selected hour range: filter both by
         # location and by hour ∈ [pa_h_start, pa_h_end].
@@ -312,213 +371,71 @@ def render(params: dict, ss) -> None:
 
         st.markdown('<hr class="metrics-divider">', unsafe_allow_html=True)
 
-        _PA_HOUR_LABELS = [HOUR_LABELS[h] for h in range(24)]
-
-        _PA_SHIFT_ORDER = {
-            "Keck":   ["Early AM", "AM", "PM", "NS"],
-            "Norris": ["AM", "PM", "NS"],
-            "HC3":    [None],
-        }
-
-        def _render_pa_heatmap(draw_df, location, shift, view, heatmap_key,
-                               hour_range):
-            _h_start, _h_end = hour_range
-            _hours_subset = list(range(_h_start, _h_end + 1))
-
-            # Build the full 0..23 pivot then slice to the selected hours.
-            # Pass year/month so Monthly view divides by calendar days
-            # (not days-with-data, which would overstate sparse months).
-            _pivot = build_draw_pivot(
-                draw_df, location, shift, view,
-                year=_pa_yr, month=_pa_mo,
-            )
-            _pivot = _pivot[_hours_subset]
-            _techs = _pivot.index.tolist()
-            _x     = [HOUR_LABELS[h] for h in _hours_subset]
-
-            _z_arr   = _pivot.values.astype(float)
-            _flat    = [v for row in _z_arr for v in row if v > 0]
-            _vmax_pa = float(_np.percentile(_flat, 95)) if _flat else 1.0
-            _vmax_pa = max(_vmax_pa, 1.0)
-
-            _text_vals = [
-                [str(int(round(v))) if v > 0 else "" for v in row]
-                for row in _z_arr
-            ]
-
-            # Mask zero cells to NaN so hoverongaps=False can suppress the
-            # tooltip on empty cells.
-            _z = _np.where(_z_arr == 0, _np.nan, _z_arr).tolist()
-
-            _heatmap_kwargs = dict(
-                z=_z,
-                x=_x,
-                y=_techs,
-                text=_text_vals,
-                texttemplate="%{text}",
-                hoverinfo="text",
-                colorscale="YlOrBr",
-                zmin=0,
-                zmax=_vmax_pa,
-                xgap=1,
-                ygap=1,
-                showscale=False,
-            )
-
-            if view == "Monthly":
-                # Monthly cells are per-day averages — show only the average,
-                # no per-draw breakdown.
-                _heatmap_kwargs["hovertemplate"] = (
-                    "<b>%{y} @ %{x}</b><br>Avg draws: %{z:.1f}<extra></extra>"
-                )
-            else:
-                # Daily — build per-cell draw breakdown for the customdata tooltip.
-                if shift is None:
-                    _sub = (
-                        draw_df[draw_df["location"] == location]
-                        if not draw_df.empty else draw_df
-                    )
-                else:
-                    _sub = (
-                        draw_df[
-                            (draw_df["location"] == location)
-                            & (draw_df["shift"] == shift)
-                        ] if not draw_df.empty else draw_df
-                    )
-
-                _details: dict = {}
-                if not _sub.empty:
-                    for (_tech, _hour), _grp in _sub.groupby(
-                        ["display_name", "hour"]
-                    ):
-                        _grp_sorted = _grp.sort_values("draw_datetime")
-                        _n_d = len(_grp_sorted)
-                        _n_s = int(_grp_sorted["samples"].sum())
-                        _lines = [
-                            f"{_n_d} draw{'s' if _n_d != 1 else ''} · "
-                            f"{_n_s} total sample{'s' if _n_s != 1 else ''}"
-                        ]
-                        for _, _r in _grp_sorted.iterrows():
-                            _t = pd.to_datetime(_r["draw_datetime"]).strftime("%H:%M")
-                            _s = int(_r["samples"])
-                            _lines.append(
-                                f"{_t} - {_s} sample{'s' if _s != 1 else ''}"
-                            )
-                        _details[(_tech, int(_hour))] = "<br>".join(_lines)
-
-                _heatmap_kwargs["customdata"] = [
-                    [_details.get((_tech, _h), None) for _h in _hours_subset]
-                    for _tech in _techs
-                ]
-                _heatmap_kwargs["hovertemplate"] = (
-                    "<b>%{y} @ %{x}</b><br>%{customdata}<extra></extra>"
-                )
-
-            _fig = _pgo.Figure(data=_pgo.Heatmap(**_heatmap_kwargs))
-            _fig.update_traces(hoverongaps=False)
-
-            # Row-driven chart height — TARGET: each cell is exactly
-            # 28 px tall, regardless of how many tech rows the section
-            # has. Achieved by `total_height = n * 28 + chrome` where
-            # chrome is the EXACT vertical space Plotly subtracts from
-            # `layout.height` to render the surrounding axes.
-            #
-            # Chrome breakdown (verified against plotly.js source —
-            # `src/plots/plots.js::initMargins()` does
-            # `plot_h = layout.height - margin.t - margin.b`):
-            #   • margin.t = 10
-            #   • margin.b = 30  (enough for the 10-pt x-axis tick
-            #     labels + descender + small padding; previously was
-            #     10 which forced labels to render outside the
-            #     reserved margin — invisible/clipped — but the chrome
-            #     SUBTRACTED from layout.height stayed at 20 px,
-            #     causing the prior `+100` budget to LEAK 80 px into
-            #     the plot area; those 80 px got distributed across
-            #     cells, producing `28 + 80/n` per cell — i.e. 68 px
-            #     in a 2-row chart vs 37 px in a 9-row chart, the
-            #     ~2× ratio the user reported)
-            #   • Total chrome = 40 px
-            #
-            # automargin=True is on the y-axis only — Plotly's
-            # MARGIN_MAPPING.height ties t/b to x-axes (NOT y), so
-            # yaxis automargin only affects L/R margins. The x-axis
-            # has no automargin, so chrome is constant at exactly
-            # 40 px regardless of label content.
-            #
-            # Per-cell after this change:  (n*28 + 40 - 40) / n = 28
-            # for ALL n. Uniform.
-            _plot_h = len(_techs) * 28 + 40
-            _fig.update_layout(
-                height=_plot_h,
-                margin=dict(l=10, r=10, t=10, b=30),
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                dragmode=False,
-                xaxis=dict(
-                    tickfont=dict(size=10), side="bottom", fixedrange=True,
-                ),
-                yaxis=dict(
-                    tickfont=dict(size=10), autorange="reversed",
-                    fixedrange=True, automargin=True,
-                ),
-                hoverlabel=dict(
-                    bgcolor="white",
-                    bordercolor="#6F1828",
-                    font=dict(
-                        size=12,
-                        family="Inter, system-ui, sans-serif",
-                        color="#1a1a1a",
-                    ),
-                    align="left",
-                ),
-            )
-
-            st.plotly_chart(
-                _fig,
-                use_container_width=True,
-                key=heatmap_key,
-                config={
-                    "staticPlot": False,
-                    "scrollZoom": False,
-                    "displayModeBar": False,
-                },
-            )
 
         # Shared section header + colourscale legend, rendered ONCE above
         # all the per-shift heatmaps (matches the analytics dashboard's
         # "Completed Volume by Procedure & Hour" header / legend pair).
         # The YlOrBr swatch colours are the actual low/high stops of the
         # Plotly built-in colorscale used on the heatmaps below.
+        # NOTE: no section-level "N = X days" here because Monthly view
+        # uses PER-TECH active-day denominators (different N per row),
+        # so a single section-level N would be misleading. The N for
+        # each tech is surfaced in the cell hover instead.
         st.markdown(
             '<div class="section-heading">Draws by tech &amp; hour</div>',
             unsafe_allow_html=True,
         )
+        # View-aware legend prefix — Monthly cells are averages (avg
+        # draws per active day for that tech / hour); Daily cells are
+        # exact counts.
+        if pa_view == "Monthly":
+            _legend_values = "Values = avg draws per day in hour. "
+        else:
+            _legend_values = "Values = draws per hour. "
         st.markdown(
-            '<div class="heatmap-legend">'
-            'Colour scale: &nbsp;'
-            '<strong style="color:#fff7bc;">■</strong> low &nbsp;→&nbsp; '
-            '<strong style="color:#8c2d04;">■</strong> high. &nbsp;'
-            'Higher values indicate more draws per hour.'
-            '</div>',
+            f'<div class="heatmap-legend">'
+            f'{_legend_values}'
+            f'Colour scale: &nbsp;'
+            f'<strong style="color:#fff7bc;">■</strong> low &nbsp;→&nbsp; '
+            f'<strong style="color:#8c2d04;">■</strong> high'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
-        for _pa_shift in _PA_SHIFT_ORDER.get(pa_location, [None]):
-            if pa_location != "HC3" and _pa_shift is not None:
-                # Per-shift heading uses the shared .section-heading class
-                # (16 px / weight 500 / cardinal-stripe gold underline) for
-                # visual parity with the analytics dashboard's section
-                # headings. Previously used `st.subheader` which renders an
-                # <h3> at Streamlit's default ~28 px — dominated the page
-                # visually and looked inconsistent with the rest of the app.
-                st.markdown(
-                    f'<div class="section-heading">{pa_location} - {_pa_shift}</div>',
-                    unsafe_allow_html=True,
-                )
-            _hkey = f"heatmap_{pa_location}_{_pa_shift or 'all'}"
-            _render_pa_heatmap(
-                _draw_df, pa_location, _pa_shift, pa_view, _hkey,
+        # Single subplots figure for the whole location — all shifts in
+        # one chart, with shift sections demarcated by Plotly subplot
+        # titles (USC maroon, hover-only summary). Replaces the previous
+        # per-shift `st.plotly_chart` loop; sized via absolute pixel
+        # yaxis.domain overrides so every subplot's plot area is exactly
+        # n_techs * 28 px (uniform cells across shifts).
+        render_pa_subplot_heatmaps(
+            _draw_df, pa_location, pa_view,
+            (pa_h_start, pa_h_end),
+            _pa_yr, _pa_mo,
+            f"subplot_heatmaps_{pa_location}",
+        )
+
+        # ── Volume patterns section ──────────────────────────────────
+        # Second chart group, sits below the heatmap. Daily view shows
+        # an hourly bar chart of total draws; Monthly view shows a
+        # weekday × hour heatmap with avg-draws-per-occurrence cells.
+        # Both restrict to the selected location and hour range, and
+        # surface total active techs / draws / samples on hover.
+        st.markdown("---")
+
+        if pa_view == "Daily":
+            render_pa_hourly_bar(
+                _draw_df, pa_location,
                 (pa_h_start, pa_h_end),
+                _pa_date_label,
+                key=f"pa_hourly_bar_{pa_location}",
+            )
+        else:
+            render_pa_weekday_pattern(
+                _draw_df, pa_location,
+                (pa_h_start, pa_h_end),
+                _pa_yr, _pa_mo, _pa_date_label,
+                key=f"pa_weekday_pattern_{pa_location}",
             )
 
     except Exception as e:

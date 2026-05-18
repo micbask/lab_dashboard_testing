@@ -21,20 +21,45 @@ partition-by-partition).
 import base64
 import io
 import json
+import logging
 import time
 from datetime import date, timedelta
 from typing import Optional
 
-import duckdb
 import pandas as pd
 import requests
 import streamlit as st
 
 from config import (
+    ALL_SOURCE_COLUMNS,
     PARTITION_DIR,
     PARTITION_INDEX_PATH,
     LEGACY_PARQUET_PATH,
 )
+
+logger = logging.getLogger(__name__)
+
+
+# Columns that load_filtered_data's result always carries when there's
+# data — the source columns plus the derived date/hour helpers added
+# by _parquet_bytes_to_df. The empty-result helper below uses this
+# list so callers can do `df["complete_date"] == x` on a no-data
+# frame without a KeyError. The pre-Batch-2 DuckDB pipeline preserved
+# the schema implicitly via fetchdf(); after the partition-streaming
+# refactor we have to manufacture it on the empty paths ourselves.
+_RESULT_COLUMNS: list[str] = list(ALL_SOURCE_COLUMNS) + [
+    "complete_date", "hour",
+    "inlab_date",    "inlab_hour",
+    "drawn_date",    "drawn_hour",
+]
+
+
+def _empty_result_frame() -> pd.DataFrame:
+    """Empty DataFrame with the columns load_filtered_data returns when
+    it finds data. Use this on every no-data early-return path so
+    downstream consumers can rely on column presence.
+    """
+    return pd.DataFrame(columns=_RESULT_COLUMNS)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -129,10 +154,18 @@ def _load_partition_index() -> dict:
 
     The index is a tiny JSON file (<1KB) — cache it in session state so
     we only hit GitHub once per session (or after explicit invalidation).
+
+    Returns a DEEP COPY of the cached dict so callers can safely mutate
+    their copy before deciding whether to persist it via
+    `_save_partition_index`. The previous implementation returned the
+    cached reference directly, which meant mid-write failures (a
+    `_gh_put_file` exception after the in-memory mutation) left
+    session_state and the remote out of sync.
     """
+    import copy as _copy
     _ss = st.session_state
     if "_partition_index" in _ss:
-        return _ss["_partition_index"]
+        return _copy.deepcopy(_ss["_partition_index"])
 
     raw, _ = _gh_get_file(PARTITION_INDEX_PATH)
     if raw is None:
@@ -141,9 +174,10 @@ def _load_partition_index() -> dict:
     try:
         index = json.loads(raw.decode("utf-8"))
     except Exception:
+        logger.exception("Partition index parse failed; starting from empty index")
         index = {}
     _ss["_partition_index"] = index
-    return index
+    return _copy.deepcopy(index)
 
 
 def _invalidate_index_cache() -> None:
@@ -185,26 +219,36 @@ def df_to_parquet_bytes(df: pd.DataFrame) -> bytes:
 
 
 def _parquet_bytes_to_df(raw: bytes) -> pd.DataFrame:
-    """Deserialise Parquet bytes, ensuring derived helper columns exist."""
+    """Deserialise Parquet bytes, ensuring derived helper columns exist.
+
+    Also localizes the source datetime columns to LAB_TZ — partitions
+    written before the localize-at-ingest fix are tz-naive on disk;
+    this read-time pass yields uniform tz-aware data in memory so
+    concat across mixed-vintage partitions doesn't raise on dtype
+    mismatch. New partitions are already tz-aware on disk; the
+    localize call is idempotent (no-op when tz info is already
+    present). Derived `*_date` / `*_hour` helpers are built off the
+    tz-aware Series so calendar / hour-of-day bucketing reflects
+    LAB_TZ.
+    """
     df = pd.read_parquet(io.BytesIO(raw))
+    # Lazy import to avoid the storage.py → parsing.py top-level dep.
+    from parsing import _localize_lab_datetimes
+    df = _localize_lab_datetimes(df)
     if "complete_date" not in df.columns and "Date/Time - Complete" in df.columns:
-        df["complete_date"] = pd.to_datetime(df["Date/Time - Complete"]).dt.date
+        df["complete_date"] = df["Date/Time - Complete"].dt.date
     if "hour" not in df.columns and "Date/Time - Complete" in df.columns:
-        df["hour"] = pd.to_datetime(df["Date/Time - Complete"]).dt.hour.astype(int)
+        df["hour"] = df["Date/Time - Complete"].dt.hour.astype(int)
     if "Date/Time - In Lab" in df.columns:
         if "inlab_date" not in df.columns:
-            df["inlab_date"] = pd.to_datetime(df["Date/Time - In Lab"], errors="coerce").dt.date
+            df["inlab_date"] = df["Date/Time - In Lab"].dt.date
         if "inlab_hour" not in df.columns:
-            df["inlab_hour"] = pd.to_datetime(
-                df["Date/Time - In Lab"], errors="coerce"
-            ).dt.hour.astype("Int64")
+            df["inlab_hour"] = df["Date/Time - In Lab"].dt.hour.astype("Int64")
     if "Date/Time - Drawn" in df.columns:
         if "drawn_date" not in df.columns:
-            df["drawn_date"] = pd.to_datetime(df["Date/Time - Drawn"], errors="coerce").dt.date
+            df["drawn_date"] = df["Date/Time - Drawn"].dt.date
         if "drawn_hour" not in df.columns:
-            df["drawn_hour"] = pd.to_datetime(
-                df["Date/Time - Drawn"], errors="coerce"
-            ).dt.hour.astype("Int64")
+            df["drawn_hour"] = df["Date/Time - Drawn"].dt.hour.astype("Int64")
     return df
 
 
@@ -257,7 +301,10 @@ def _migrate_legacy_parquet() -> bool:
             _gh_delete_file(LEGACY_PARQUET_PATH, legacy_sha,
                             "Remove legacy monolithic parquet (migrated to partitions)")
         except Exception:
-            pass
+            logger.warning(
+                "Failed to delete legacy parquet after migration — file remains on disk",
+                exc_info=True,
+            )
 
     return True
 
@@ -384,7 +431,7 @@ def load_filtered_data(
     """
     index = _load_partition_index()
     if not index:
-        return pd.DataFrame()
+        return _empty_result_frame()
 
     if date_basis == "drawn":
         date_col = "drawn_date"
@@ -406,78 +453,73 @@ def load_filtered_data(
                 needed_keys.append(key)
 
     if not needed_keys:
-        return pd.DataFrame()
+        return _empty_result_frame()
 
-    # Read needed partitions (each is individually cached by SHA)
-    frames = []
+    # Stream-filter per partition. Previously this function read every
+    # needed partition, pd.concat'd them all into a single combined
+    # frame (~500k rows × N partitions), then handed the whole thing
+    # to DuckDB to filter down to typically 5-20k rows. Peak memory
+    # was ~3× the filtered output (cached frames + combined + result).
+    #
+    # The streaming pattern below applies the alias/remap passes and
+    # the date/resource/procedure filters TO EACH PARTITION
+    # individually, then accumulates only the small filtered slices.
+    # Peak memory is one partition + the growing list of small slices.
+    # DuckDB is no longer needed — the filter logic is simple boolean
+    # masking that pandas handles natively, and the input frames
+    # already have correct dtypes (object/date from _parquet_bytes_to_df),
+    # so the post-DuckDB dtype-fixup pass is also gone.
+    #
+    # Resource remaps MUST run BEFORE the resource filter — otherwise
+    # rows whose stored resource is the old name get dropped by the
+    # bench-scoped filter even though the post-remap resource would
+    # have matched. Apply aliases too so already-stored partitions
+    # render with the short display names. Lazy import to avoid a
+    # top-level dependency from storage.py onto parsing.py.
+    from parsing import (
+        clean_procedure_names as _normalize_procs,
+        apply_display_aliases as _display_aliases,
+        apply_resource_remaps as _remap_resources,
+    )
+
+    resource_set = set(resources) if resources else None
+    exclude_set  = set(exclude_procs) if exclude_procs else None
+
+    result_frames: list[pd.DataFrame] = []
     for key in sorted(needed_keys):
         df = _read_partition(key)
-        if df is not None and not df.empty:
-            frames.append(df)
+        if df is None or df.empty:
+            continue
+        # Copy before mutating — apply_resource_remaps uses
+        # df.loc[mask, col] = ... which would otherwise modify the
+        # cached partition frame held by _read_partition_cached.
+        df = df.copy()
+        # Pass 1: whitespace normalisation (idempotent, defensive
+        # against any old partition that escaped the ingest pass).
+        # Pass 2: display aliases (CMP / BMP / etc) — applied HERE
+        # at read time so the parquet on disk keeps canonical names
+        # and the rename is a display-only concern. The exclude_set
+        # filter below operates on the column AFTER aliasing, which
+        # matches what the dashboard's procedure-picker UI shows.
+        df = _normalize_procs(df)
+        df = _display_aliases(df)
+        df = _remap_resources(df)
 
-    if not frames:
-        return pd.DataFrame()
+        if date_col not in df.columns:
+            continue
+        mask = (df[date_col] >= start_date) & (df[date_col] <= end_date)
+        if resource_set is not None and "Performing Service Resource" in df.columns:
+            mask &= df["Performing Service Resource"].isin(resource_set)
+        if exclude_set is not None and "Order Procedure" in df.columns:
+            mask &= ~df["Order Procedure"].isin(exclude_set)
 
-    combined = pd.concat(frames, ignore_index=True)
+        sub = df.loc[mask]
+        if not sub.empty:
+            result_frames.append(sub)
 
-    # Push down ALL filters via DuckDB — date range, resources, procedure exclusions
-    con = duckdb.connect()
-    con.register("data", combined)
-
-    resource_list = list(resources)
-    exclude_list = list(exclude_procs)
-
-    date_where = f'"{date_col}" >= ? AND "{date_col}" <= ?'
-
-    if resource_list and exclude_list:
-        result = con.execute(
-            f"SELECT * FROM data "
-            f"WHERE {date_where} "
-            "AND \"Performing Service Resource\" IN (SELECT UNNEST(?)) "
-            "AND \"Order Procedure\" NOT IN (SELECT UNNEST(?))",
-            [start_date, end_date, resource_list, exclude_list],
-        ).fetchdf()
-    elif resource_list:
-        result = con.execute(
-            f"SELECT * FROM data "
-            f"WHERE {date_where} "
-            "AND \"Performing Service Resource\" IN (SELECT UNNEST(?))",
-            [start_date, end_date, resource_list],
-        ).fetchdf()
-    else:
-        result = con.execute(
-            f"SELECT * FROM data "
-            f"WHERE {date_where}",
-            [start_date, end_date],
-        ).fetchdf()
-
-    con.close()
-
-    # DuckDB's fetchdf() converts DATE columns to datetime64[ns] and Int
-    # columns to nullable Int64. Restore the native dtypes the rest of the
-    # app expects (Python date objects, plain int hours) so downstream
-    # comparisons like `df["complete_date"] >= some_date` work.
-    if "complete_date" in result.columns and not result.empty:
-        result["complete_date"] = pd.to_datetime(result["complete_date"]).dt.date
-    if "hour" in result.columns and not result.empty:
-        result["hour"] = result["hour"].astype(int)
-    if "inlab_date" in result.columns and not result.empty:
-        result["inlab_date"] = pd.to_datetime(
-            result["inlab_date"], errors="coerce"
-        ).dt.date
-    if "inlab_hour" in result.columns and not result.empty:
-        result["inlab_hour"] = pd.to_numeric(
-            result["inlab_hour"], errors="coerce"
-        ).astype("Int64")
-    if "drawn_date" in result.columns and not result.empty:
-        result["drawn_date"] = pd.to_datetime(
-            result["drawn_date"], errors="coerce"
-        ).dt.date
-    if "drawn_hour" in result.columns and not result.empty:
-        result["drawn_hour"] = pd.to_numeric(
-            result["drawn_hour"], errors="coerce"
-        ).astype("Int64")
-    return result
+    if not result_frames:
+        return _empty_result_frame()
+    return pd.concat(result_frames, ignore_index=True)
 
 
 @st.cache_data(show_spinner=False, ttl=300)
@@ -497,9 +539,19 @@ def load_partition_for_month(
 
 
 def get_index_hash() -> str:
-    """Return a short hash of the partition index for cache-busting."""
+    """Return a short, STABLE hash of the partition index for cache-busting.
+
+    Uses SHA-1 (truncated to 16 hex chars) instead of Python's built-in
+    `hash()`, which is randomized per process via PYTHONHASHSEED — two
+    Streamlit Cloud workers (or two sessions on the same worker after a
+    restart) would otherwise produce different cache keys for the same
+    on-disk index, defeating shared caching and making state subtly
+    process-dependent.
+    """
+    import hashlib
     index = _load_partition_index()
-    return str(hash(json.dumps(index, sort_keys=True, default=str)))
+    payload = json.dumps(index, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha1(payload).hexdigest()[:16]
 
 
 def count_rows_in_date_range(start_date: date, end_date: date) -> int:
@@ -586,6 +638,16 @@ def ingest_new_data(new_df: pd.DataFrame) -> dict:
     # Re-cache the new index
     st.session_state["_partition_index"] = index
 
+    # Drop in-memory partition cache so freshly written partitions
+    # don't sit beside their stale predecessors. SHA-based cache keys
+    # already ensure correctness (next read uses the new SHA → cache
+    # miss → fresh fetch), but the OLD (key, old_sha) entries stay
+    # parked in memory until TTL=600s expires — on busy workers that
+    # accumulates several MB per ingest. .clear() flushes them all;
+    # tradeoff is one slower load right after upload while the cache
+    # repopulates.
+    _read_partition_cached.clear()
+
     total_after = sum(p["rows"] for p in index.values())
     return {
         "rows_before": total_before,
@@ -625,7 +687,10 @@ def delete_date_range(start: date, end: date) -> dict:
                 _gh_delete_file(_partition_path(key), sha,
                                 f"Delete empty partition {key}")
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to delete empty partition %s — orphaned file on disk",
+                    key, exc_info=True,
+                )
             del index[key]
         else:
             pq_bytes = df_to_parquet_bytes(df)
@@ -656,7 +721,10 @@ def reset_all_data() -> None:
             _gh_delete_file(_partition_path(key), meta["sha"],
                             f"Delete partition {key} (full reset)")
         except Exception:
-            pass
+            logger.warning(
+                "Reset: failed to delete partition %s — orphaned on disk",
+                key, exc_info=True,
+            )
 
     _, sha = _gh_get_file(PARTITION_INDEX_PATH)
     if sha:
@@ -664,7 +732,10 @@ def reset_all_data() -> None:
             _gh_delete_file(PARTITION_INDEX_PATH, sha,
                             "Delete partition index (full reset)")
         except Exception:
-            pass
+            logger.warning(
+                "Reset: failed to delete partition index — file remains on disk",
+                exc_info=True,
+            )
 
     _, legacy_sha = _gh_get_file(LEGACY_PARQUET_PATH)
     if legacy_sha:
@@ -672,7 +743,10 @@ def reset_all_data() -> None:
             _gh_delete_file(LEGACY_PARQUET_PATH, legacy_sha,
                             "Delete legacy parquet (full reset)")
         except Exception:
-            pass
+            logger.warning(
+                "Reset: failed to delete legacy parquet — file remains on disk",
+                exc_info=True,
+            )
 
     _invalidate_index_cache()
 
