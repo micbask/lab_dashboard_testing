@@ -477,7 +477,8 @@ def load_filtered_data(
     # render with the short display names. Lazy import to avoid a
     # top-level dependency from storage.py onto parsing.py.
     from parsing import (
-        clean_procedure_names as _alias_procs,
+        clean_procedure_names as _normalize_procs,
+        apply_display_aliases as _display_aliases,
         apply_resource_remaps as _remap_resources,
     )
 
@@ -493,7 +494,15 @@ def load_filtered_data(
         # df.loc[mask, col] = ... which would otherwise modify the
         # cached partition frame held by _read_partition_cached.
         df = df.copy()
-        df = _alias_procs(df)
+        # Pass 1: whitespace normalisation (idempotent, defensive
+        # against any old partition that escaped the ingest pass).
+        # Pass 2: display aliases (CMP / BMP / etc) — applied HERE
+        # at read time so the parquet on disk keeps canonical names
+        # and the rename is a display-only concern. The exclude_set
+        # filter below operates on the column AFTER aliasing, which
+        # matches what the dashboard's procedure-picker UI shows.
+        df = _normalize_procs(df)
+        df = _display_aliases(df)
         df = _remap_resources(df)
 
         if date_col not in df.columns:
