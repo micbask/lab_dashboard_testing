@@ -629,6 +629,16 @@ def ingest_new_data(new_df: pd.DataFrame) -> dict:
     # Re-cache the new index
     st.session_state["_partition_index"] = index
 
+    # Drop in-memory partition cache so freshly written partitions
+    # don't sit beside their stale predecessors. SHA-based cache keys
+    # already ensure correctness (next read uses the new SHA → cache
+    # miss → fresh fetch), but the OLD (key, old_sha) entries stay
+    # parked in memory until TTL=600s expires — on busy workers that
+    # accumulates several MB per ingest. .clear() flushes them all;
+    # tradeoff is one slower load right after upload while the cache
+    # repopulates.
+    _read_partition_cached.clear()
+
     total_after = sum(p["rows"] for p in index.values())
     return {
         "rows_before": total_before,
