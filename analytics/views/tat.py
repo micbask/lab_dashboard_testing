@@ -69,20 +69,30 @@ def render_tat_view(params: dict) -> None:
     _st_target_h = _tat_targets["ST"] // 60
     _ts_target_h = _tat_targets["TS"] // 60
 
-    def _legend_chip(color: str, label: str) -> str:
+    def _legend_chip(color: str, code: str, descriptor: str) -> str:
+        # Three redundant cues so the legend doesn't rely on colour
+        # alone (~4.5% of staff have colour-vision deficiency, and
+        # the blue/orange/teal palette is hard to distinguish for
+        # red-green and blue-yellow types):
+        #   1. The coloured dot (existing visual)
+        #   2. A bolded RT/ST/TS code in the priority's colour —
+        #      readable even when the dot's hue is unclear
+        #   3. The verbose descriptor in muted text
         return (
             '<span style="display:inline-flex;align-items:center;">'
             f'<span style="display:inline-block;width:10px;height:10px;'
             f'border-radius:50%;background:{color};margin-right:6px;"></span>'
-            f'{label}</span>'
+            f'<strong style="color:{color};">{code}</strong>'
+            f'&nbsp;<span style="color:rgba(0,0,0,0.55);">{descriptor}</span>'
+            '</span>'
         )
 
     st.markdown(
         '<div style="display:flex;flex-wrap:wrap;gap:18px;align-items:center;'
         'font-size:12px;color:rgba(0,0,0,0.6);margin-bottom:16px;">'
-        f'{_legend_chip(TAT_ROUTINE_COLOR, f"RT (Routine, target ≤ {_rt_target_h}h)")}'
-        f'{_legend_chip(TAT_STAT_COLOR,    f"ST (Stat, target ≤ {_st_target_h}h)")}'
-        f'{_legend_chip(TAT_TS_COLOR,      f"TS (Time Study, target ≤ {_ts_target_h}h)")}'
+        f'{_legend_chip(TAT_ROUTINE_COLOR, "RT", f"(Routine, target ≤ {_rt_target_h}h)")}'
+        f'{_legend_chip(TAT_STAT_COLOR,    "ST", f"(Stat, target ≤ {_st_target_h}h)")}'
+        f'{_legend_chip(TAT_TS_COLOR,      "TS", f"(Time Study, target ≤ {_ts_target_h}h)")}'
         '</div>',
         unsafe_allow_html=True,
     )
