@@ -50,33 +50,19 @@ def render_data_management_sidebar(
     from storage import count_rows_in_date_range
 
     st.markdown("---")
-
-    # Status chip rendered OUTSIDE the expander so the state is
-    # always glanceable without opening it (previously the chip lived
-    # inside, requiring a click to see whether data was loaded).
-    # The expander itself now starts collapsed for everyone — fresh
-    # installs used to auto-open it via `expanded=not data_exists`,
-    # which created visual noise for returning users on a load error
-    # AND meant the no-data warning was inside the expander where
-    # users had to click to see it.
-    if load_err is not None:
-        status_chip("Load error", level="error")
-    elif data_exists:
-        status_chip(
-            f"{data_summary['total_rows']:,} rows · "
-            f"{data_summary['min_date']} → {data_summary['max_date']}",
-            level="ok",
-        )
-    else:
-        status_chip("No data yet - upload below", level="warn")
-
-    with st.expander("Data Management", expanded=False):
-        # In-expander surface-area: only the detail that requires the
-        # expander to be open. The chip above carries the always-on
-        # glanceable status; in-here we only need to surface error
-        # detail and the storage backend caption.
+    with st.expander("Data Management", expanded=not data_exists):
+        # Status chip — error / data summary / no-data warn.
         if load_err is not None:
+            status_chip("Load error", level="error")
             st.error(f"Could not read data index: {load_err}")
+        elif data_exists:
+            status_chip(
+                f"{data_summary['total_rows']:,} rows · "
+                f"{data_summary['min_date']} → {data_summary['max_date']}",
+                level="ok",
+            )
+        else:
+            status_chip("No data yet - upload below", level="warn")
         st.caption("Storage: GitHub (partitioned)")
         st.markdown("---")
 
