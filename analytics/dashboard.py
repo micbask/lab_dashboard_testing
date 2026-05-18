@@ -106,10 +106,6 @@ def render_sidebar(ss) -> dict:
         )
         map_type = BENCH_LABEL_TO_VALUE[_bench_short]
 
-        if ss.last_map_type != map_type:
-            ss.pop("date_picker", None)
-            ss.last_map_type = map_type
-
         # ── 2. Time Basis  (keyed; widget owns session_state) ──
         st.markdown(
             '<div class="sidebar-section-label">TIME BASIS</div>',
@@ -121,14 +117,16 @@ def render_sidebar(ss) -> dict:
             key="time_basis",
         )
 
-        # Switching time_basis can leave the user on a date that has
-        # data for the previous basis but is empty for the new one
-        # (e.g. Completed has May 15, In-Lab doesn't). Pop the date
-        # picker so it re-clamps to the bench's _max_d on the next
-        # render, the same invalidation pattern as a bench change.
-        if ss.get("last_time_basis") != time_basis:
-            ss.pop("date_picker", None)
-            ss["last_time_basis"] = time_basis
+        # NOTE: bench and time_basis changes used to pop "date_picker"
+        # from session_state, which forced the date back to the new
+        # context's max on every switch. That was over-aggressive — it
+        # reset the date even when the prior selection was perfectly
+        # valid for the new bench. The clamping block further down
+        # (~line 240) still snaps to _max_d when the prior date falls
+        # outside the new context's [_min_d, _fc_max_d] window, which
+        # is the only case that genuinely warrants a reset. Matches
+        # the pre-analytics dashboard, whose date sticks across
+        # location switches.
 
         # ── 3. View ──
         st.markdown(
