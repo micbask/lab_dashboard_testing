@@ -270,11 +270,14 @@ def render_pa_subplot_heatmaps(draw_df, location, view, hour_range,
                     f"{_n_s_cell} total sample"
                     f"{'s' if _n_s_cell != 1 else ''}"
                 ]
-                for _, _r in _grp_sorted.iterrows():
-                    _t = pd.to_datetime(
-                        _r["draw_datetime"]
-                    ).strftime("%H:%M")
-                    _s = int(_r["samples"])
+                # itertuples is ~10× faster than iterrows for the inner
+                # per-draw loop and avoids the per-row Series boxing.
+                # draw_datetime is already a Timestamp (from the parquet
+                # read) so .strftime() works directly — drop the redundant
+                # pd.to_datetime() round-trip.
+                for _row in _grp_sorted.itertuples(index=False):
+                    _t = _row.draw_datetime.strftime("%H:%M")
+                    _s = int(_row.samples)
                     _lines.append(
                         f"{_t} - {_s} sample"
                         f"{'s' if _s != 1 else ''}"
