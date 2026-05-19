@@ -131,9 +131,20 @@ def render_daily_view(params: dict, ss) -> None:
         peak_hour      = pivot[_hour_cols].sum().idxmax()
         peak_hour_cnt  = int(round(pivot[_hour_cols].sum()[peak_hour]))
     else:
+        # Compute Total volume / Peak hour / Avg per hour from
+        # `_df_date` (date-filtered, bench-wide, NOT top-N filtered)
+        # rather than from `filtered_df`. For the Completed storage
+        # path these are identical because storage already scoped by
+        # date. For the In-Lab storage path (after the inlab-basis
+        # storage fix) they're also identical. But for the local-file
+        # fallback path — where `filtered_df` can carry rows outside
+        # the selected date — using `_df_date` is what actually
+        # matches what the heatmap above shows. Previously the
+        # mismatch surfaced as In-Lab / Completed reporting the same
+        # Total volume even when the row sets differed.
         _h_start, _h_end = hour_range
-        _filt_hr = filtered_df[
-            filtered_df["hour"].between(_h_start, _h_end)
+        _filt_hr = _df_date[
+            _df_date["hour"].between(_h_start, _h_end)
         ]
         total_vol = int(_filt_hr["Complete Volume"].fillna(0).sum())
         _per_hour = _filt_hr.groupby("hour")["Complete Volume"].sum()
