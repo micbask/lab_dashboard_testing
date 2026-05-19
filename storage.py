@@ -317,6 +317,17 @@ def _migrate_legacy_parquet() -> bool:
 # two extra partitions per query.
 _DRAWN_LAG_BUFFER = timedelta(days=30)
 
+# Maximum in-lab -> complete latency. In-lab is when the sample
+# physically arrives at the lab; complete is when results are ready.
+# Most routine tests complete within hours; overnight / weekend holds
+# can stretch to a couple of days. 7 days comfortably covers those
+# cases without unnecessarily widening the partition scan (the load
+# pattern is "rows whose inlab_date is May 18" — we need to include
+# partitions whose complete_date range could harbour rows that came
+# in-lab that day, which is the partition's c_min - buffer at the
+# lower bound).
+_INLAB_LAG_BUFFER = timedelta(days=7)
+
 
 def _write_partitions_from_df(df: pd.DataFrame) -> dict:
     """Split a DataFrame by month and write each partition to GitHub."""
@@ -415,19 +426,28 @@ def load_filtered_data(
     `date_basis` selects which timestamp column governs both the
     partition-pruning step and the SQL WHERE clause:
       - "complete" (default) -> uses `complete_date` (Date/Time - Complete).
-        This is what Analytics + forecast queries use.
+        This is what Analytics + forecast queries use by default.
       - "drawn" -> uses `drawn_date` (Date/Time - Drawn). Pre-Analytics
         queries pass this so the heatmap groups draws by the day they were
         actually performed, not the day the test completed.
+      - "inlab" -> uses `inlab_date` (Date/Time - In Lab). The Analytics
+        In-Lab time basis passes this so the dashboard groups rows by
+        the day a sample arrived at the lab, not the day it completed.
+        Without this, an In-Lab/May-18 query would silently miss samples
+        that arrived May 18 PM but completed May 19, AND erroneously
+        include samples that arrived May 17 PM but completed May 18.
 
-    For drawn-date queries the partition pruner uses the partition's
-    complete-date range with a `_DRAWN_LAG_BUFFER` slack on the lower
-    side: since `drawn_date <= complete_date` always (you can't
-    complete before you draw), a partition with complete_date range
-    [c_min, c_max] can contain rows with drawn_date as far back as
-    c_min - lag. A 30-day buffer comfortably covers typical lab
-    draw -> complete latency (hours to a few days) plus rare slow
-    send-out tests, while keeping the typical query at 1-2 partitions.
+    For drawn-date and inlab-date queries the partition pruner uses
+    the partition's complete-date range with a lag-buffer slack on the
+    lower side: since both `drawn_date <= complete_date` and
+    `inlab_date <= complete_date` always hold (you can't complete
+    before you draw or before the sample arrives), a partition with
+    complete_date range [c_min, c_max] can contain rows whose
+    drawn/inlab dates go as far back as c_min - buffer. The drawn
+    buffer is 30 days to cover slow send-out tests; the inlab buffer
+    is 7 days since once a sample is physically in the lab the
+    complete clock starts and overnight/weekend holds are the
+    extreme case.
     """
     index = _load_partition_index()
     if not index:
@@ -435,18 +455,25 @@ def load_filtered_data(
 
     if date_basis == "drawn":
         date_col = "drawn_date"
+        _lag_buffer = _DRAWN_LAG_BUFFER
+    elif date_basis == "inlab":
+        date_col = "inlab_date"
+        _lag_buffer = _INLAB_LAG_BUFFER
     else:
         date_col = "complete_date"
+        _lag_buffer = None  # complete-basis doesn't need a buffer
 
     needed_keys = []
     for key, meta in index.items():
         c_min = date.fromisoformat(meta["min_date"])
         c_max = date.fromisoformat(meta["max_date"])
-        if date_basis == "drawn":
-            # Include if some drawn_date in this partition COULD overlap
-            # [start_date, end_date]. Drawn is upper-bounded by complete,
-            # lower-bounded conservatively by c_min - _DRAWN_LAG_BUFFER.
-            if c_min - _DRAWN_LAG_BUFFER <= end_date and c_max >= start_date:
+        if _lag_buffer is not None:
+            # drawn / inlab basis — include if some row in this
+            # partition COULD have a drawn/inlab date overlapping
+            # [start_date, end_date]. Upper-bounded by complete
+            # (so c_max must reach start_date), lower-bounded
+            # conservatively by c_min - lag_buffer.
+            if c_min - _lag_buffer <= end_date and c_max >= start_date:
                 needed_keys.append(key)
         else:
             if c_min <= end_date and c_max >= start_date:

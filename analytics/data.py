@@ -76,21 +76,35 @@ def load_analytics_data(
     if not storage_is_configured():
         return pd.DataFrame()
 
+    # For In-Lab, query the partition store by `inlab_date` so we load
+    # the rows whose IN-LAB happened in [start_date, end_date], not the
+    # rows whose COMPLETION happened in that window. Previously we
+    # loaded by complete_date and then remapped — that under-counted
+    # rows that arrived in-lab on the target date but completed the
+    # next day, and over-counted rows that completed on the target
+    # date but actually arrived in-lab the previous day. Both errors
+    # are silently rolled into the KPIs (Total volume / Avg per hour)
+    # which made In-Lab and Completed views report identical totals
+    # any time the row set "happened" to overlap.
     df = load_filtered_data(
         start_date=start_date,
         end_date=end_date,
         resources=resources,
         exclude_procs=tuple(sorted(EXCLUDED_PROCEDURES)),
         index_hash=index_hash,
+        date_basis="inlab" if time_basis == "In-Lab" else "complete",
     )
     if df.empty:
         return df
 
     if time_basis == "In-Lab":
-        # Drop rows without an In-Lab timestamp, then re-map the
-        # complete_date / hour helper columns to the in-lab values.
-        # Downstream pivots key off complete_date / hour, so this
-        # effectively reports volume by in-lab time.
+        # The load already restricted rows to inlab_date in
+        # [start_date, end_date]. Drop the rare row that lacks an
+        # inlab_hour (NaT) and would explode the hour-bucket dtype
+        # at .astype(int) below, then remap the `complete_date` /
+        # `hour` helper columns to the in-lab values so downstream
+        # pivots (which key off `complete_date` / `hour`) bucket by
+        # in-lab time without further parameterisation.
         if (
             "inlab_date" not in df.columns
             or not df["inlab_date"].notna().any()
