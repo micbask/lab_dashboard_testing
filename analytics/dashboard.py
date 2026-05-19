@@ -239,12 +239,34 @@ def render_sidebar(ss) -> dict:
                     if _min_d <= _pending <= _fc_max_d:
                         ss["date_picker"] = _pending
 
+                # Compute the date_input's default from a NON-WIDGET
+                # side-key, not from the widget's own key. Streamlit
+                # auto-clears session_state entries linked to widgets
+                # when the widget unmounts (e.g. when the user
+                # switches to Monthly view and the date_input leaves
+                # the page). The earlier version of this block read
+                # from `ss["date_picker"]`; when that got auto-cleared,
+                # the `"date_picker" not in ss` branch fired and snapped
+                # the date back to `_max_d` on the next Daily render
+                # — losing the user's selection across every view
+                # toggle. `analytics_date_daily` isn't owned by any
+                # widget so it survives unmounts. We write the
+                # current pick back to it after the widget renders.
+                # Matches the pre-analytics two-key pattern
+                # (`pa_date_picker` + `pa_date_daily`), which is why
+                # pre-analytics' date already sticks correctly.
+                _default = ss.get("analytics_date_daily", _max_d)
+                if isinstance(_default, str):
+                    try:
+                        _default = date.fromisoformat(_default)
+                    except Exception:
+                        _default = _max_d
                 if (
-                    "date_picker" not in ss
-                    or ss["date_picker"] < _min_d
-                    or ss["date_picker"] > _fc_max_d
+                    not isinstance(_default, date)
+                    or _default < _min_d
+                    or _default > _fc_max_d
                 ):
-                    ss["date_picker"] = _max_d
+                    _default = _max_d
 
                 st.markdown(
                     '<div class="sidebar-section-label">DATE</div>',
@@ -253,11 +275,13 @@ def render_sidebar(ss) -> dict:
 
                 picked_date = st.date_input(
                     "Select date",
+                    value=_default,
                     min_value=_min_d,
                     max_value=_fc_max_d,
                     label_visibility="collapsed",
                     key="date_picker",
                 )
+                ss["analytics_date_daily"] = picked_date
                 selected_date = picked_date
                 _is_forecast_date = selected_date > _max_d
 
