@@ -15,7 +15,7 @@ real export; treat it accordingly.
 
 ## Status & access
 
-- **Live app:** `<fill in Streamlit Cloud URL>`
+- **Live app:** `<https://clinlab-dashboard.streamlit.app/>`
 - **Access:** gated by `app_password` (see [Secrets](#secrets)); admin
   actions inside Data Management require an additional `admin_password`.
 - **Hosting:** Streamlit Cloud, tracking the repo's default branch.
@@ -75,7 +75,7 @@ admin_password = "..."
 
 [github]
 token = "..."  # PAT with contents:write on this repo
-repo  = "owner/lab_dashboard_testing"
+repo  = "micbask/lab_dashboard_testing"
 EOF
 
 streamlit run app.py
