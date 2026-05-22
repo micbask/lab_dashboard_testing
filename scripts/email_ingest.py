@@ -730,8 +730,52 @@ def trigger_retrain_forecast() -> None:
 # APPLE MAIL FETCH
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _run_applescript() -> None:
-    """Run fetch_attachment.applescript via /usr/bin/osascript."""
+# Retry knobs for the AppleScript fetch step.
+#
+# Failure mode this guards against: when the daily report email has
+# arrived in Apple Mail but Mail hasn't finished downloading the
+# attachment yet, the AppleScript happily reports `matched=1 saved=0`
+# and exits clean — no file lands in the drop folder and the whole
+# run processes nothing. Retrying gives Mail a few minutes to catch
+# up.
+#
+# Tunable at runtime via env vars (settable from the launchd plist or
+# the .env file the script already loads) so the cadence can be
+# adjusted without code changes:
+#
+#   FETCH_RETRIES         — extra attempts after the first (default 4
+#                           → 5 total attempts).
+#   FETCH_WAIT_SECONDS    — wait between attempts (default 30 s).
+#   FETCH_TIMEOUT_SECONDS — per-attempt timeout passed to osascript
+#                           (default 300 s — comfortably above the
+#                           ~2 min normal AppleScript runtime, still
+#                           bounded so a stuck osascript cannot block
+#                           the whole run).
+#
+# The AppleScript itself only marks a Mail message as read after a
+# successful attachment save (fetch_attachment.applescript: `if
+# savedForThis > 0 then set read status of theMessage to true`), so a
+# failed / timed-out / zero-save attempt leaves the message UNREAD
+# and the next retry re-matches it — no message is consumed by a
+# failed attempt.
+_FETCH_RETRIES         = max(0, int(os.environ.get("FETCH_RETRIES",         "4")))
+_FETCH_WAIT_SECONDS    = max(0, int(os.environ.get("FETCH_WAIT_SECONDS",    "30")))
+_FETCH_TIMEOUT_SECONDS = max(1, int(os.environ.get("FETCH_TIMEOUT_SECONDS", "300")))
+
+# AppleScript ends its log with `LINE: done. matched=N saved=M`; we
+# parse that "saved=M" to decide whether an attempt succeeded.
+_SAVED_PATTERN = re.compile(r"\bsaved=(\d+)")
+
+
+def _run_applescript() -> int:
+    """Run fetch_attachment.applescript via /usr/bin/osascript ONCE.
+
+    Returns the number of attachments saved on this attempt, parsed
+    from the AppleScript's `saved=N` log line. Returns 0 on any
+    failure path (timeout, missing binary, non-zero exit, no
+    `saved=` token in the output) so the caller can uniformly treat
+    "0 = retry".
+    """
     if not APPLESCRIPT_PATH.exists():
         raise SystemExit(f"AppleScript not found: {APPLESCRIPT_PATH}")
 
@@ -741,15 +785,16 @@ def _run_applescript() -> None:
             ["/usr/bin/osascript", str(APPLESCRIPT_PATH)],
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=_FETCH_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
-        log.error("AppleScript timed out after 300s")
-        return
+        log.error("AppleScript timed out after %ds", _FETCH_TIMEOUT_SECONDS)
+        return 0
     except FileNotFoundError:
         log.error("/usr/bin/osascript not found — is this running on macOS?")
-        return
+        return 0
 
+    saved_count = 0
     for stream_name, stream in (("stdout", proc.stdout), ("stderr", proc.stderr)):
         for line in (stream or "").splitlines():
             line = line.strip()
@@ -759,9 +804,51 @@ def _run_applescript() -> None:
                 log.info("applescript: %s", line[6:])
             else:
                 log.info("applescript[%s]: %s", stream_name, line)
+            _m = _SAVED_PATTERN.search(line)
+            if _m:
+                try:
+                    saved_count = int(_m.group(1))
+                except ValueError:
+                    pass
 
     if proc.returncode != 0:
         log.error("AppleScript exited with status %s", proc.returncode)
+
+    return saved_count
+
+
+def _fetch_with_retries() -> int:
+    """Run the AppleScript fetch up to (_FETCH_RETRIES + 1) times,
+    waiting _FETCH_WAIT_SECONDS between attempts, until at least one
+    attachment is saved.
+
+    Returns the `saved=N` count from the successful attempt, or 0 if
+    every attempt came back empty. The AppleScript guarantees that
+    failed attempts do NOT mark the source message as read, so each
+    retry sees the same candidate messages and another shot at
+    saving the attachment once Mail finishes the download.
+    """
+    total_attempts = _FETCH_RETRIES + 1
+    for attempt in range(1, total_attempts + 1):
+        log.info(
+            "Fetch attempt %d / %d (timeout=%ds)",
+            attempt, total_attempts, _FETCH_TIMEOUT_SECONDS,
+        )
+        saved = _run_applescript()
+        if saved > 0:
+            log.info("Fetch attempt %d succeeded: saved=%d", attempt, saved)
+            return saved
+        if attempt < total_attempts:
+            log.info(
+                "Fetch attempt %d returned saved=0; waiting %ds before next attempt",
+                attempt, _FETCH_WAIT_SECONDS,
+            )
+            time.sleep(_FETCH_WAIT_SECONDS)
+    log.error(
+        "Fetch failed after %d attempt(s) — no attachment landed in the drop folder.",
+        total_attempts,
+    )
+    return 0
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -846,7 +933,20 @@ def main() -> int:
         return 0
 
     # Step 1: Apple Mail drops today's attachments into the folder.
-    _run_applescript()
+    # Wrapped in a retry loop so a "Mail hasn't finished downloading
+    # the attachment yet" run (which presents as `matched=1 saved=0`)
+    # gets another shot a few minutes later instead of giving up
+    # immediately. See _fetch_with_retries for the cadence + the
+    # env-var knobs that tune it.
+    _saved = _fetch_with_retries()
+    if _saved == 0:
+        log.error(
+            "AppleScript fetch produced no attachments after all retries — "
+            "aborting run with non-zero exit so launchd / monitoring can "
+            "surface the failure. The original message stays unread in "
+            "Mail so the next scheduled run will retry."
+        )
+        return 1
 
     # Step 2: ingest whatever is sitting in the drop folder.
     drop = _drop_folder()
