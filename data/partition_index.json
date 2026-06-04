@@ -112,10 +112,17 @@
     "size_bytes": 7688935
   },
   "2026-05": {
-    "sha": "6d1fb647f6ad52b1515ca89d12e5751efbd8faea",
-    "rows": 191483,
+    "sha": "bf20c4658e268795a390a4ead2088638f211648f",
+    "rows": 265146,
     "min_date": "2026-05-01",
-    "max_date": "2026-05-21",
-    "size_bytes": 5445002
+    "max_date": "2026-05-31",
+    "size_bytes": 7403441
+  },
+  "2026-06": {
+    "sha": "a9fcfedbed6d1a3ecaa8c05f5862e85f0a0664f4",
+    "rows": 29946,
+    "min_date": "2026-06-01",
+    "max_date": "2026-06-03",
+    "size_bytes": 878022
   }
 }
