@@ -385,53 +385,58 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
         # for users (notably @med.usc.edu) who can't yet sign in to
         # the new app.
         #
-        # NO st.columns wrapper. Both the welcome panel and the
-        # password form self-center via `margin: 0 auto` on a fixed
-        # 480px width, so they render identically against the full
-        # page width. The previous `st.columns([1, 1.5, 1])` wrapper
-        # was the source of the width mismatch: on narrower
-        # viewports the middle column shrank below 480px, at which
-        # point the form's HARD `width: 480px !important` overflowed
-        # the column (staying 480px) while the welcome panel's
-        # `max-width: 480px` collapsed to the column width (~360px).
-        # Removing the column lets both cards center on the same
-        # 480px axis at every viewport size.
-        from ui.labdash_notice import render_login_welcome
-        render_login_welcome()
-        with st.form("login_form", enter_to_submit=True):
+        # LAYOUT CONTRACT (read before touching widths):
+        #   • The st.columns wrapper is REQUIRED — the password form's
+        #     card styling is keyed to `#login-overlay [data-testid=
+        #     "stForm"]`, and that selector only resolves while the
+        #     form is nested inside this column. Removing the column
+        #     makes the form render full-bleed.
+        #   • Both the welcome panel and the form use the SAME width
+        #     mechanism: a HARD `width: 480px` (not `max-width`). A
+        #     hard width holds 480px regardless of the column's
+        #     actual width; `max-width` collapses to a narrower
+        #     parent, which is what made the welcome shrink to ~360px
+        #     while the hard-width form stayed 480px. Same mechanism
+        #     on both → identical width, same centre axis, every
+        #     viewport.
+        _, col, _ = st.columns([1, 1.5, 1])
+        with col:
+            from ui.labdash_notice import render_login_welcome
+            render_login_welcome()
+            with st.form("login_form", enter_to_submit=True):
+                st.markdown(
+                    """
+                    <div class="login-icon-block">
+                      <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+                        <rect x="14" y="36" width="8" height="18" fill="#790A26" rx="1.5"/>
+                        <rect x="26" y="28" width="8" height="26" fill="#790A26" rx="1.5"/>
+                        <rect x="38" y="20" width="8" height="34" fill="#790A26" rx="1.5"/>
+                        <rect x="50" y="10" width="8" height="44" fill="#F1AB1F" rx="1.5"/>
+                      </svg>
+                      <div class="login-title">Laboratory Productivity Dashboard</div>
+                      <div class="login-subtitle">ANALYTICS &nbsp;·&nbsp; PRE-ANALYTICS</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                password = st.text_input(
+                    "Password", type="password",
+                    label_visibility="collapsed",
+                    placeholder="Password",
+                )
+                submitted = st.form_submit_button("Sign in", width="stretch")
+                if submitted:
+                    if password == st.secrets.get("app_password", ""):
+                        st.session_state["app_authenticated"] = True
+                        _auth_now = True
+                    else:
+                        st.error("Incorrect password. Please try again.")
+
+            # Footer beneath the card (stays inside the centered column).
             st.markdown(
-                """
-                <div class="login-icon-block">
-                  <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
-                    <rect x="14" y="36" width="8" height="18" fill="#790A26" rx="1.5"/>
-                    <rect x="26" y="28" width="8" height="26" fill="#790A26" rx="1.5"/>
-                    <rect x="38" y="20" width="8" height="34" fill="#790A26" rx="1.5"/>
-                    <rect x="50" y="10" width="8" height="44" fill="#F1AB1F" rx="1.5"/>
-                  </svg>
-                  <div class="login-title">Laboratory Productivity Dashboard</div>
-                  <div class="login-subtitle">ANALYTICS &nbsp;·&nbsp; PRE-ANALYTICS</div>
-                </div>
-                """,
+                '<div class="login-footer">v3.2 · May 2026</div>',
                 unsafe_allow_html=True,
             )
-            password = st.text_input(
-                "Password", type="password",
-                label_visibility="collapsed",
-                placeholder="Password",
-            )
-            submitted = st.form_submit_button("Sign in", width="stretch")
-            if submitted:
-                if password == st.secrets.get("app_password", ""):
-                    st.session_state["app_authenticated"] = True
-                    _auth_now = True
-                else:
-                    st.error("Incorrect password. Please try again.")
-
-        # Footer beneath the card.
-        st.markdown(
-            '<div class="login-footer">v3.2 · May 2026</div>',
-            unsafe_allow_html=True,
-        )
 
         st.markdown('</div>', unsafe_allow_html=True)
     if _auth_now:
