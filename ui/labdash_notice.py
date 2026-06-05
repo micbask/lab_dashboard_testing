@@ -115,42 +115,89 @@ def _open_link_navigator_html() -> str:
     return f"""<!doctype html><html><body><script>
 (function() {{
   var url = {NEW_APP_URL!r};
+  function wireOpen(a) {{
+    a.dataset.labdashWired = '1';
+    a.addEventListener('click', function(ev) {{
+      ev.preventDefault();
+      var navigated = false;
+      // 1. Try top-window navigation (same tab, URL bar updates).
+      try {{
+        window.parent.top.location.href = url;
+        navigated = true;
+      }} catch (err) {{}}
+      // 2. Fallback: navigate the parent frame directly.
+      if (!navigated) {{
+        try {{
+          window.parent.location.href = url;
+          navigated = true;
+        }} catch (err) {{}}
+      }}
+      // 3. Sentinel: if neither nav has taken effect after 250 ms,
+      //    open in a new tab so the click never feels dead.
+      setTimeout(function() {{
+        try {{
+          if (window.parent.location.href.indexOf(url) === -1) {{
+            window.open(url, '_blank', 'noopener');
+          }}
+        }} catch (err) {{
+          window.open(url, '_blank', 'noopener');
+        }}
+      }}, 250);
+    }});
+  }}
+  function wireCopy(a) {{
+    a.dataset.labdashWired = '1';
+    a.addEventListener('click', function(ev) {{
+      ev.preventDefault();
+      function flash() {{
+        a.classList.add('copied');
+        var lab = a.querySelector('.copy-label');
+        if (!lab) return;
+        var prev = lab.textContent;
+        lab.textContent = 'Copied';
+        setTimeout(function() {{
+          lab.textContent = prev;
+          a.classList.remove('copied');
+        }}, 1600);
+      }}
+      function fallback() {{
+        // execCommand fallback for browsers / contexts where the
+        // Clipboard API is unavailable. Have to run in the PARENT
+        // document so the temporary textarea is in the same DOM
+        // the user is interacting with.
+        try {{
+          var pdoc = window.parent.document;
+          var ta = pdoc.createElement('textarea');
+          ta.value = url;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          pdoc.body.appendChild(ta);
+          ta.select();
+          pdoc.execCommand('copy');
+          pdoc.body.removeChild(ta);
+        }} catch (e) {{}}
+        flash();
+      }}
+      // Prefer the Clipboard API (clipboard-write is in this iframe's
+      // allow list, verified in IFrameUtil.ts).
+      if (navigator.clipboard && navigator.clipboard.writeText) {{
+        navigator.clipboard.writeText(url).then(flash).catch(fallback);
+      }} else {{
+        fallback();
+      }}
+    }});
+  }}
   function wire() {{
     var doc;
     try {{ doc = window.parent.document; }} catch (e) {{ return; }}
-    var anchors = doc.querySelectorAll('a.labdash-open-link');
-    for (var i = 0; i < anchors.length; i++) {{
-      var a = anchors[i];
-      if (a.dataset.labdashWired === '1') continue;
-      a.dataset.labdashWired = '1';
-      a.addEventListener('click', function(ev) {{
-        ev.preventDefault();
-        var navigated = false;
-        // 1. Try top-window navigation (same tab, URL bar updates).
-        try {{
-          window.parent.top.location.href = url;
-          navigated = true;
-        }} catch (err) {{}}
-        // 2. Fallback: navigate the parent frame directly.
-        if (!navigated) {{
-          try {{
-            window.parent.location.href = url;
-            navigated = true;
-          }} catch (err) {{}}
-        }}
-        // 3. Sentinel: if neither nav has taken effect after 250 ms,
-        //    open in a new tab so the click never feels dead.
-        setTimeout(function() {{
-          try {{
-            if (window.parent.location.href.indexOf(url) === -1) {{
-              window.open(url, '_blank', 'noopener');
-            }}
-          }} catch (err) {{
-            window.open(url, '_blank', 'noopener');
-          }}
-        }}, 250);
-      }});
-    }}
+    var opens = doc.querySelectorAll(
+      'a.labdash-open-link:not([data-labdash-wired])'
+    );
+    for (var i = 0; i < opens.length; i++) wireOpen(opens[i]);
+    var copies = doc.querySelectorAll(
+      'a.labdash-copy-link:not([data-labdash-wired])'
+    );
+    for (var j = 0; j < copies.length; j++) wireCopy(copies[j]);
   }}
   // Anchors may not exist on first run (Streamlit renders async); poll
   // briefly. Once attached, the wired check above keeps us idempotent
@@ -310,6 +357,24 @@ def _welcome_panel_html() -> str:
 }}
 .labdash-welcome-scope .cta .arrow {{ transition:transform .15s ease; }}
 .labdash-welcome-scope .cta:hover .arrow {{ transform:translateX(3px); }}
+.labdash-welcome-scope .copy {{
+  display:inline-flex;align-items:center;gap:8px;
+  background:#fff !important;color:var(--ink) !important;
+  border:1px solid var(--line) !important;text-decoration:none !important;
+  font-family:"Geist",system-ui,sans-serif;font-weight:600;font-size:.95rem;
+  padding:10px 16px;border-radius:10px;cursor:pointer;
+  transition:border-color .15s ease,color .15s ease,
+             background .15s ease,transform .15s ease;
+}}
+.labdash-welcome-scope .copy:hover {{
+  border-color:var(--cardinal) !important;color:var(--cardinal) !important;
+  transform:translateY(-1px);
+}}
+.labdash-welcome-scope .copy.copied {{
+  border-color:var(--cardinal) !important;color:var(--cardinal) !important;
+  background:#FCF3F3 !important;
+}}
+.labdash-welcome-scope .copy svg {{ flex:none; }}
 </style>
 <div class="labdash-welcome-scope">
   <main class="panel" role="main">
@@ -334,6 +399,16 @@ def _welcome_panel_html() -> str:
       <a class="cta labdash-open-link" data-labdash-href="{NEW_APP_URL}"
          href="{NEW_APP_URL}" target="_top" rel="noopener">
         Open the new dashboard <span class="arrow" aria-hidden="true">&rarr;</span>
+      </a>
+      <a class="copy labdash-copy-link" data-labdash-href="{NEW_APP_URL}"
+         href="#" role="button" aria-label="Copy the new dashboard address">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <rect x="9" y="9" width="11" height="11" rx="2"
+                stroke="currentColor" stroke-width="1.7"/>
+          <path d="M5 15V5a2 2 0 0 1 2-2h10"
+                stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+        <span class="copy-label">Copy address</span>
       </a>
     </div>
   </main>
@@ -474,6 +549,17 @@ def _banner_html() -> str:
 }}
 .labdash-banner-scope .bb-primary .arrow {{ transition:transform .14s ease; }}
 .labdash-banner-scope .bb-primary:hover .arrow {{ transform:translateX(2px); }}
+.labdash-banner-scope .bb-ghost {{
+  background:rgba(255,255,255,.65) !important;
+  border-color:#E2CF9B !important;color:#6b4f12 !important;
+}}
+.labdash-banner-scope .bb-ghost:hover {{
+  border-color:var(--gold) !important;color:var(--gold) !important;
+  background:#fff !important;
+}}
+.labdash-banner-scope .bb-ghost.copied {{
+  border-color:var(--cardinal) !important;color:var(--cardinal) !important;
+}}
 </style>
 <div class="labdash-banner-scope">
   <div class="depbar" role="region" aria-label="Service notice">
@@ -488,6 +574,10 @@ def _banner_html() -> str:
       <a class="bb bb-primary labdash-open-link" data-labdash-href="{NEW_APP_URL}"
          href="{NEW_APP_URL}" target="_top" rel="noopener">
         Open new dashboard <span class="arrow" aria-hidden="true">&rarr;</span>
+      </a>
+      <a class="bb bb-ghost labdash-copy-link" data-labdash-href="{NEW_APP_URL}"
+         href="#" role="button" aria-label="Copy the new dashboard address">
+        <span class="copy-label">Copy address</span>
       </a>
     </div>
   </div>
