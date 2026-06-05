@@ -208,28 +208,6 @@ def _welcome_panel_html() -> str:
 }}
 .labdash-welcome-scope .cta .arrow {{ transition:transform .15s ease; }}
 .labdash-welcome-scope .cta:hover .arrow {{ transform:translateX(3px); }}
-.labdash-welcome-scope .signin {{
-  margin-top:20px;display:flex;gap:10px;align-items:flex-start;
-  border:1px solid var(--line);border-left:3px solid var(--gold);
-  background:#FCFAF5;border-radius:8px;padding:12px 13px;
-}}
-.labdash-welcome-scope .signin svg {{
-  flex:none;margin-top:2px;color:var(--gold);
-}}
-.labdash-welcome-scope .signin .t {{
-  font-size:.86rem;line-height:1.5;color:var(--ink);
-}}
-.labdash-welcome-scope .signin .t .mono {{
-  font-family:"Geist Mono",ui-monospace,monospace;font-weight:500;
-}}
-.labdash-welcome-scope .signin .t .note {{
-  display:block;color:var(--muted);margin-top:4px;font-size:.8rem;
-}}
-.labdash-welcome-scope .foot {{
-  margin-top:22px;padding-top:14px;border-top:1px solid var(--line-soft);
-  font-family:"Geist Mono",ui-monospace,monospace;
-  font-size:10.5px;color:var(--soft);line-height:1.6;
-}}
 </style>
 <div class="labdash-welcome-scope">
   <main class="panel" role="main">
@@ -254,21 +232,6 @@ def _welcome_panel_html() -> str:
       <a class="cta" href="{NEW_APP_URL}" target="_self">
         Open the new dashboard <span class="arrow" aria-hidden="true">&rarr;</span>
       </a>
-    </div>
-    <div class="signin">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M12 3l7 3v5c0 4.2-2.9 7.6-7 8.7C7.9 18.6 5 15.2 5 11V6l7-3z"
-              stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-      </svg>
-      <div class="t">
-        Sign in with your <span class="mono">@usc.edu</span> Microsoft account.
-        <span class="note">
-          <span class="mono">@med.usc.edu</span> accounts aren&rsquo;t supported yet.
-        </span>
-      </div>
-    </div>
-    <div class="foot">
-      Please update your bookmarks. This page will retire once everyone has moved over.
     </div>
   </main>
 </div>
