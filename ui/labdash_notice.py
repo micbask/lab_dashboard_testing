@@ -105,7 +105,7 @@ def _welcome_panel_html() -> str:
   --muted:#6E665E; --soft:#9A938A;
   --line:#E8E2D9; --line-soft:#F1ECE4;
 
-  max-width:360px;margin:0 auto 4px auto;padding:0 4px;
+  max-width:360px;margin:0 auto 4px auto;padding:0;
   font-family:"Geist",system-ui,-apple-system,"Segoe UI",sans-serif;
   color:var(--ink);
   -webkit-font-smoothing:antialiased;

@@ -383,13 +383,17 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
         # this Streamlit app. Renders ABOVE the native password
         # gate; the existing form below stays the working fallback
         # for users (notably @med.usc.edu) who can't yet sign in to
-        # the new app. See ui/labdash_notice.py for the rationale
-        # behind the iframe approach.
-        from ui.labdash_notice import render_login_welcome
-        render_login_welcome()
-
+        # the new app.
+        #
+        # Rendered INSIDE the same centered column as the password
+        # form so the two panels share one container — Streamlit's
+        # column wrappers add gutter padding that would otherwise
+        # shift the welcome panel a few px left or right of the
+        # login card when rendered at the full page width.
         _, col, _ = st.columns([1, 0.9, 1])
         with col:
+            from ui.labdash_notice import render_login_welcome
+            render_login_welcome()
             with st.form("login_form", enter_to_submit=True):
                 st.markdown(
                     """
