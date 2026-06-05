@@ -105,9 +105,14 @@ def _welcome_panel_html() -> str:
   --muted:#6E665E; --soft:#9A938A;
   --line:#E8E2D9; --line-soft:#F1ECE4;
 
-  /* 480px to match the login card directly below; the two share
-     a column wrapper so both centre on the same axis. */
-  max-width:480px;margin:0 auto 4px auto;padding:0;
+  /* Width mechanism mirrors the login form EXACTLY so the two
+     cards render at an identical 480px and centre on the same
+     axis: a hard 480px width (not max-width — max-width collapses
+     to a narrow parent, a fixed width does not) with a
+     max-width:100% guard so it still shrinks on sub-480px phones.
+     Centred with margin:0 auto against the full page width (there
+     is deliberately no st.columns wrapper — see app.py). */
+  width:480px;max-width:100%;margin:0 auto 4px auto;padding:0;
   font-family:"Geist",system-ui,-apple-system,"Segoe UI",sans-serif;
   color:var(--ink);
   -webkit-font-smoothing:antialiased;
@@ -259,7 +264,7 @@ def _welcome_panel_html() -> str:
 _LOGIN_OR_DIVIDER_HTML = """
 <style>
 .labdash-or-wrap{
-  max-width:480px;margin:22px auto 18px auto;padding:0 4px;
+  width:480px;max-width:100%;margin:22px auto 18px auto;padding:0;
   font-family:"Geist",system-ui,-apple-system,"Segoe UI",sans-serif;
 }
 .labdash-or-divider{
