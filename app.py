@@ -204,9 +204,9 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
 
               /* The form wrapper IS the card. */
               html body #login-overlay [data-testid="stForm"] {
-                  width: 360px !important;
-                  max-width: 360px !important;
-                  padding: 40px 36px !important;
+                  width: 480px !important;
+                  max-width: 480px !important;
+                  padding: 28px 40px !important;
                   background: #ffffff !important;
                   border: 0.5px solid rgba(0, 0, 0, 0.08) !important;
                   border-radius: 12px !important;
@@ -374,7 +374,7 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
         # appears centered without using flex (which would conflict
         # with Streamlit's default block layout).
         st.markdown(
-            '<div id="login-overlay" style="padding-top: 10vh;">',
+            '<div id="login-overlay" style="padding-top: 4vh;">',
             unsafe_allow_html=True,
         )
 
@@ -390,7 +390,13 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
         # column wrappers add gutter padding that would otherwise
         # shift the welcome panel a few px left or right of the
         # login card when rendered at the full page width.
-        _, col, _ = st.columns([1, 0.9, 1])
+        #
+        # Column ratio is `[1, 1.5, 1]` so the middle column is
+        # wide enough to fit the 480px welcome + 480px login card
+        # without forcing a horizontal compression on smaller
+        # desktop viewports. The previous `[1, 0.9, 1]` worked for
+        # 360px cards but would clip the wider 480px ones.
+        _, col, _ = st.columns([1, 1.5, 1])
         with col:
             from ui.labdash_notice import render_login_welcome
             render_login_welcome()

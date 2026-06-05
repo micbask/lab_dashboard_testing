@@ -105,7 +105,9 @@ def _welcome_panel_html() -> str:
   --muted:#6E665E; --soft:#9A938A;
   --line:#E8E2D9; --line-soft:#F1ECE4;
 
-  max-width:360px;margin:0 auto 4px auto;padding:0;
+  /* 480px to match the login card directly below; the two share
+     a column wrapper so both centre on the same axis. */
+  max-width:480px;margin:0 auto 4px auto;padding:0;
   font-family:"Geist",system-ui,-apple-system,"Segoe UI",sans-serif;
   color:var(--ink);
   -webkit-font-smoothing:antialiased;
@@ -151,9 +153,9 @@ def _welcome_panel_html() -> str:
 }}
 .labdash-welcome-scope .panel h1 {{
   font-family:"Fraunces",Georgia,serif;font-weight:600;
-  font-size:clamp(1.25rem,3.6vw,1.45rem);line-height:1.1;
+  font-size:clamp(1.5rem,3.5vw,1.85rem);line-height:1.1;
   letter-spacing:-.01em;color:var(--ink);
-  margin:0 0 14px 0;padding:0;white-space:nowrap;
+  margin:0 0 14px 0;padding:0;
 }}
 .labdash-welcome-scope .msg p {{
   font-size:.95rem;line-height:1.55;
