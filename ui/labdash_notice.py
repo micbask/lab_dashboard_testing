@@ -15,40 +15,63 @@ who cannot yet sign in to the new app. Two surfaces here:
                                 the very top of the authenticated
                                 dashboard (analytics + pre-analytics).
 
-Both surfaces use ``st.components.v1.html`` (an iframe) rather than
-``st.markdown`` because the Copy button requires real JS
-(``navigator.clipboard.writeText`` + execCommand fallback) — markdown
-strips scripts. Inside the iframe, the Open link uses
-``target="_top"`` so clicking it navigates the top window instead of
-the embedded iframe.
+WHY st.markdown AND NOT st.components.v1.html:
 
-The banner dismiss is wired through ``localStorage`` rather than
-``st.session_state``. A session_state round-trip would need a
-Streamlit-side button outside the iframe to communicate the dismiss
-back to Python, which would visually clash with the banner. Using
-localStorage gives a clean self-contained dismiss that persists
-across Streamlit reruns AND across reloads in the same browser.
+An earlier version of this module rendered both surfaces in
+``st.components.v1.html`` iframes so the Copy button could run real
+JS (``navigator.clipboard.writeText``). That broke the more important
+button: Streamlit's component iframe sandbox prevents the embedded
+``<a target="_top">`` from navigating the top window, so the "Open
+the new dashboard" link silently did nothing. Since the navigation
+button is the whole point of these surfaces, we render the panels
+via ``st.markdown(unsafe_allow_html=True)``. Markdown-rendered
+anchors with no ``target`` attribute navigate the current tab
+directly — exactly what users want.
+
+The Copy button is handled separately by ``st.code(URL)`` (native
+Streamlit widget with a built-in one-click copy icon) on the login
+welcome. The banner drops Copy entirely — the URL is visible in the
+banner text and the Open button does the heavy lifting.
+
+CSS is scoped under ``.labdash-welcome-scope`` / ``.labdash-banner-scope``
+so the panel styling doesn't bleed into the rest of the Streamlit
+page (no global ``*`` reset, no top-level ``:root`` overrides).
 """
 
 from __future__ import annotations
 
 import streamlit as st
-from streamlit.components.v1 import html as _components_html
 
 
 # Single source of truth for the destination so the copy + open + label
-# can't drift apart. Mirrors the value baked into the iframe HTML below.
+# can't drift apart.
 NEW_APP_URL = "https://labdash.micbask.com"
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# SHARED STYLES
-# ═════════════════════════════════════════════════════════════════════════════
-# Brand tokens lifted verbatim from the design mock so the two iframes
-# render consistently with each other and with the standalone LabDash
-# site. Fonts are pulled from Google Fonts; the iframe is sandboxed
-# from the parent page so this @import is scoped to the notice
-# surfaces and doesn't leak into the rest of the Streamlit app.
+# 3x3 grid mark, deep red ramping to gold top-right cell. Same SVG the
+# standalone LabDash site uses so the brand reads consistently across
+# the relocation surfaces.
+def _labdash_mark_svg(width: int, height: int) -> str:
+    return (
+        f'<svg width="{width}" height="{height}" viewBox="0 0 32 32" '
+        'fill="none" role="img" aria-label="LabDash">'
+        '<rect x="2"  y="2"  width="8" height="8" rx="2.5" fill="#AE1F22"/>'
+        '<rect x="12" y="2"  width="8" height="8" rx="2.5" fill="#7A0A1C"/>'
+        '<rect x="22" y="2"  width="8" height="8" rx="2.5" fill="#FFCC00"/>'
+        '<rect x="2"  y="12" width="8" height="8" rx="2.5" fill="#D96A6A"/>'
+        '<rect x="12" y="12" width="8" height="8" rx="2.5" fill="#AE1F22"/>'
+        '<rect x="22" y="12" width="8" height="8" rx="2.5" fill="#7A0A1C"/>'
+        '<rect x="2"  y="22" width="8" height="8" rx="2.5" fill="#F5CACA"/>'
+        '<rect x="12" y="22" width="8" height="8" rx="2.5" fill="#D96A6A"/>'
+        '<rect x="22" y="22" width="8" height="8" rx="2.5" fill="#AE1F22"/>'
+        '</svg>'
+    )
+
+
+# Google Fonts import — kept at the very top of each <style> block so
+# the @import resolves before subsequent rules reference the families.
+# Loads page-globally (fonts are inert until something uses them via
+# `font-family`), so we don't worry about scoping.
 _FONT_IMPORT = (
     "@import url('https://fonts.googleapis.com/css2?"
     "family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;"
@@ -58,97 +81,42 @@ _FONT_IMPORT = (
     "&display=swap');"
 )
 
-_BRAND_TOKENS = """
-:root{
-  --cardinal:#990000; --cardinal-deep:#7A0A1C;
-  --gold:#C2870F; --peak:#FFCC00;
-  --bg:#FAF8F4; --surface:#FFFFFF;
-  --ink:#1A1613; --body:#3C352E;
-  --muted:#6E665E; --soft:#9A938A;
-  --line:#E8E2D9; --line-soft:#F1ECE4;
-}
-*{box-sizing:border-box;margin:0;padding:0;}
-html,body{background:transparent;}
-"""
-
-# 3x3 grid mark, deep red ramping to gold top-right cell. The exact
-# same SVG used by the standalone LabDash site so the brand reads
-# consistently across the relocation surfaces.
-_LABDASH_MARK_SVG = """\
-<svg width="{w}" height="{h}" viewBox="0 0 32 32" fill="none" role="img" aria-label="LabDash">
-  <rect x="2"  y="2"  width="8" height="8" rx="2.5" fill="#AE1F22"/>
-  <rect x="12" y="2"  width="8" height="8" rx="2.5" fill="#7A0A1C"/>
-  <rect x="22" y="2"  width="8" height="8" rx="2.5" fill="#FFCC00"/>
-  <rect x="2"  y="12" width="8" height="8" rx="2.5" fill="#D96A6A"/>
-  <rect x="12" y="12" width="8" height="8" rx="2.5" fill="#AE1F22"/>
-  <rect x="22" y="12" width="8" height="8" rx="2.5" fill="#7A0A1C"/>
-  <rect x="2"  y="22" width="8" height="8" rx="2.5" fill="#F5CACA"/>
-  <rect x="12" y="22" width="8" height="8" rx="2.5" fill="#D96A6A"/>
-  <rect x="22" y="22" width="8" height="8" rx="2.5" fill="#AE1F22"/>
-</svg>"""
-
-# Shared Copy + open behaviour. Lifted from the design mock.
-# `target="_top"` on Open links is set at HTML render time, not here.
-_COPY_SCRIPT = """
-(function(){
-  function wireCopy(btn){
-    if(!btn) return;
-    btn.addEventListener('click', function(){
-      var url = btn.getAttribute('data-url');
-      function done(){
-        var lab = btn.querySelector('.label');
-        if(!lab) return;
-        var prev = lab.textContent;
-        lab.textContent = 'Copied';
-        btn.classList.add('copied');
-        setTimeout(function(){
-          lab.textContent = prev;
-          btn.classList.remove('copied');
-        }, 1600);
-      }
-      function fallback(){
-        var ta = document.createElement('textarea');
-        ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0';
-        document.body.appendChild(ta); ta.select();
-        try { document.execCommand('copy'); } catch(e) {}
-        document.body.removeChild(ta);
-        done();
-      }
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(url).then(done).catch(fallback);
-      } else {
-        fallback();
-      }
-    });
-  }
-  document.querySelectorAll('[data-copy-button]').forEach(wireCopy);
-})();
-"""
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # LOGIN WELCOME PANEL
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _login_welcome_html() -> str:
-    """Build the full iframe HTML for the login-screen welcome panel."""
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+def _welcome_panel_html() -> str:
+    """Full <style>+<div> block for the login welcome panel.
+
+    Scoped under ``.labdash-welcome-scope`` so descendants get the
+    brand tokens + locally-namespaced typography without affecting
+    the rest of the Streamlit page. A local box-sizing reset is
+    applied to descendants only; no global ``*`` selector.
+    """
+    return f"""
 <style>
 {_FONT_IMPORT}
-{_BRAND_TOKENS}
-body{{
+
+.labdash-welcome-scope {{
+  --cardinal:#990000; --cardinal-deep:#7A0A1C;
+  --gold:#C2870F; --peak:#FFCC00;
+  --surface:#FFFFFF; --ink:#1A1613; --body:#3C352E;
+  --muted:#6E665E; --soft:#9A938A;
+  --line:#E8E2D9; --line-soft:#F1ECE4;
+
+  max-width:600px;margin:0 auto 4px auto;padding:0 4px;
   font-family:"Geist",system-ui,-apple-system,"Segoe UI",sans-serif;
   color:var(--ink);
   -webkit-font-smoothing:antialiased;
   text-rendering:optimizeLegibility;
-  padding:8px 4px 4px 4px;
 }}
-.wrap{{max-width:600px;margin:0 auto;}}
-.panel{{
+.labdash-welcome-scope *,
+.labdash-welcome-scope *::before,
+.labdash-welcome-scope *::after {{
+  box-sizing:border-box;
+}}
+.labdash-welcome-scope .panel {{
   position:relative;background:var(--surface);
   border:1px solid var(--line);border-radius:18px;
   padding:clamp(28px,5vw,48px);
@@ -156,146 +124,155 @@ body{{
              0 26px 64px -30px rgba(26,22,19,.20);
   overflow:hidden;
 }}
-.panel::before{{
+.labdash-welcome-scope .panel::before {{
   content:"";position:absolute;top:0;left:0;right:0;height:3px;
   background:linear-gradient(90deg,var(--peak) 0 54px,var(--cardinal) 54px 100%);
 }}
-.watermark{{
+.labdash-welcome-scope .watermark {{
   position:absolute;top:-22px;right:-22px;
   width:184px;height:184px;opacity:.05;pointer-events:none;
 }}
-.eyebrow{{
+.labdash-welcome-scope .eyebrow {{
   display:inline-flex;align-items:center;gap:8px;
   font-family:"Geist Mono",ui-monospace,monospace;
   font-size:11px;letter-spacing:.18em;text-transform:uppercase;
   color:var(--cardinal);font-weight:500;margin-bottom:22px;
 }}
-.eyebrow .dot{{width:6px;height:6px;border-radius:50%;background:var(--cardinal);}}
-.lockup{{display:flex;align-items:center;gap:13px;margin-bottom:24px;}}
-.lockup .word{{
+.labdash-welcome-scope .eyebrow .dot {{
+  width:6px;height:6px;border-radius:50%;background:var(--cardinal);
+}}
+.labdash-welcome-scope .lockup {{
+  display:flex;align-items:center;gap:13px;margin-bottom:24px;
+}}
+.labdash-welcome-scope .lockup .word {{
   font-family:"Fraunces",Georgia,serif;font-weight:600;
   font-size:22px;letter-spacing:-.01em;color:var(--ink);line-height:1.1;
+  margin:0;
 }}
-.lockup .formerly{{
+.labdash-welcome-scope .lockup .formerly {{
   font-family:"Geist Mono",ui-monospace,monospace;
   font-size:10.5px;color:var(--soft);margin-top:3px;
 }}
-.panel h1{{
+.labdash-welcome-scope .panel h1 {{
   font-family:"Fraunces",Georgia,serif;font-weight:600;
   font-size:clamp(2rem,5.4vw,2.9rem);line-height:1.04;
-  letter-spacing:-.02em;color:var(--ink);margin-bottom:18px;
+  letter-spacing:-.02em;color:var(--ink);
+  margin:0 0 18px 0;padding:0;
 }}
-.msg{{max-width:50ch;}}
-.msg p{{font-size:clamp(1rem,2.4vw,1.07rem);line-height:1.62;color:var(--body);}}
-.msg p + p{{margin-top:12px;}}
-.msg .inline-url{{
-  font-family:"Geist Mono",ui-monospace,monospace;font-weight:500;color:var(--cardinal);
+.labdash-welcome-scope .msg {{ max-width:50ch; }}
+.labdash-welcome-scope .msg p {{
+  font-size:clamp(1rem,2.4vw,1.07rem);line-height:1.62;
+  color:var(--body);margin:0;padding:0;
 }}
-.msg .sig{{
+.labdash-welcome-scope .msg p + p {{ margin-top:12px; }}
+.labdash-welcome-scope .msg .inline-url {{
+  font-family:"Geist Mono",ui-monospace,monospace;
+  font-weight:500;color:var(--cardinal);
+}}
+.labdash-welcome-scope .msg .sig {{
   margin-top:16px;font-family:"Fraunces",Georgia,serif;
   font-style:italic;font-weight:500;font-size:1.08rem;color:var(--ink);
 }}
-.actions{{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:26px;}}
-.cta{{
+.labdash-welcome-scope .actions {{
+  display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:26px;
+}}
+.labdash-welcome-scope .cta {{
   display:inline-flex;align-items:center;gap:10px;
-  background:var(--cardinal);color:#fff;text-decoration:none;
+  background:var(--cardinal) !important;color:#fff !important;
+  text-decoration:none !important;
   font-family:"Geist",system-ui,sans-serif;font-weight:600;font-size:1rem;
   padding:14px 22px;border-radius:11px;
   transition:transform .15s ease,background .15s ease,box-shadow .15s ease;
   box-shadow:0 1px 2px rgba(122,10,28,.18),0 12px 24px -14px rgba(122,10,28,.5);
 }}
-.cta:hover{{background:var(--cardinal-deep);transform:translateY(-1px);}}
-.cta .arrow{{transition:transform .15s ease;}}
-.cta:hover .arrow{{transform:translateX(3px);}}
-.copy{{
-  display:inline-flex;align-items:center;gap:9px;background:#fff;color:var(--ink);
-  border:1px solid var(--line);
-  font-family:"Geist",system-ui,sans-serif;font-weight:600;font-size:1rem;
-  padding:13px 18px;border-radius:11px;cursor:pointer;
-  transition:border-color .15s ease,color .15s ease,background .15s ease,transform .15s ease;
+.labdash-welcome-scope .cta:hover {{
+  background:var(--cardinal-deep) !important;transform:translateY(-1px);
 }}
-.copy:hover{{border-color:var(--cardinal);color:var(--cardinal);transform:translateY(-1px);}}
-.copy.copied{{border-color:var(--cardinal);color:var(--cardinal);background:#FCF3F3;}}
-.cta:focus-visible,.copy:focus-visible{{outline:3px solid rgba(194,135,15,.55);outline-offset:2px;}}
-.signin{{
+.labdash-welcome-scope .cta .arrow {{ transition:transform .15s ease; }}
+.labdash-welcome-scope .cta:hover .arrow {{ transform:translateX(3px); }}
+.labdash-welcome-scope .signin {{
   margin-top:26px;display:flex;gap:12px;align-items:flex-start;
   border:1px solid var(--line);border-left:3px solid var(--gold);
   background:#FCFAF5;border-radius:10px;padding:14px 16px;
 }}
-.signin svg{{flex:none;margin-top:2px;color:var(--gold);}}
-.signin .t{{font-size:.92rem;line-height:1.5;color:var(--ink);}}
-.signin .t .mono{{font-family:"Geist Mono",ui-monospace,monospace;font-weight:500;}}
-.signin .t .note{{
+.labdash-welcome-scope .signin svg {{
+  flex:none;margin-top:2px;color:var(--gold);
+}}
+.labdash-welcome-scope .signin .t {{
+  font-size:.92rem;line-height:1.5;color:var(--ink);
+}}
+.labdash-welcome-scope .signin .t .mono {{
+  font-family:"Geist Mono",ui-monospace,monospace;font-weight:500;
+}}
+.labdash-welcome-scope .signin .t .note {{
   display:block;color:var(--muted);margin-top:4px;font-size:.86rem;
 }}
-.foot{{
+.labdash-welcome-scope .foot {{
   margin-top:28px;padding-top:18px;border-top:1px solid var(--line-soft);
   font-family:"Geist Mono",ui-monospace,monospace;
   font-size:11px;color:var(--soft);line-height:1.65;
 }}
+
+/* Small label introducing the native st.code copy widget that sits
+   just under this panel. Lives inside the scope so it stays visually
+   aligned with the panel's content column. */
+.labdash-welcome-scope .copy-hint {{
+  max-width:600px;margin:14px auto 0 auto;padding:0 4px;
+  font-family:"Geist Mono",ui-monospace,monospace;
+  font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--soft);
+}}
 </style>
-</head>
-<body>
-  <div class="wrap">
-    <main class="panel" role="main">
-      <div class="watermark">{_LABDASH_MARK_SVG.format(w=184, h=184)}</div>
-      <div class="eyebrow"><span class="dot"></span>We&rsquo;ve moved</div>
-      <div class="lockup">
-        {_LABDASH_MARK_SVG.format(w=42, h=42)}
-        <div>
-          <div class="word">LabDash</div>
-          <div class="formerly">formerly the Laboratory Productivity Dashboard</div>
-        </div>
+<div class="labdash-welcome-scope">
+  <main class="panel" role="main">
+    <div class="watermark">{_labdash_mark_svg(184, 184)}</div>
+    <div class="eyebrow"><span class="dot"></span>We&rsquo;ve moved</div>
+    <div class="lockup">
+      {_labdash_mark_svg(42, 42)}
+      <div>
+        <div class="word">LabDash</div>
+        <div class="formerly">formerly the Laboratory Productivity Dashboard</div>
       </div>
-      <h1>LabDash has a new home</h1>
-      <div class="msg">
-        <p>Hi team, we&rsquo;ve rebuilt the dashboard as its own standalone app, so it is
-           faster, more secure, and ready for new features. The new home is
-           <span class="inline-url">labdash.micbask.com</span>.</p>
-        <p>If you run into any access issues, reach out to the Ops team or me and we&rsquo;ll
-           get it sorted. Thanks!</p>
-        <p class="sig">Michael</p>
+    </div>
+    <h1>LabDash has a new home</h1>
+    <div class="msg">
+      <p>Hi team, we&rsquo;ve rebuilt the dashboard as its own standalone app, so it is
+         faster, more secure, and ready for new features. The new home is
+         <span class="inline-url">labdash.micbask.com</span>.</p>
+      <p>If you run into any access issues, reach out to the Ops team or me and we&rsquo;ll
+         get it sorted. Thanks!</p>
+      <p class="sig">Michael</p>
+    </div>
+    <div class="actions">
+      <a class="cta" href="{NEW_APP_URL}">
+        Open the new dashboard <span class="arrow" aria-hidden="true">&rarr;</span>
+      </a>
+    </div>
+    <div class="signin">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 3l7 3v5c0 4.2-2.9 7.6-7 8.7C7.9 18.6 5 15.2 5 11V6l7-3z"
+              stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+      </svg>
+      <div class="t">
+        Sign in with your <span class="mono">@usc.edu</span> Microsoft account.
+        <span class="note">
+          <span class="mono">@med.usc.edu</span> accounts aren&rsquo;t supported yet.
+        </span>
       </div>
-      <div class="actions">
-        <a class="cta" href="{NEW_APP_URL}" target="_top">
-          Open the new dashboard <span class="arrow" aria-hidden="true">&rarr;</span>
-        </a>
-        <button class="copy" type="button" data-copy-button data-url="{NEW_APP_URL}"
-                aria-label="Copy the new address">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <rect x="9" y="9" width="11" height="11" rx="2"
-                  stroke="currentColor" stroke-width="1.7"/>
-            <path d="M5 15V5a2 2 0 0 1 2-2h10"
-                  stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-          </svg>
-          <span class="label">Copy address</span>
-        </button>
-      </div>
-      <div class="signin">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M12 3l7 3v5c0 4.2-2.9 7.6-7 8.7C7.9 18.6 5 15.2 5 11V6l7-3z"
-                stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-        </svg>
-        <div class="t">
-          Sign in with your <span class="mono">@usc.edu</span> Microsoft account.
-          <span class="note">
-            <span class="mono">@med.usc.edu</span> accounts aren&rsquo;t supported yet.
-          </span>
-        </div>
-      </div>
-      <div class="foot">
-        Please update your bookmarks. This page will retire once everyone has moved over.
-      </div>
-    </main>
-  </div>
-  <script>{_COPY_SCRIPT}</script>
-</body>
-</html>"""
+    </div>
+    <div class="foot">
+      Please update your bookmarks. This page will retire once everyone has moved over.
+    </div>
+  </main>
+</div>
+<div class="labdash-welcome-scope">
+  <div class="copy-hint">Copy address</div>
+</div>
+"""
 
 
-# CSS-only markup for the "OR" divider + fallback lead-in between the
-# welcome iframe and the native password form. No JS in here, so it
-# can ride directly through st.markdown rather than another iframe.
+# CSS-only "OR" divider + fallback lead-in between the welcome panel
+# and the existing native password form below.
 _LOGIN_OR_DIVIDER_HTML = """
 <style>
 .labdash-or-wrap{
@@ -327,10 +304,16 @@ _LOGIN_OR_DIVIDER_HTML = """
 
 
 def render_login_welcome() -> None:
-    """Render the welcome panel + OR divider + fallback lead-in above
-    the native password form on the pre-auth login screen.
+    """Render the welcome panel + native copy widget + OR divider + fallback
+    lead-in above the native password form on the pre-auth login screen.
+
+    The Open button is a real Streamlit-page anchor (no ``target``)
+    so the click navigates the current tab to LabDash directly. The
+    copy widget is ``st.code(URL)`` — native one-click copy via
+    Streamlit's built-in code-block icon, no JS required.
     """
-    _components_html(_login_welcome_html(), height=820, scrolling=False)
+    st.markdown(_welcome_panel_html(), unsafe_allow_html=True)
+    st.code(NEW_APP_URL, language=None)
     st.markdown(_LOGIN_OR_DIVIDER_HTML, unsafe_allow_html=True)
 
 
@@ -338,80 +321,84 @@ def render_login_welcome() -> None:
 # DASHBOARD RETIREMENT BANNER
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _dashboard_banner_html() -> str:
-    """Build the full iframe HTML for the retirement banner mounted at
-    the top of the authenticated dashboard.
+def _banner_html() -> str:
+    """Full <style>+<div> block for the dashboard retirement banner.
+
+    The URL is in the banner text and the Open button is the primary
+    action; Copy is dropped (an additional st.code right under the
+    banner would visually disrupt the dashboard layout). Dismiss is
+    also dropped — the banner is a persistent "we WANT you to see
+    this" notice. Both omissions were called out as acceptable in
+    the original design brief.
     """
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+    return f"""
 <style>
 {_FONT_IMPORT}
-{_BRAND_TOKENS}
-body{{
+
+.labdash-banner-scope {{
+  --cardinal:#990000; --cardinal-deep:#7A0A1C;
+  --gold:#C2870F;
+  --ink:#1A1613;
+
+  margin:0 0 8px 0;
   font-family:"Geist",system-ui,-apple-system,"Segoe UI",sans-serif;
   color:var(--ink);
   -webkit-font-smoothing:antialiased;
 }}
-.depbar{{
+.labdash-banner-scope *,
+.labdash-banner-scope *::before,
+.labdash-banner-scope *::after {{
+  box-sizing:border-box;
+}}
+.labdash-banner-scope .depbar {{
   display:flex;align-items:center;gap:16px;flex-wrap:wrap;
   background:linear-gradient(180deg,#FCF5E2,#FBF1D8);
   border:1px solid #ECD9A6;border-radius:10px;
   box-shadow:0 6px 18px -12px rgba(122,60,0,.30);
   padding:11px 18px;
 }}
-.depbar .icon{{flex:none;display:flex;}}
-.depbar .txt{{
+.labdash-banner-scope .depbar .icon {{
+  flex:none;display:flex;
+}}
+.labdash-banner-scope .depbar .txt {{
   font-size:.92rem;line-height:1.4;color:var(--ink);min-width:240px;
 }}
-.depbar .txt .mono{{
-  font-family:"Geist Mono",ui-monospace,monospace;font-weight:500;color:var(--cardinal);
+.labdash-banner-scope .depbar .txt .mono {{
+  font-family:"Geist Mono",ui-monospace,monospace;
+  font-weight:500;color:var(--cardinal);
 }}
-.depbar .txt strong{{font-weight:600;}}
-.depbar .txt .note{{
+.labdash-banner-scope .depbar .txt strong {{ font-weight:600; }}
+.labdash-banner-scope .depbar .txt .note {{
   display:block;color:#7a6a42;font-size:.78rem;margin-top:2px;
 }}
-.depbar .spacer{{flex:1 1 12px;}}
-.depbar .row{{display:flex;align-items:center;gap:9px;}}
-.bb{{
+.labdash-banner-scope .depbar .spacer {{ flex:1 1 12px; }}
+.labdash-banner-scope .depbar .row {{
+  display:flex;align-items:center;gap:9px;
+}}
+.labdash-banner-scope .bb {{
   display:inline-flex;align-items:center;gap:8px;
   font-family:"Geist",system-ui,sans-serif;font-weight:600;font-size:.9rem;
   padding:9px 15px;border-radius:9px;cursor:pointer;
-  border:1px solid transparent;text-decoration:none;
+  border:1px solid transparent;
+  text-decoration:none !important;
   transition:transform .14s ease,background .14s ease,
              border-color .14s ease,color .14s ease,box-shadow .14s ease;
 }}
-.bb-primary{{
-  background:var(--cardinal);color:#fff;
-  box-shadow:0 1px 2px rgba(122,10,28,.18),0 10px 20px -14px rgba(122,10,28,.55);
+.labdash-banner-scope .bb-primary {{
+  background:var(--cardinal) !important;color:#fff !important;
+  box-shadow:0 1px 2px rgba(122,10,28,.18),
+             0 10px 20px -14px rgba(122,10,28,.55);
 }}
-.bb-primary:hover{{background:var(--cardinal-deep);transform:translateY(-1px);}}
-.bb-primary .arrow{{transition:transform .14s ease;}}
-.bb-primary:hover .arrow{{transform:translateX(2px);}}
-.bb-ghost{{
-  background:rgba(255,255,255,.65);border-color:#E2CF9B;color:#6b4f12;
+.labdash-banner-scope .bb-primary:hover {{
+  background:var(--cardinal-deep) !important;
+  transform:translateY(-1px);
 }}
-.bb-ghost:hover{{
-  border-color:var(--gold);color:var(--gold);background:#fff;
-}}
-.bb-ghost.copied{{border-color:var(--cardinal);color:var(--cardinal);}}
-.bb:focus-visible{{
-  outline:3px solid rgba(194,135,15,.55);outline-offset:2px;
-}}
-.dismiss{{
-  flex:none;width:30px;height:30px;border-radius:8px;
-  border:1px solid transparent;background:transparent;color:#9c8a5c;cursor:pointer;
-  display:grid;place-items:center;font-size:17px;line-height:1;
-  transition:background .14s ease,color .14s ease;
-}}
-.dismiss:hover{{background:rgba(150,110,20,.10);color:#6b4f12;}}
+.labdash-banner-scope .bb-primary .arrow {{ transition:transform .14s ease; }}
+.labdash-banner-scope .bb-primary:hover .arrow {{ transform:translateX(2px); }}
 </style>
-</head>
-<body>
-  <div class="depbar" id="depbar" role="region" aria-label="Service notice">
-    <span class="icon">{_LABDASH_MARK_SVG.format(w=26, h=26)}</span>
+<div class="labdash-banner-scope">
+  <div class="depbar" role="region" aria-label="Service notice">
+    <span class="icon">{_labdash_mark_svg(26, 26)}</span>
     <div class="txt">
       LabDash has moved to <span class="mono">labdash.micbask.com</span>.
       This version will be retired <strong>soon</strong>, please switch over when you can.
@@ -419,47 +406,21 @@ body{{
     </div>
     <span class="spacer"></span>
     <div class="row">
-      <a class="bb bb-primary" href="{NEW_APP_URL}" target="_top">
+      <a class="bb bb-primary" href="{NEW_APP_URL}">
         Open new dashboard <span class="arrow" aria-hidden="true">&rarr;</span>
       </a>
-      <button class="bb bb-ghost" type="button" data-copy-button data-url="{NEW_APP_URL}">
-        <span class="label">Copy address</span>
-      </button>
-      <button class="dismiss" type="button" id="dismissBtn" aria-label="Dismiss notice">
-        &times;
-      </button>
     </div>
   </div>
-  <script>
-    (function(){{
-      var KEY = 'labdash-banner-dismissed-v1';
-      var bar = document.getElementById('depbar');
-      // Hide immediately on load if previously dismissed in this
-      // browser. Iframe inherits storage of its OWN origin (the
-      // Streamlit component endpoint), so dismissal persists across
-      // Streamlit reruns + page reloads on the same Streamlit host.
-      try {{
-        if (window.localStorage && window.localStorage.getItem(KEY) === '1') {{
-          if (bar) bar.style.display = 'none';
-        }}
-      }} catch (e) {{}}
-      var dismiss = document.getElementById('dismissBtn');
-      if (dismiss) {{
-        dismiss.addEventListener('click', function(){{
-          if (bar) bar.style.display = 'none';
-          try {{ window.localStorage.setItem(KEY, '1'); }} catch (e) {{}}
-        }});
-      }}
-    }})();
-    {_COPY_SCRIPT}
-  </script>
-</body>
-</html>"""
+</div>
+"""
 
 
 def render_dashboard_banner() -> None:
     """Render the retirement banner at the top of the authenticated
     dashboard (called once on every rerun, on both analytics and
     pre-analytics dashboards).
+
+    The Open button is a real Streamlit-page anchor (no ``target``)
+    so the click navigates the current tab to LabDash directly.
     """
-    _components_html(_dashboard_banner_html(), height=110, scrolling=False)
+    st.markdown(_banner_html(), unsafe_allow_html=True)
