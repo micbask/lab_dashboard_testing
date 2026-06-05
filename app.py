@@ -192,18 +192,32 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
         st.markdown(
             """
             <style>
-              /* Hide Streamlit's form-input hints (e.g. "Press Enter to
-                 submit") that otherwise overlap the password show/hide
-                 eye icon — both site-wide on the login page (no other
-                 forms render here) and any nested form-instruction chip. */
-              #login-overlay [data-testid="InputInstructions"],
-              #login-overlay [data-testid="stFormHint"],
+              /* All login-page CSS rules are scoped to
+                 `.st-key-labdash_login_card` — the CSS class Streamlit
+                 emits on `st.container(key="labdash_login_card")` (see
+                 the form-mount block below). The previous version
+                 prefixed selectors with `#login-overlay`, but that
+                 was a `st.markdown('<div id="login-overlay">')`
+                 wrapper which DOES NOT actually wrap subsequent
+                 widgets — Streamlit renders each st.* call as its
+                 own DeltaGenerator block and the markdown's HTML is
+                 auto-closed within its own component. The widgets
+                 ended up as SIBLINGS of the empty #login-overlay
+                 div, so the descendant combinator never matched and
+                 every form-sizing rule was silently a no-op. The
+                 form rendered at Streamlit's default styling and
+                 filled the parent column. `st.container(key=...)`
+                 creates a real DOM wrapper (`<div class="st-key-...">`)
+                 that DOES contain the nested widgets, so descendant
+                 selectors actually match. */
+              .st-key-labdash_login_card [data-testid="InputInstructions"],
+              .st-key-labdash_login_card [data-testid="stFormHint"],
               [data-testid="InputInstructions"] {
                   display: none !important;
               }
 
               /* The form wrapper IS the card. */
-              html body #login-overlay [data-testid="stForm"] {
+              html body .st-key-labdash_login_card [data-testid="stForm"] {
                   width: 480px !important;
                   max-width: 480px !important;
                   padding: 28px 40px !important;
@@ -229,7 +243,7 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                    (3) <button> inside the wrapper: stripped chrome
                        and minimal padding (0 8px 0 4px) so the eye
                        SVG sits flush against the right border. */
-              html body #login-overlay [data-testid="stForm"]
+              html body .st-key-labdash_login_card [data-testid="stForm"]
                   [data-testid="stTextInput"] [data-baseweb="input"] {
                   width: 100% !important;
                   background: #ffffff !important;
@@ -239,12 +253,12 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                   box-sizing: border-box !important;
                   transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
               }
-              html body #login-overlay [data-testid="stForm"]
+              html body .st-key-labdash_login_card [data-testid="stForm"]
                   [data-testid="stTextInput"] [data-baseweb="input"]:focus-within {
                   border-color: #790A26 !important;
                   box-shadow: 0 0 0 2px rgba(121, 10, 38, 0.12) !important;
               }
-              html body #login-overlay [data-testid="stForm"]
+              html body .st-key-labdash_login_card [data-testid="stForm"]
                   [data-testid="stTextInput"]
                   [data-baseweb="input"] [data-baseweb="base-input"] {
                   background: transparent !important;
@@ -252,7 +266,7 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                   padding: 0 !important;
                   border: none !important;
               }
-              html body #login-overlay [data-testid="stForm"]
+              html body .st-key-labdash_login_card [data-testid="stForm"]
                   [data-testid="stTextInput"] [data-baseweb="input"] input {
                   width: 100% !important;
                   padding: 11px 14px !important;
@@ -267,7 +281,7 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                   box-shadow: none !important;
                   font-family: 'Inter', system-ui, sans-serif !important;
               }
-              html body #login-overlay [data-testid="stForm"]
+              html body .st-key-labdash_login_card [data-testid="stForm"]
                   [data-testid="stTextInput"] [data-baseweb="input"] button {
                   background: transparent !important;
                   background-color: transparent !important;
@@ -277,13 +291,13 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                   padding: 0 8px 0 4px !important;
                   margin: 0 !important;
               }
-              html body #login-overlay [data-testid="stForm"]
+              html body .st-key-labdash_login_card [data-testid="stForm"]
                   [data-testid="stTextInput"] [data-baseweb="input"] button svg {
                   margin: 0 !important;
                   padding: 0 !important;
                   display: block !important;
               }
-              html body #login-overlay [data-testid="stForm"]
+              html body .st-key-labdash_login_card [data-testid="stForm"]
                   [data-testid="stTextInput"] {
                   margin-bottom: 12px !important;
               }
@@ -291,12 +305,12 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
               /* Sign-in button — override the maroon site-wide button rule
                  with the login-page primary color (#790A26) and the
                  spec'd geometry. */
-              html body #login-overlay [data-testid="stForm"] .stButton > button,
-              html body #login-overlay [data-testid="stForm"]
+              html body .st-key-labdash_login_card [data-testid="stForm"] .stButton > button,
+              html body .st-key-labdash_login_card [data-testid="stForm"]
                   [data-testid="stFormSubmitButton"] button,
-              html body #login-overlay [data-testid="stForm"]
+              html body .st-key-labdash_login_card [data-testid="stForm"]
                   [data-testid="stBaseButton-primaryFormSubmit"],
-              html body #login-overlay [data-testid="stForm"]
+              html body .st-key-labdash_login_card [data-testid="stForm"]
                   button[kind="primaryFormSubmit"] {
                   width: 100% !important;
                   padding: 11px 16px !important;
@@ -312,17 +326,17 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                   box-shadow: none !important;
                   font-family: 'Inter', system-ui, sans-serif !important;
               }
-              html body #login-overlay [data-testid="stForm"]
+              html body .st-key-labdash_login_card [data-testid="stForm"]
                   [data-testid="stFormSubmitButton"] button:hover,
-              html body #login-overlay [data-testid="stForm"]
+              html body .st-key-labdash_login_card [data-testid="stForm"]
                   [data-testid="stBaseButton-primaryFormSubmit"]:hover {
                   background: #5e0820 !important;
                   background-color: #5e0820 !important;
                   border: none !important;
               }
-              html body #login-overlay [data-testid="stForm"]
+              html body .st-key-labdash_login_card [data-testid="stForm"]
                   [data-testid="stFormSubmitButton"] button p,
-              html body #login-overlay [data-testid="stForm"]
+              html body .st-key-labdash_login_card [data-testid="stForm"]
                   [data-testid="stFormSubmitButton"] button div {
                   color: #ffffff !important;
                   font-weight: 500 !important;
@@ -370,14 +384,6 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
             unsafe_allow_html=True,
         )
 
-        # Push the card down a bit from the top of the viewport so it
-        # appears centered without using flex (which would conflict
-        # with Streamlit's default block layout).
-        st.markdown(
-            '<div id="login-overlay" style="padding-top: 4vh;">',
-            unsafe_allow_html=True,
-        )
-
         # Relocation welcome panel — points users at the standalone
         # LabDash web app (labdash.micbask.com) that has superseded
         # this Streamlit app. Renders ABOVE the native password
@@ -386,23 +392,28 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
         # the new app.
         #
         # LAYOUT CONTRACT (read before touching widths):
-        #   • The st.columns wrapper is REQUIRED — the password form's
-        #     card styling is keyed to `#login-overlay [data-testid=
-        #     "stForm"]`, and that selector only resolves while the
-        #     form is nested inside this column. Removing the column
-        #     makes the form render full-bleed.
-        #   • Both the welcome panel and the form use the SAME width
-        #     mechanism: a HARD `width: 480px` (not `max-width`). A
-        #     hard width holds 480px regardless of the column's
-        #     actual width; `max-width` collapses to a narrower
-        #     parent, which is what made the welcome shrink to ~360px
-        #     while the hard-width form stayed 480px. Same mechanism
-        #     on both → identical width, same centre axis, every
-        #     viewport.
-        _, col, _ = st.columns([1, 1.5, 1])
-        with col:
-            from ui.labdash_notice import render_login_welcome
-            render_login_welcome()
+        #   • The password form lives inside
+        #     `st.container(key="labdash_login_card")`, which gives it
+        #     a real DOM wrapper element with class
+        #     `st-key-labdash_login_card`. ALL the form's card / input /
+        #     button CSS overrides above are scoped to that class
+        #     because they MUST live inside a real DOM ancestor of the
+        #     form. The earlier `<div id="login-overlay">` markdown
+        #     wrapper was a no-op: st.markdown's unsafe HTML auto-
+        #     closes within its own DeltaGenerator block and does NOT
+        #     wrap subsequent widgets. Selectors prefixed with
+        #     `#login-overlay` therefore never matched, the form
+        #     silently inherited Streamlit defaults, and any width /
+        #     padding override was dropped. st.container does wrap.
+        #   • The welcome panel renders at the top level (no column,
+        #     no container) with `width: 480px; margin: 0 auto` in its
+        #     own scope. The form ALSO renders at `width: 480px; margin:
+        #     0 auto` inside the container. Both centre on the same
+        #     page-content axis at exactly 480px.
+        from ui.labdash_notice import render_login_welcome
+        render_login_welcome()
+
+        with st.container(key="labdash_login_card"):
             with st.form("login_form", enter_to_submit=True):
                 st.markdown(
                     """
@@ -432,13 +443,13 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
                     else:
                         st.error("Incorrect password. Please try again.")
 
-            # Footer beneath the card (stays inside the centered column).
+            # Footer beneath the card (stays inside the container so
+            # its CSS selector resolves and so it centres beneath the
+            # 480px form).
             st.markdown(
                 '<div class="login-footer">v3.2 · May 2026</div>',
                 unsafe_allow_html=True,
             )
-
-        st.markdown('</div>', unsafe_allow_html=True)
     if _auth_now:
         _login_slot.empty()  # instantly clear the overlay before rerun
         st.rerun()
