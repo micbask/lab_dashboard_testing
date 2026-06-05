@@ -78,11 +78,91 @@ page (no global ``*`` reset, no top-level ``:root`` overrides).
 from __future__ import annotations
 
 import streamlit as st
+from streamlit.components.v1 import html as _components_html
 
 
 # Single source of truth for the destination so the copy + open + label
 # can't drift apart.
 NEW_APP_URL = "https://labdash.micbask.com"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# OPEN-LINK NAVIGATION HELPER (JS, robust across hosting environments)
+# ═════════════════════════════════════════════════════════════════════════════
+# The markdown-rendered <a target="_top"> works in some environments and
+# silently fails in others (e.g. when Streamlit Cloud serves the app
+# inside an iframe whose sandbox blocks top navigation). To make the
+# Open button RELIABLY do something — ideally same-tab nav, otherwise
+# new-tab nav, but never nothing — we attach a JS click handler from
+# inside a tiny invisible component iframe. The handler runs in the
+# PARENT document context (where the anchor lives), so its navigation
+# attempts honour the parent page's permissions rather than the
+# component iframe's restrictive sandbox.
+#
+# Strategy in priority order:
+#   1. window.top.location.href = url     — escape to topmost browser
+#                                            window; the URL bar updates.
+#   2. window.location.href = url         — fallback if (1) is blocked
+#                                            (still same tab, but inside
+#                                            whatever frame we're in).
+#   3. window.open(url, "_blank")         — last resort. Opens new tab;
+#                                            at least the user reaches
+#                                            the destination.
+#
+# Wrapped in try/catch with a sentinel detection (`__labDashNavigated`)
+# so we never hang on a silently-blocked nav.
+def _open_link_navigator_html() -> str:
+    return f"""<!doctype html><html><body><script>
+(function() {{
+  var url = {NEW_APP_URL!r};
+  function wire() {{
+    var doc;
+    try {{ doc = window.parent.document; }} catch (e) {{ return; }}
+    var anchors = doc.querySelectorAll('a.labdash-open-link');
+    for (var i = 0; i < anchors.length; i++) {{
+      var a = anchors[i];
+      if (a.dataset.labdashWired === '1') continue;
+      a.dataset.labdashWired = '1';
+      a.addEventListener('click', function(ev) {{
+        ev.preventDefault();
+        var navigated = false;
+        // 1. Try top-window navigation (same tab, URL bar updates).
+        try {{
+          window.parent.top.location.href = url;
+          navigated = true;
+        }} catch (err) {{}}
+        // 2. Fallback: navigate the parent frame directly.
+        if (!navigated) {{
+          try {{
+            window.parent.location.href = url;
+            navigated = true;
+          }} catch (err) {{}}
+        }}
+        // 3. Sentinel: if neither nav has taken effect after 250 ms,
+        //    open in a new tab so the click never feels dead.
+        setTimeout(function() {{
+          try {{
+            if (window.parent.location.href.indexOf(url) === -1) {{
+              window.open(url, '_blank', 'noopener');
+            }}
+          }} catch (err) {{
+            window.open(url, '_blank', 'noopener');
+          }}
+        }}, 250);
+      }});
+    }}
+  }}
+  // Anchors may not exist on first run (Streamlit renders async); poll
+  // briefly. Once attached, the wired check above keeps us idempotent
+  // across reruns.
+  wire();
+  var n = 0;
+  var iv = setInterval(function() {{
+    wire();
+    if (++n > 40) clearInterval(iv);  // give up after ~10s
+  }}, 250);
+}})();
+</script></body></html>"""
 
 
 # 3x3 grid mark, deep red ramping to gold top-right cell. Same SVG the
@@ -251,7 +331,8 @@ def _welcome_panel_html() -> str:
       <p class="sig">Michael</p>
     </div>
     <div class="actions">
-      <a class="cta" href="{NEW_APP_URL}" target="_top" rel="noopener">
+      <a class="cta labdash-open-link" data-labdash-href="{NEW_APP_URL}"
+         href="{NEW_APP_URL}" target="_top" rel="noopener">
         Open the new dashboard <span class="arrow" aria-hidden="true">&rarr;</span>
       </a>
     </div>
@@ -305,6 +386,13 @@ def render_login_welcome() -> None:
     OR divider.
     """
     st.markdown(_welcome_panel_html(), unsafe_allow_html=True)
+    # Invisible JS helper that intercepts clicks on .labdash-open-link
+    # in the parent DOM and routes them through a top → parent → new-tab
+    # navigation cascade. See _open_link_navigator_html for the
+    # rationale (boils down to: Streamlit's markdown anchor with
+    # target="_top" silently fails in some Cloud-hosted iframe
+    # configurations and we need a JS fallback that always lands).
+    _components_html(_open_link_navigator_html(), height=0)
     st.markdown(_LOGIN_OR_DIVIDER_HTML, unsafe_allow_html=True)
 
 
@@ -397,7 +485,8 @@ def _banner_html() -> str:
     </div>
     <span class="spacer"></span>
     <div class="row">
-      <a class="bb bb-primary" href="{NEW_APP_URL}" target="_top" rel="noopener">
+      <a class="bb bb-primary labdash-open-link" data-labdash-href="{NEW_APP_URL}"
+         href="{NEW_APP_URL}" target="_top" rel="noopener">
         Open new dashboard <span class="arrow" aria-hidden="true">&rarr;</span>
       </a>
     </div>
@@ -415,3 +504,7 @@ def render_dashboard_banner() -> None:
     so the click navigates the current tab to LabDash directly.
     """
     st.markdown(_banner_html(), unsafe_allow_html=True)
+    # Same JS helper as the login welcome — keeps Open behaviour
+    # consistent on both surfaces. height=0 so the iframe doesn't
+    # take vertical space.
+    _components_html(_open_link_navigator_html(), height=0)
