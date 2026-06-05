@@ -20,13 +20,28 @@ WHY st.markdown AND NOT st.components.v1.html:
 An earlier version of this module rendered both surfaces in
 ``st.components.v1.html`` iframes so the Copy button could run real
 JS (``navigator.clipboard.writeText``). That broke the more important
-button: Streamlit's component iframe sandbox prevents the embedded
-``<a target="_top">`` from navigating the top window, so the "Open
-the new dashboard" link silently did nothing. Since the navigation
-button is the whole point of these surfaces, we render the panels
-via ``st.markdown(unsafe_allow_html=True)``. Markdown-rendered
-anchors with no ``target`` attribute navigate the current tab
-directly — exactly what users want.
+button: Streamlit's component iframe sandbox does NOT include
+``allow-top-navigation`` (verified in
+streamlit/static/.../IFrameUtil.BaqCY7QW.js — the sandbox is
+``allow-forms allow-modals allow-popups
+allow-popups-to-escape-sandbox allow-same-origin allow-scripts
+allow-downloads``), so the embedded ``<a target="_top">`` is silently
+blocked and the "Open the new dashboard" link did nothing. Since
+the navigation button is the whole point of these surfaces, we
+render via ``st.markdown(unsafe_allow_html=True)``.
+
+WHY target="_self" IS EXPLICIT (do not remove):
+
+Streamlit's react-markdown anchor renderer (in src.D9MArGZj.js)
+defaults `target` to ``_blank`` for any anchor where the attribute
+isn't set:
+
+    target: i || `_blank`
+
+So an anchor written as ``<a href="...">`` ends up with
+``target="_blank"`` at render time and opens in a new tab. To
+navigate the current tab the markup MUST include ``target="_self"``
+explicitly. Both Open buttons below carry it for that reason.
 
 The Copy button is handled separately by ``st.code(URL)`` (native
 Streamlit widget with a built-in one-click copy icon) on the login
@@ -236,7 +251,7 @@ def _welcome_panel_html() -> str:
       <p class="sig">Michael</p>
     </div>
     <div class="actions">
-      <a class="cta" href="{NEW_APP_URL}">
+      <a class="cta" href="{NEW_APP_URL}" target="_self">
         Open the new dashboard <span class="arrow" aria-hidden="true">&rarr;</span>
       </a>
     </div>
@@ -397,7 +412,7 @@ def _banner_html() -> str:
     </div>
     <span class="spacer"></span>
     <div class="row">
-      <a class="bb bb-primary" href="{NEW_APP_URL}">
+      <a class="bb bb-primary" href="{NEW_APP_URL}" target="_self">
         Open new dashboard <span class="arrow" aria-hidden="true">&rarr;</span>
       </a>
     </div>
