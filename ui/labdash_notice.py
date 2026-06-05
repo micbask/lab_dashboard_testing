@@ -15,45 +15,52 @@ who cannot yet sign in to the new app. Two surfaces here:
                                 the very top of the authenticated
                                 dashboard (analytics + pre-analytics).
 
-HOW THE OPEN BUTTON ACTUALLY NAVIGATES (this is the verified-working
-pattern — every plain-HTML attempt before this failed):
+HOW THE OPEN BUTTON ACTUALLY NAVIGATES (read this before changing it):
 
-The community-documented way to do same-tab cross-origin navigation
-from a Streamlit app is the META-REFRESH-on-click pattern (packaged
-on PyPI as ``streamlit-redirect``, referenced in multiple Streamlit
-github issues and forum threads). Plain HTML anchors do NOT work
-because:
+Two findings from direct research (Streamlit forum + github issues +
+reading frontend/lib/src/util/IFrameUtil.ts on streamlit/develop):
 
-  1. ``st.markdown`` / ``st.html`` strip every ``target`` value
-     except ``_blank`` (streamlit issues #4346, #9972).
-  2. The react-markdown anchor renderer FORCES ``target="_blank"``
-     on any anchor where the attribute didn't survive sanitization
-     (NT in src.D9MArGZj.js: ``target: i || "_blank"``).
+  • Apps deployed at ``*.streamlit.app`` render at the TOP LEVEL of
+    the browser tab. There is no outer wrapping iframe.
+  • The iframe sandbox that blocks top navigation is applied ONLY
+    to ``st.components.v1.html`` iframes. That sandbox omits
+    ``allow-top-navigation``, so from inside a component iframe
+    ``target="_top"`` and ``window.top.location.href = url`` both
+    silently fail and any navigation falls through to
+    ``window.open(_blank)`` — a new tab.
 
-So any ``<a href="..." target="_top">`` ends up as
-``<a target="_blank">`` at render time and opens in a new tab.
+So the navigation must happen from app-level (top-level) code, not
+from inside a component iframe. The previous round mistakenly used
+``st.components.v1.html`` for the navigation helper and hit exactly
+that sandbox — new tab every time.
 
-Previous attempts also tried wiring a JS click handler inside
-``st.components.v1.html``. That iframe's sandbox lacks
-``allow-top-navigation`` (verified against IFrameUtil.ts on
-streamlit/develop), so ``window.top.location.href = url`` is
-silently dropped and any fallback ends up as ``window.open(_blank)``
-— another new tab.
+We can't reliably use a plain HTML anchor either:
 
-The verified working pattern instead:
+  1. Streamlit's react-markdown anchor renderer (NT in
+     src.D9MArGZj.js) forces ``target="_blank"`` on any anchor
+     where the attribute isn't preserved through sanitization, and
+  2. The sanitizer used by both ``st.markdown`` and ``st.html``
+     strips ``target`` values other than ``_blank`` (issues #4346
+     and #9972 in streamlit/streamlit).
 
-  • Replace the HTML anchor with a real ``st.button``. A button
-    click triggers a Streamlit rerun (Python execution).
-  • On that rerun, inject a ``<meta http-equiv="refresh" content="0;
-    url=...">`` via ``st.markdown``. The browser sees the meta tag
-    and navigates the current document to the URL. Same tab. URL
-    bar updates. New app's OAuth behaves the same as a direct
-    visit because no iframe is in the picture.
+The combination means a plain ``<a target="_top">`` ends up as
+``<a target="_blank">`` and opens in a new tab no matter what.
 
-The visible button uses ``st.button`` styled via CSS scoped to
-``.st-key-labdash_open_welcome`` / ``.st-key-labdash_open_banner``
-to match the cardinal CTA / banner-primary styling that used to
-live on the now-removed HTML anchors.
+The working primitive is ``st.html(script, unsafe_allow_javascript=True)``.
+Per the docstring: "st.html content is not iframed", and with the
+JS flag the embedded script actually executes in the top-level
+document. From there, ``window.location.href = url`` navigates the
+browser tab directly. The URL bar updates and the new app's OAuth
+behaves the same as a direct visit (no enclosing frame ⇒ no
+clickjacking countermeasure ⇒ no new-tab pop-out).
+
+The visible button is still an ``<a class="cta labdash-open-link">``
+rendered by ``st.markdown`` so the cardinal-CTA styling stays in
+the panel layout. The script finds every ``.labdash-open-link``
+anchor, preventDefault's the click (cancelling the markdown
+renderer's auto-added ``target="_blank"``), and assigns
+``window.location.href``. Idempotent across Streamlit reruns via a
+``data-labdash-wired`` marker. See ``_open_link_top_nav_script``.
 """
 
 from __future__ import annotations
@@ -67,33 +74,63 @@ NEW_APP_URL = "https://labdash.micbask.com"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# META-REFRESH REDIRECT (the actually-working pattern)
+# OPEN-LINK NAVIGATION HELPER (top-level JS via st.html)
 # ═════════════════════════════════════════════════════════════════════════════
-# When the user clicks the Open button (a real st.button), Streamlit
-# reruns. We detect the click and inject a meta-refresh tag into the
-# page. The browser sees `<meta http-equiv="refresh" content="0; url=...">`
-# and navigates the current document to NEW_APP_URL — same tab,
-# URL bar updates. This is the pattern the streamlit-redirect PyPI
-# package wraps; it's the documented working way to redirect a
-# Streamlit app to an external URL.
-def _emit_meta_refresh_and_stop() -> None:
-    """Inject a `<meta http-equiv="refresh">` and halt further
-    rendering so the browser sees the meta tag immediately and
-    redirects the current tab to NEW_APP_URL.
+# The previous round's component-iframe helper opened a new tab. Root
+# cause traced by direct research:
+#
+#   • Streamlit apps deployed at *.streamlit.app render at the TOP
+#     LEVEL of the browser tab — there is NO outer wrapping iframe.
+#     (Verified against streamlit's IFrameUtil.ts source.)
+#   • The sandbox that blocks top-window navigation is ONLY applied
+#     to `st.components.v1.html` iframes. From inside a component
+#     iframe, `target="_top"` and `window.top.location.href = url`
+#     are silently dropped, so any navigation attempt there falls
+#     through to `window.open(url, "_blank")` — a new tab.
+#   • Streamlit's react-markdown anchor renderer (NT in
+#     src.D9MArGZj.js) ALSO forces `target="_blank"` on any anchor
+#     where the attribute isn't preserved through sanitization, so
+#     a plain `<a target="_top">` written via `st.markdown` ends up
+#     as `_blank` regardless.
+#
+# The right primitive is `st.html(unsafe_allow_javascript=True)`:
+# it renders inline at the app's top level (NOT iframed, per the
+# docstring: "st.html content is not iframed") and lets the embedded
+# script actually run in the top-level document. From there,
+# `window.location.href = url` navigates the actual browser tab.
+# The URL bar updates. No new tab. OAuth on the new app behaves the
+# same as a direct visit because there's no enclosing frame.
+def _open_link_top_nav_script() -> str:
+    """Tiny <script> rendered via st.html(unsafe_allow_javascript=True)
+    that wires every `.labdash-open-link` anchor in the page to
+    navigate the current tab via `window.location.href`. Renders at
+    the app's top level so the navigation actually affects the
+    browser-tab URL.
     """
-    st.markdown(
-        f'<meta http-equiv="refresh" content="0; url={NEW_APP_URL}">'
-        # Also show a visible fallback link in case meta refresh is
-        # blocked by some user-agent setting (rare, but a graceful
-        # last resort beats a blank page).
-        f'<p style="text-align:center;font-family:system-ui,sans-serif;'
-        f'font-size:14px;color:#444;padding:24px;">'
-        f'Redirecting to '
-        f'<a href="{NEW_APP_URL}" style="color:#990000;">{NEW_APP_URL}</a>…'
-        f'</p>',
-        unsafe_allow_html=True,
-    )
-    st.stop()
+    return f"""<script>
+(function() {{
+  var url = {NEW_APP_URL!r};
+  function wire() {{
+    var anchors = document.querySelectorAll(
+      'a.labdash-open-link:not([data-labdash-wired])'
+    );
+    anchors.forEach(function(a) {{
+      a.dataset.labdashWired = '1';
+      a.addEventListener('click', function(ev) {{
+        ev.preventDefault();
+        // Top-level same-tab navigation — the URL bar updates and
+        // the destination loads at the top level the way it does
+        // on a direct visit.
+        window.location.href = url;
+      }});
+    }});
+  }}
+  wire();
+  // Streamlit re-renders the DOM on every interaction; rewire when
+  // new anchors appear. Cheap (querySelectorAll on a small page).
+  setInterval(wire, 500);
+}})();
+</script>"""
 
 
 # 3x3 grid mark, deep red ramping to gold top-right cell. Same SVG the
@@ -227,27 +264,6 @@ def _welcome_panel_html() -> str:
 .labdash-welcome-scope .actions {{
   display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:20px;
 }}
-
-/* Style the st.button rendered by render_login_welcome to match the
-   original cardinal CTA. Scoped to its `key=` so it only hits this
-   one button. */
-html body .st-key-labdash_open_welcome [data-testid="stButton"] button {{
-  background:#990000 !important;color:#fff !important;
-  border:none !important;border-radius:10px !important;
-  padding:11px 22px !important;
-  font-family:"Geist",system-ui,-apple-system,sans-serif !important;
-  font-weight:600 !important;font-size:.95rem !important;
-  box-shadow:0 1px 2px rgba(122,10,28,.18),
-             0 12px 24px -14px rgba(122,10,28,.5) !important;
-  transition:transform .15s ease,background .15s ease !important;
-}}
-html body .st-key-labdash_open_welcome [data-testid="stButton"] button:hover {{
-  background:#7A0A1C !important;transform:translateY(-1px);
-}}
-html body .st-key-labdash_open_welcome [data-testid="stButton"] button p {{
-  color:#fff !important;font-weight:600 !important;font-size:.95rem !important;
-  margin:0 !important;
-}}
 .labdash-welcome-scope .cta {{
   display:inline-flex;align-items:center;gap:9px;
   background:var(--cardinal) !important;color:#fff !important;
@@ -281,6 +297,12 @@ html body .st-key-labdash_open_welcome [data-testid="stButton"] button p {{
       <p>If you run into any access issues, reach out to the Ops team or me and we&rsquo;ll
          get it sorted. Thanks!</p>
       <p class="sig">Michael</p>
+    </div>
+    <div class="actions">
+      <a class="cta labdash-open-link" data-labdash-href="{NEW_APP_URL}"
+         href="{NEW_APP_URL}" target="_top" rel="noopener">
+        Open the new dashboard <span class="arrow" aria-hidden="true">&rarr;</span>
+      </a>
     </div>
   </main>
 </div>
@@ -320,22 +342,19 @@ _LOGIN_OR_DIVIDER_HTML = """
 
 
 def render_login_welcome() -> None:
-    """Render the welcome panel + Open button + OR divider + fallback
-    lead-in above the native password form on the pre-auth login
-    screen.
+    """Render the welcome panel + OR divider + fallback lead-in above
+    the native password form on the pre-auth login screen.
 
-    The Open button is a real ``st.button``; on click we inject a
-    ``<meta http-equiv="refresh">`` tag and ``st.stop()`` so the
-    browser navigates the current tab to NEW_APP_URL. CSS scoped to
-    the button's ``st-key-`` class restyles it to match the
-    cardinal CTA the previous HTML anchor used to provide.
+    The Open button's click is wired by a small JS block injected
+    via ``st.html(unsafe_allow_javascript=True)``. That call renders
+    at the app's TOP LEVEL (per Streamlit docs: "st.html content is
+    not iframed") so ``window.location.href = url`` actually
+    navigates the browser tab, updates the URL bar, and lets the
+    new app's OAuth complete in-place. See
+    ``_open_link_top_nav_script`` for the rationale.
     """
     st.markdown(_welcome_panel_html(), unsafe_allow_html=True)
-    if st.button(
-        "Open the new dashboard  →",
-        key="labdash_open_welcome",
-    ):
-        _emit_meta_refresh_and_stop()
+    st.html(_open_link_top_nav_script(), unsafe_allow_javascript=True)
     st.markdown(_LOGIN_OR_DIVIDER_HTML, unsafe_allow_html=True)
 
 
@@ -417,28 +436,6 @@ def _banner_html() -> str:
 }}
 .labdash-banner-scope .bb-primary .arrow {{ transition:transform .14s ease; }}
 .labdash-banner-scope .bb-primary:hover .arrow {{ transform:translateX(2px); }}
-
-/* Banner-side st.button — styled to match the bb-primary look. The
-   button is rendered separately by render_dashboard_banner via
-   st.button(key="labdash_open_banner"), so this CSS lives outside
-   the banner div but is still scoped to the button's `st-key-` class. */
-html body .st-key-labdash_open_banner [data-testid="stButton"] button {{
-  background:#990000 !important;color:#fff !important;
-  border:none !important;border-radius:9px !important;
-  padding:9px 15px !important;
-  font-family:"Geist",system-ui,-apple-system,sans-serif !important;
-  font-weight:600 !important;font-size:.9rem !important;
-  box-shadow:0 1px 2px rgba(122,10,28,.18),
-             0 10px 20px -14px rgba(122,10,28,.55) !important;
-  transition:transform .14s ease,background .14s ease !important;
-}}
-html body .st-key-labdash_open_banner [data-testid="stButton"] button:hover {{
-  background:#7A0A1C !important;transform:translateY(-1px);
-}}
-html body .st-key-labdash_open_banner [data-testid="stButton"] button p {{
-  color:#fff !important;font-weight:600 !important;font-size:.9rem !important;
-  margin:0 !important;
-}}
 </style>
 <div class="labdash-banner-scope">
   <div class="depbar" role="region" aria-label="Service notice">
@@ -448,25 +445,26 @@ html body .st-key-labdash_open_banner [data-testid="stButton"] button p {{
       This version will be retired <strong>soon</strong>, please switch over when you can.
       <span class="note">Sign in on the new site with your @usc.edu Microsoft account.</span>
     </div>
+    <span class="spacer"></span>
+    <div class="row">
+      <a class="bb bb-primary labdash-open-link" data-labdash-href="{NEW_APP_URL}"
+         href="{NEW_APP_URL}" target="_top" rel="noopener">
+        Open new dashboard <span class="arrow" aria-hidden="true">&rarr;</span>
+      </a>
+    </div>
   </div>
 </div>
 """
 
 
 def render_dashboard_banner() -> None:
-    """Render the retirement banner + Open button at the top of the
-    authenticated dashboard (called once on every rerun, on both
-    analytics and pre-analytics dashboards).
+    """Render the retirement banner at the top of the authenticated
+    dashboard (called once on every rerun, on both analytics and
+    pre-analytics dashboards).
 
-    Open-button wiring matches render_login_welcome — real
-    ``st.button``, meta-refresh on click. The button renders just
-    below the banner text rather than inline; it's a slight visual
-    change from the original mock but it's the only way to wire a
-    Python-side click handler.
+    Open-link wiring matches render_login_welcome — JS injected via
+    ``st.html(unsafe_allow_javascript=True)`` runs at the app's top
+    level and navigates the browser tab via ``window.location.href``.
     """
     st.markdown(_banner_html(), unsafe_allow_html=True)
-    if st.button(
-        "Open new dashboard  →",
-        key="labdash_open_banner",
-    ):
-        _emit_meta_refresh_and_stop()
+    st.html(_open_link_top_nav_script(), unsafe_allow_javascript=True)
