@@ -15,70 +15,57 @@ who cannot yet sign in to the new app. Two surfaces here:
                                 the very top of the authenticated
                                 dashboard (analytics + pre-analytics).
 
-WHY st.markdown AND NOT st.components.v1.html:
+HOW THE OPEN BUTTON ACTUALLY NAVIGATES (read this before changing it):
 
-An earlier version of this module rendered both surfaces in
-``st.components.v1.html`` iframes so the Copy button could run real
-JS (``navigator.clipboard.writeText``). That broke the more important
-button: Streamlit's component iframe sandbox does NOT include
-``allow-top-navigation`` (verified in
-streamlit/static/.../IFrameUtil.BaqCY7QW.js — the sandbox is
-``allow-forms allow-modals allow-popups
-allow-popups-to-escape-sandbox allow-same-origin allow-scripts
-allow-downloads``), so the embedded ``<a target="_top">`` is silently
-blocked and the "Open the new dashboard" link did nothing. Since
-the navigation button is the whole point of these surfaces, we
-render via ``st.markdown(unsafe_allow_html=True)``.
+Two findings from direct research (Streamlit forum + github issues +
+reading frontend/lib/src/util/IFrameUtil.ts on streamlit/develop):
 
-WHY target="_top" IS EXPLICIT (do not change to _self or remove):
+  • Apps deployed at ``*.streamlit.app`` render at the TOP LEVEL of
+    the browser tab. There is no outer wrapping iframe.
+  • The iframe sandbox that blocks top navigation is applied ONLY
+    to ``st.components.v1.html`` iframes. That sandbox omits
+    ``allow-top-navigation``, so from inside a component iframe
+    ``target="_top"`` and ``window.top.location.href = url`` both
+    silently fail and any navigation falls through to
+    ``window.open(_blank)`` — a new tab.
 
-There are TWO layered defaults working against us; the markup has
-to defeat both.
+So the navigation must happen from app-level (top-level) code, not
+from inside a component iframe. The previous round mistakenly used
+``st.components.v1.html`` for the navigation helper and hit exactly
+that sandbox — new tab every time.
 
-1. Streamlit's react-markdown anchor renderer (in src.D9MArGZj.js)
-   defaults `target` to ``_blank`` for any anchor where the
-   attribute isn't set:
+We can't reliably use a plain HTML anchor either:
 
-        target: i || `_blank`
+  1. Streamlit's react-markdown anchor renderer (NT in
+     src.D9MArGZj.js) forces ``target="_blank"`` on any anchor
+     where the attribute isn't preserved through sanitization, and
+  2. The sanitizer used by both ``st.markdown`` and ``st.html``
+     strips ``target`` values other than ``_blank`` (issues #4346
+     and #9972 in streamlit/streamlit).
 
-   So a plain ``<a href="...">`` becomes
-   ``<a target="_blank">`` at render time and opens a new tab.
-   Setting `target` explicitly defeats this.
+The combination means a plain ``<a target="_top">`` ends up as
+``<a target="_blank">`` and opens in a new tab no matter what.
 
-2. Streamlit Cloud serves the app inside an outer iframe — the
-   user's browser-tab URL is the iframe's HOST, not the app
-   itself. ``target="_self"`` navigates the CURRENT frame (i.e.
-   the inner iframe), which silently swaps the iframe content
-   without updating the address bar. Symptom: the user clicks
-   Open, sees the new app's UI, but the URL stays as the old
-   *.streamlit.app host. When the new app then tries OAuth /
-   Microsoft sign-in, the OAuth provider detects the framed
-   context and pops the sign-in flow to a new tab as
-   clickjacking protection — which is exactly what the user
-   reported. ``target="_top"`` breaks out to the topmost browser
-   window, so the URL bar actually updates and the new app
-   loads at the top level the way it does on a direct visit.
+The working primitive is ``st.html(script, unsafe_allow_javascript=True)``.
+Per the docstring: "st.html content is not iframed", and with the
+JS flag the embedded script actually executes in the top-level
+document. From there, ``window.location.href = url`` navigates the
+browser tab directly. The URL bar updates and the new app's OAuth
+behaves the same as a direct visit (no enclosing frame ⇒ no
+clickjacking countermeasure ⇒ no new-tab pop-out).
 
-`rel="noopener"` is added explicitly so the anchor doesn't fall
-through to the renderer's default `rel: "noopener noreferrer"`
-— `noopener` is enough for security on a same-tab navigation
-and dropping `noreferrer` lets the destination see the referrer
-(useful for the new app's analytics).
-
-The Copy button is handled separately by ``st.code(URL)`` (native
-Streamlit widget with a built-in one-click copy icon) on the login
-welcome. The banner drops Copy entirely — the URL is visible in the
-banner text and the Open button does the heavy lifting.
-
-CSS is scoped under ``.labdash-welcome-scope`` / ``.labdash-banner-scope``
-so the panel styling doesn't bleed into the rest of the Streamlit
-page (no global ``*`` reset, no top-level ``:root`` overrides).
+The visible button is still an ``<a class="cta labdash-open-link">``
+rendered by ``st.markdown`` so the cardinal-CTA styling stays in
+the panel layout. The script finds every ``.labdash-open-link``
+anchor, preventDefault's the click (cancelling the markdown
+renderer's auto-added ``target="_blank"``), and assigns
+``window.location.href``. Idempotent across Streamlit reruns via a
+``data-labdash-wired`` marker. See ``_open_link_top_nav_script``.
 """
 
 from __future__ import annotations
 
 import streamlit as st
-from streamlit.components.v1 import html as _components_html
 
 
 # Single source of truth for the destination so the copy + open + label
@@ -87,82 +74,63 @@ NEW_APP_URL = "https://labdash.micbask.com"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# OPEN-LINK NAVIGATION HELPER (JS, robust across hosting environments)
+# OPEN-LINK NAVIGATION HELPER (top-level JS via st.html)
 # ═════════════════════════════════════════════════════════════════════════════
-# The markdown-rendered <a target="_top"> works in some environments and
-# silently fails in others (e.g. when Streamlit Cloud serves the app
-# inside an iframe whose sandbox blocks top navigation). To make the
-# Open button RELIABLY do something — ideally same-tab nav, otherwise
-# new-tab nav, but never nothing — we attach a JS click handler from
-# inside a tiny invisible component iframe. The handler runs in the
-# PARENT document context (where the anchor lives), so its navigation
-# attempts honour the parent page's permissions rather than the
-# component iframe's restrictive sandbox.
+# The previous round's component-iframe helper opened a new tab. Root
+# cause traced by direct research:
 #
-# Strategy in priority order:
-#   1. window.top.location.href = url     — escape to topmost browser
-#                                            window; the URL bar updates.
-#   2. window.location.href = url         — fallback if (1) is blocked
-#                                            (still same tab, but inside
-#                                            whatever frame we're in).
-#   3. window.open(url, "_blank")         — last resort. Opens new tab;
-#                                            at least the user reaches
-#                                            the destination.
+#   • Streamlit apps deployed at *.streamlit.app render at the TOP
+#     LEVEL of the browser tab — there is NO outer wrapping iframe.
+#     (Verified against streamlit's IFrameUtil.ts source.)
+#   • The sandbox that blocks top-window navigation is ONLY applied
+#     to `st.components.v1.html` iframes. From inside a component
+#     iframe, `target="_top"` and `window.top.location.href = url`
+#     are silently dropped, so any navigation attempt there falls
+#     through to `window.open(url, "_blank")` — a new tab.
+#   • Streamlit's react-markdown anchor renderer (NT in
+#     src.D9MArGZj.js) ALSO forces `target="_blank"` on any anchor
+#     where the attribute isn't preserved through sanitization, so
+#     a plain `<a target="_top">` written via `st.markdown` ends up
+#     as `_blank` regardless.
 #
-# Wrapped in try/catch with a sentinel detection (`__labDashNavigated`)
-# so we never hang on a silently-blocked nav.
-def _open_link_navigator_html() -> str:
-    return f"""<!doctype html><html><body><script>
+# The right primitive is `st.html(unsafe_allow_javascript=True)`:
+# it renders inline at the app's top level (NOT iframed, per the
+# docstring: "st.html content is not iframed") and lets the embedded
+# script actually run in the top-level document. From there,
+# `window.location.href = url` navigates the actual browser tab.
+# The URL bar updates. No new tab. OAuth on the new app behaves the
+# same as a direct visit because there's no enclosing frame.
+def _open_link_top_nav_script() -> str:
+    """Tiny <script> rendered via st.html(unsafe_allow_javascript=True)
+    that wires every `.labdash-open-link` anchor in the page to
+    navigate the current tab via `window.location.href`. Renders at
+    the app's top level so the navigation actually affects the
+    browser-tab URL.
+    """
+    return f"""<script>
 (function() {{
   var url = {NEW_APP_URL!r};
   function wire() {{
-    var doc;
-    try {{ doc = window.parent.document; }} catch (e) {{ return; }}
-    var anchors = doc.querySelectorAll('a.labdash-open-link');
-    for (var i = 0; i < anchors.length; i++) {{
-      var a = anchors[i];
-      if (a.dataset.labdashWired === '1') continue;
+    var anchors = document.querySelectorAll(
+      'a.labdash-open-link:not([data-labdash-wired])'
+    );
+    anchors.forEach(function(a) {{
       a.dataset.labdashWired = '1';
       a.addEventListener('click', function(ev) {{
         ev.preventDefault();
-        var navigated = false;
-        // 1. Try top-window navigation (same tab, URL bar updates).
-        try {{
-          window.parent.top.location.href = url;
-          navigated = true;
-        }} catch (err) {{}}
-        // 2. Fallback: navigate the parent frame directly.
-        if (!navigated) {{
-          try {{
-            window.parent.location.href = url;
-            navigated = true;
-          }} catch (err) {{}}
-        }}
-        // 3. Sentinel: if neither nav has taken effect after 250 ms,
-        //    open in a new tab so the click never feels dead.
-        setTimeout(function() {{
-          try {{
-            if (window.parent.location.href.indexOf(url) === -1) {{
-              window.open(url, '_blank', 'noopener');
-            }}
-          }} catch (err) {{
-            window.open(url, '_blank', 'noopener');
-          }}
-        }}, 250);
+        // Top-level same-tab navigation — the URL bar updates and
+        // the destination loads at the top level the way it does
+        // on a direct visit.
+        window.location.href = url;
       }});
-    }}
+    }});
   }}
-  // Anchors may not exist on first run (Streamlit renders async); poll
-  // briefly. Once attached, the wired check above keeps us idempotent
-  // across reruns.
   wire();
-  var n = 0;
-  var iv = setInterval(function() {{
-    wire();
-    if (++n > 40) clearInterval(iv);  // give up after ~10s
-  }}, 250);
+  // Streamlit re-renders the DOM on every interaction; rewire when
+  // new anchors appear. Cheap (querySelectorAll on a small page).
+  setInterval(wire, 500);
 }})();
-</script></body></html>"""
+</script>"""
 
 
 # 3x3 grid mark, deep red ramping to gold top-right cell. Same SVG the
@@ -377,22 +345,16 @@ def render_login_welcome() -> None:
     """Render the welcome panel + OR divider + fallback lead-in above
     the native password form on the pre-auth login screen.
 
-    The Open button is a real Streamlit-page anchor (no ``target``)
-    so the click navigates the current tab to LabDash directly. The
-    URL is also visible in the panel body (``labdash.micbask.com``)
-    so users who want to copy it can select it from the text directly
-    — no separate copy widget below the panel, which previously read
-    as a stray code block sitting between the welcome card and the
-    OR divider.
+    The Open button's click is wired by a small JS block injected
+    via ``st.html(unsafe_allow_javascript=True)``. That call renders
+    at the app's TOP LEVEL (per Streamlit docs: "st.html content is
+    not iframed") so ``window.location.href = url`` actually
+    navigates the browser tab, updates the URL bar, and lets the
+    new app's OAuth complete in-place. See
+    ``_open_link_top_nav_script`` for the rationale.
     """
     st.markdown(_welcome_panel_html(), unsafe_allow_html=True)
-    # Invisible JS helper that intercepts clicks on .labdash-open-link
-    # in the parent DOM and routes them through a top → parent → new-tab
-    # navigation cascade. See _open_link_navigator_html for the
-    # rationale (boils down to: Streamlit's markdown anchor with
-    # target="_top" silently fails in some Cloud-hosted iframe
-    # configurations and we need a JS fallback that always lands).
-    _components_html(_open_link_navigator_html(), height=0)
+    st.html(_open_link_top_nav_script(), unsafe_allow_javascript=True)
     st.markdown(_LOGIN_OR_DIVIDER_HTML, unsafe_allow_html=True)
 
 
@@ -500,11 +462,9 @@ def render_dashboard_banner() -> None:
     dashboard (called once on every rerun, on both analytics and
     pre-analytics dashboards).
 
-    The Open button is a real Streamlit-page anchor (no ``target``)
-    so the click navigates the current tab to LabDash directly.
+    Open-link wiring matches render_login_welcome — JS injected via
+    ``st.html(unsafe_allow_javascript=True)`` runs at the app's top
+    level and navigates the browser tab via ``window.location.href``.
     """
     st.markdown(_banner_html(), unsafe_allow_html=True)
-    # Same JS helper as the login welcome — keeps Open behaviour
-    # consistent on both surfaces. height=0 so the iframe doesn't
-    # take vertical space.
-    _components_html(_open_link_navigator_html(), height=0)
+    st.html(_open_link_top_nav_script(), unsafe_allow_javascript=True)
