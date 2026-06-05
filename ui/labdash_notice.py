@@ -105,7 +105,7 @@ def _welcome_panel_html() -> str:
   --muted:#6E665E; --soft:#9A938A;
   --line:#E8E2D9; --line-soft:#F1ECE4;
 
-  max-width:600px;margin:0 auto 4px auto;padding:0 4px;
+  max-width:360px;margin:0 auto 4px auto;padding:0 4px;
   font-family:"Geist",system-ui,-apple-system,"Segoe UI",sans-serif;
   color:var(--ink);
   -webkit-font-smoothing:antialiased;
@@ -118,70 +118,65 @@ def _welcome_panel_html() -> str:
 }}
 .labdash-welcome-scope .panel {{
   position:relative;background:var(--surface);
-  border:1px solid var(--line);border-radius:18px;
-  padding:clamp(28px,5vw,48px);
+  border:1px solid var(--line);border-radius:14px;
+  padding:clamp(20px,4vw,28px);
   box-shadow:0 1px 2px rgba(26,22,19,.04),
              0 26px 64px -30px rgba(26,22,19,.20);
   overflow:hidden;
 }}
 .labdash-welcome-scope .panel::before {{
   content:"";position:absolute;top:0;left:0;right:0;height:3px;
-  background:linear-gradient(90deg,var(--peak) 0 54px,var(--cardinal) 54px 100%);
-}}
-.labdash-welcome-scope .watermark {{
-  position:absolute;top:-22px;right:-22px;
-  width:184px;height:184px;opacity:.05;pointer-events:none;
+  background:linear-gradient(90deg,var(--peak) 0 40px,var(--cardinal) 40px 100%);
 }}
 .labdash-welcome-scope .eyebrow {{
   display:inline-flex;align-items:center;gap:8px;
   font-family:"Geist Mono",ui-monospace,monospace;
-  font-size:11px;letter-spacing:.18em;text-transform:uppercase;
-  color:var(--cardinal);font-weight:500;margin-bottom:22px;
+  font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--cardinal);font-weight:500;margin-bottom:16px;
 }}
 .labdash-welcome-scope .eyebrow .dot {{
   width:6px;height:6px;border-radius:50%;background:var(--cardinal);
 }}
 .labdash-welcome-scope .lockup {{
-  display:flex;align-items:center;gap:13px;margin-bottom:24px;
+  display:flex;align-items:center;gap:11px;margin-bottom:18px;
 }}
 .labdash-welcome-scope .lockup .word {{
   font-family:"Fraunces",Georgia,serif;font-weight:600;
-  font-size:22px;letter-spacing:-.01em;color:var(--ink);line-height:1.1;
+  font-size:18px;letter-spacing:-.01em;color:var(--ink);line-height:1.1;
   margin:0;
 }}
 .labdash-welcome-scope .lockup .formerly {{
   font-family:"Geist Mono",ui-monospace,monospace;
-  font-size:10.5px;color:var(--soft);margin-top:3px;
+  font-size:10px;color:var(--soft);margin-top:3px;line-height:1.35;
 }}
 .labdash-welcome-scope .panel h1 {{
   font-family:"Fraunces",Georgia,serif;font-weight:600;
-  font-size:clamp(2rem,5.4vw,2.9rem);line-height:1.04;
-  letter-spacing:-.02em;color:var(--ink);
-  margin:0 0 18px 0;padding:0;
+  font-size:clamp(1.25rem,3.6vw,1.45rem);line-height:1.1;
+  letter-spacing:-.01em;color:var(--ink);
+  margin:0 0 14px 0;padding:0;white-space:nowrap;
 }}
-.labdash-welcome-scope .msg {{ max-width:50ch; }}
 .labdash-welcome-scope .msg p {{
-  font-size:clamp(1rem,2.4vw,1.07rem);line-height:1.62;
+  font-size:.95rem;line-height:1.55;
   color:var(--body);margin:0;padding:0;
 }}
-.labdash-welcome-scope .msg p + p {{ margin-top:12px; }}
+.labdash-welcome-scope .msg p + p {{ margin-top:10px; }}
 .labdash-welcome-scope .msg .inline-url {{
   font-family:"Geist Mono",ui-monospace,monospace;
   font-weight:500;color:var(--cardinal);
 }}
 .labdash-welcome-scope .msg .sig {{
-  margin-top:16px;font-family:"Fraunces",Georgia,serif;
-  font-style:italic;font-weight:500;font-size:1.08rem;color:var(--ink);
+  margin-top:14px;font-family:"Fraunces",Georgia,serif;
+  font-style:italic;font-weight:500;font-size:1rem;color:var(--ink);
 }}
 .labdash-welcome-scope .actions {{
-  display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:26px;
+  display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:20px;
 }}
 .labdash-welcome-scope .cta {{
-  display:inline-flex;align-items:center;gap:10px;
+  display:inline-flex;align-items:center;gap:9px;
   background:var(--cardinal) !important;color:#fff !important;
   text-decoration:none !important;
-  font-family:"Geist",system-ui,sans-serif;font-weight:600;font-size:1rem;
-  padding:14px 22px;border-radius:11px;
+  font-family:"Geist",system-ui,sans-serif;font-weight:600;font-size:.95rem;
+  padding:11px 18px;border-radius:10px;
   transition:transform .15s ease,background .15s ease,box-shadow .15s ease;
   box-shadow:0 1px 2px rgba(122,10,28,.18),0 12px 24px -14px rgba(122,10,28,.5);
 }}
@@ -191,44 +186,33 @@ def _welcome_panel_html() -> str:
 .labdash-welcome-scope .cta .arrow {{ transition:transform .15s ease; }}
 .labdash-welcome-scope .cta:hover .arrow {{ transform:translateX(3px); }}
 .labdash-welcome-scope .signin {{
-  margin-top:26px;display:flex;gap:12px;align-items:flex-start;
+  margin-top:20px;display:flex;gap:10px;align-items:flex-start;
   border:1px solid var(--line);border-left:3px solid var(--gold);
-  background:#FCFAF5;border-radius:10px;padding:14px 16px;
+  background:#FCFAF5;border-radius:8px;padding:12px 13px;
 }}
 .labdash-welcome-scope .signin svg {{
   flex:none;margin-top:2px;color:var(--gold);
 }}
 .labdash-welcome-scope .signin .t {{
-  font-size:.92rem;line-height:1.5;color:var(--ink);
+  font-size:.86rem;line-height:1.5;color:var(--ink);
 }}
 .labdash-welcome-scope .signin .t .mono {{
   font-family:"Geist Mono",ui-monospace,monospace;font-weight:500;
 }}
 .labdash-welcome-scope .signin .t .note {{
-  display:block;color:var(--muted);margin-top:4px;font-size:.86rem;
+  display:block;color:var(--muted);margin-top:4px;font-size:.8rem;
 }}
 .labdash-welcome-scope .foot {{
-  margin-top:28px;padding-top:18px;border-top:1px solid var(--line-soft);
+  margin-top:22px;padding-top:14px;border-top:1px solid var(--line-soft);
   font-family:"Geist Mono",ui-monospace,monospace;
-  font-size:11px;color:var(--soft);line-height:1.65;
-}}
-
-/* Small label introducing the native st.code copy widget that sits
-   just under this panel. Lives inside the scope so it stays visually
-   aligned with the panel's content column. */
-.labdash-welcome-scope .copy-hint {{
-  max-width:600px;margin:14px auto 0 auto;padding:0 4px;
-  font-family:"Geist Mono",ui-monospace,monospace;
-  font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;
-  color:var(--soft);
+  font-size:10.5px;color:var(--soft);line-height:1.6;
 }}
 </style>
 <div class="labdash-welcome-scope">
   <main class="panel" role="main">
-    <div class="watermark">{_labdash_mark_svg(184, 184)}</div>
     <div class="eyebrow"><span class="dot"></span>We&rsquo;ve moved</div>
     <div class="lockup">
-      {_labdash_mark_svg(42, 42)}
+      {_labdash_mark_svg(36, 36)}
       <div>
         <div class="word">LabDash</div>
         <div class="formerly">formerly the Laboratory Productivity Dashboard</div>
@@ -264,9 +248,6 @@ def _welcome_panel_html() -> str:
       Please update your bookmarks. This page will retire once everyone has moved over.
     </div>
   </main>
-</div>
-<div class="labdash-welcome-scope">
-  <div class="copy-hint">Copy address</div>
 </div>
 """
 
@@ -304,16 +285,18 @@ _LOGIN_OR_DIVIDER_HTML = """
 
 
 def render_login_welcome() -> None:
-    """Render the welcome panel + native copy widget + OR divider + fallback
-    lead-in above the native password form on the pre-auth login screen.
+    """Render the welcome panel + OR divider + fallback lead-in above
+    the native password form on the pre-auth login screen.
 
     The Open button is a real Streamlit-page anchor (no ``target``)
     so the click navigates the current tab to LabDash directly. The
-    copy widget is ``st.code(URL)`` — native one-click copy via
-    Streamlit's built-in code-block icon, no JS required.
+    URL is also visible in the panel body (``labdash.micbask.com``)
+    so users who want to copy it can select it from the text directly
+    — no separate copy widget below the panel, which previously read
+    as a stray code block sitting between the welcome card and the
+    OR divider.
     """
     st.markdown(_welcome_panel_html(), unsafe_allow_html=True)
-    st.code(NEW_APP_URL, language=None)
     st.markdown(_LOGIN_OR_DIVIDER_HTML, unsafe_allow_html=True)
 
 
