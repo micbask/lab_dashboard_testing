@@ -30,18 +30,40 @@ blocked and the "Open the new dashboard" link did nothing. Since
 the navigation button is the whole point of these surfaces, we
 render via ``st.markdown(unsafe_allow_html=True)``.
 
-WHY target="_self" IS EXPLICIT (do not remove):
+WHY target="_top" IS EXPLICIT (do not change to _self or remove):
 
-Streamlit's react-markdown anchor renderer (in src.D9MArGZj.js)
-defaults `target` to ``_blank`` for any anchor where the attribute
-isn't set:
+There are TWO layered defaults working against us; the markup has
+to defeat both.
 
-    target: i || `_blank`
+1. Streamlit's react-markdown anchor renderer (in src.D9MArGZj.js)
+   defaults `target` to ``_blank`` for any anchor where the
+   attribute isn't set:
 
-So an anchor written as ``<a href="...">`` ends up with
-``target="_blank"`` at render time and opens in a new tab. To
-navigate the current tab the markup MUST include ``target="_self"``
-explicitly. Both Open buttons below carry it for that reason.
+        target: i || `_blank`
+
+   So a plain ``<a href="...">`` becomes
+   ``<a target="_blank">`` at render time and opens a new tab.
+   Setting `target` explicitly defeats this.
+
+2. Streamlit Cloud serves the app inside an outer iframe — the
+   user's browser-tab URL is the iframe's HOST, not the app
+   itself. ``target="_self"`` navigates the CURRENT frame (i.e.
+   the inner iframe), which silently swaps the iframe content
+   without updating the address bar. Symptom: the user clicks
+   Open, sees the new app's UI, but the URL stays as the old
+   *.streamlit.app host. When the new app then tries OAuth /
+   Microsoft sign-in, the OAuth provider detects the framed
+   context and pops the sign-in flow to a new tab as
+   clickjacking protection — which is exactly what the user
+   reported. ``target="_top"`` breaks out to the topmost browser
+   window, so the URL bar actually updates and the new app
+   loads at the top level the way it does on a direct visit.
+
+`rel="noopener"` is added explicitly so the anchor doesn't fall
+through to the renderer's default `rel: "noopener noreferrer"`
+— `noopener` is enough for security on a same-tab navigation
+and dropping `noreferrer` lets the destination see the referrer
+(useful for the new app's analytics).
 
 The Copy button is handled separately by ``st.code(URL)`` (native
 Streamlit widget with a built-in one-click copy icon) on the login
@@ -229,7 +251,7 @@ def _welcome_panel_html() -> str:
       <p class="sig">Michael</p>
     </div>
     <div class="actions">
-      <a class="cta" href="{NEW_APP_URL}" target="_self">
+      <a class="cta" href="{NEW_APP_URL}" target="_top" rel="noopener">
         Open the new dashboard <span class="arrow" aria-hidden="true">&rarr;</span>
       </a>
     </div>
@@ -375,7 +397,7 @@ def _banner_html() -> str:
     </div>
     <span class="spacer"></span>
     <div class="row">
-      <a class="bb bb-primary" href="{NEW_APP_URL}" target="_self">
+      <a class="bb bb-primary" href="{NEW_APP_URL}" target="_top" rel="noopener">
         Open new dashboard <span class="arrow" aria-hidden="true">&rarr;</span>
       </a>
     </div>
