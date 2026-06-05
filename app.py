@@ -377,6 +377,17 @@ if _app_password is not None and not st.session_state["app_authenticated"]:
             '<div id="login-overlay" style="padding-top: 10vh;">',
             unsafe_allow_html=True,
         )
+
+        # Relocation welcome panel — points users at the standalone
+        # LabDash web app (labdash.micbask.com) that has superseded
+        # this Streamlit app. Renders ABOVE the native password
+        # gate; the existing form below stays the working fallback
+        # for users (notably @med.usc.edu) who can't yet sign in to
+        # the new app. See ui/labdash_notice.py for the rationale
+        # behind the iframe approach.
+        from ui.labdash_notice import render_login_welcome
+        render_login_welcome()
+
         _, col, _ = st.columns([1, 0.9, 1])
         with col:
             with st.form("login_form", enter_to_submit=True):
@@ -430,6 +441,20 @@ if "resource_assignments" not in _ss:
     _ss.resource_assignments = deepcopy(DEFAULT_RESOURCES)
 if "last_map_type" not in _ss:
     _ss.last_map_type = None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# RETIREMENT BANNER (dashboard only, post-auth)
+# ═════════════════════════════════════════════════════════════════════════════
+# Persistent notice pointing users at the standalone LabDash web app
+# (labdash.micbask.com) that has replaced this Streamlit app. Mounted
+# at the very top of the authenticated view so it shows on BOTH the
+# analytics and pre-analytics dashboards. Dismissal persists per
+# browser via localStorage inside the iframe. Does NOT appear on the
+# pre-auth login screen (that path already returns via st.stop()
+# above before reaching this block).
+from ui.labdash_notice import render_dashboard_banner
+render_dashboard_banner()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
