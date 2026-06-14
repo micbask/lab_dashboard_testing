@@ -172,288 +172,37 @@ inject_sidebar_resize_kill()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PASSWORD GATE
+# RETIREMENT LANDING (replaces the previous password gate)
 # ═════════════════════════════════════════════════════════════════════════════
-_app_password = st.secrets.get("app_password", None)
+# This Streamlit app is retired: it has been superseded by the standalone
+# LabDash web app at https://labdash.micbask.com. To shut off all access
+# to the underlying analytics / pre-analytics dashboards while keeping the
+# codebase intact for a possible future revert, we replaced the password
+# gate with a one-page LabDash relocation landing followed by a hard
+# st.stop().
+#
+# Everything below the stop — session-state init, dashboard routing,
+# the retirement banner, the footer — is now unreachable. It's left in
+# place rather than deleted so re-enabling the app is a one-line
+# revert of this commit. The login-card CSS in the previous version is
+# gone because the form it styled is gone; that's a clean drop, no
+# dependants.
+#
+# Ingest pipeline (scripts/email_ingest.py + .github/workflows/xls-ingest.yml)
+# is independent of this UI and continues to run. New partition data
+# keeps landing in the repo so a revert wouldn't have a data gap.
+from ui.labdash_notice import render_login_welcome
 
-if "app_authenticated" not in st.session_state:
-    st.session_state["app_authenticated"] = False
+_, _retire_col, _ = st.columns([1, 1.5, 1])
+with _retire_col:
+    render_login_welcome()
+st.stop()
 
-if _app_password is not None and not st.session_state["app_authenticated"]:
-    # Wrap in st.empty so we can instantly clear the overlay after auth
-    # (avoids the multi-second lag while st.rerun() processes).
-    _login_slot = st.empty()
-    _auth_now = False
-    with _login_slot.container():
-        # ── Login-page CSS ───────────────────────────────────────────────────
-        # The form wrapper itself IS the card. Streamlit's text input and
-        # submit button get re-styled inside the card via overrides keyed
-        # to #login-overlay so they don't leak into the rest of the app.
-        st.markdown(
-            """
-            <style>
-              /* All login-page CSS rules are scoped to
-                 `.st-key-labdash_login_card` — the CSS class Streamlit
-                 emits on `st.container(key="labdash_login_card")` (see
-                 the form-mount block below). The previous version
-                 prefixed selectors with `#login-overlay`, but that
-                 was a `st.markdown('<div id="login-overlay">')`
-                 wrapper which DOES NOT actually wrap subsequent
-                 widgets — Streamlit renders each st.* call as its
-                 own DeltaGenerator block and the markdown's HTML is
-                 auto-closed within its own component. The widgets
-                 ended up as SIBLINGS of the empty #login-overlay
-                 div, so the descendant combinator never matched and
-                 every form-sizing rule was silently a no-op. The
-                 form rendered at Streamlit's default styling and
-                 filled the parent column. `st.container(key=...)`
-                 creates a real DOM wrapper (`<div class="st-key-...">`)
-                 that DOES contain the nested widgets, so descendant
-                 selectors actually match. */
-              .st-key-labdash_login_card [data-testid="InputInstructions"],
-              .st-key-labdash_login_card [data-testid="stFormHint"],
-              [data-testid="InputInstructions"] {
-                  display: none !important;
-              }
 
-              /* The form wrapper IS the card. */
-              html body .st-key-labdash_login_card [data-testid="stForm"] {
-                  width: 480px !important;
-                  max-width: 480px !important;
-                  padding: 28px 40px !important;
-                  background: #ffffff !important;
-                  border: 0.5px solid rgba(0, 0, 0, 0.08) !important;
-                  border-radius: 12px !important;
-                  box-sizing: border-box !important;
-                  margin: 0 auto !important;
-                  box-shadow: none !important;
-              }
-
-              /* Password input — wrapper-styled so the eye toggle sits
-                 INSIDE the bordered box. Mirrors the corrected pattern
-                 in ui_components.py. Targets the REAL baseweb DOM:
-                 the MaskToggleButton is a sibling of <input> INSIDE
-                 [data-baseweb="base-input"], NOT a direct child of
-                 [data-baseweb="input"] (the earlier `> *:not(...)`
-                 defensive rule matched nothing). Three layers:
-                   (1) Root [data-baseweb="input"]: white bg + border.
-                   (2) InputContainer [data-baseweb="base-input"]:
-                       transparent so wrapper's white is the only
-                       visible surface; zero padding so edges fill.
-                   (3) <button> inside the wrapper: stripped chrome
-                       and minimal padding (0 8px 0 4px) so the eye
-                       SVG sits flush against the right border. */
-              html body .st-key-labdash_login_card [data-testid="stForm"]
-                  [data-testid="stTextInput"] [data-baseweb="input"] {
-                  width: 100% !important;
-                  background: #ffffff !important;
-                  border: 1px solid rgba(0, 0, 0, 0.14) !important;
-                  border-radius: 8px !important;
-                  padding: 0 !important;
-                  box-sizing: border-box !important;
-                  transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
-              }
-              html body .st-key-labdash_login_card [data-testid="stForm"]
-                  [data-testid="stTextInput"] [data-baseweb="input"]:focus-within {
-                  border-color: #790A26 !important;
-                  box-shadow: 0 0 0 2px rgba(121, 10, 38, 0.12) !important;
-              }
-              html body .st-key-labdash_login_card [data-testid="stForm"]
-                  [data-testid="stTextInput"]
-                  [data-baseweb="input"] [data-baseweb="base-input"] {
-                  background: transparent !important;
-                  background-color: transparent !important;
-                  padding: 0 !important;
-                  border: none !important;
-              }
-              html body .st-key-labdash_login_card [data-testid="stForm"]
-                  [data-testid="stTextInput"] [data-baseweb="input"] input {
-                  width: 100% !important;
-                  padding: 11px 14px !important;
-                  padding-right: 32px !important;
-                  font-size: 14px !important;
-                  font-weight: 400 !important;
-                  background: transparent !important;
-                  border: none !important;
-                  color: #1a1a1a !important;
-                  box-sizing: border-box !important;
-                  outline: none !important;
-                  box-shadow: none !important;
-                  font-family: 'Inter', system-ui, sans-serif !important;
-              }
-              html body .st-key-labdash_login_card [data-testid="stForm"]
-                  [data-testid="stTextInput"] [data-baseweb="input"] button {
-                  background: transparent !important;
-                  background-color: transparent !important;
-                  border: none !important;
-                  box-shadow: none !important;
-                  outline: none !important;
-                  padding: 0 8px 0 4px !important;
-                  margin: 0 !important;
-              }
-              html body .st-key-labdash_login_card [data-testid="stForm"]
-                  [data-testid="stTextInput"] [data-baseweb="input"] button svg {
-                  margin: 0 !important;
-                  padding: 0 !important;
-                  display: block !important;
-              }
-              html body .st-key-labdash_login_card [data-testid="stForm"]
-                  [data-testid="stTextInput"] {
-                  margin-bottom: 12px !important;
-              }
-
-              /* Sign-in button — override the maroon site-wide button rule
-                 with the login-page primary color (#790A26) and the
-                 spec'd geometry. */
-              html body .st-key-labdash_login_card [data-testid="stForm"] .stButton > button,
-              html body .st-key-labdash_login_card [data-testid="stForm"]
-                  [data-testid="stFormSubmitButton"] button,
-              html body .st-key-labdash_login_card [data-testid="stForm"]
-                  [data-testid="stBaseButton-primaryFormSubmit"],
-              html body .st-key-labdash_login_card [data-testid="stForm"]
-                  button[kind="primaryFormSubmit"] {
-                  width: 100% !important;
-                  padding: 11px 16px !important;
-                  font-size: 14px !important;
-                  font-weight: 500 !important;
-                  color: #ffffff !important;
-                  background: #790A26 !important;
-                  background-color: #790A26 !important;
-                  border: none !important;
-                  border-radius: 8px !important;
-                  cursor: pointer !important;
-                  text-shadow: none !important;
-                  box-shadow: none !important;
-                  font-family: 'Inter', system-ui, sans-serif !important;
-              }
-              html body .st-key-labdash_login_card [data-testid="stForm"]
-                  [data-testid="stFormSubmitButton"] button:hover,
-              html body .st-key-labdash_login_card [data-testid="stForm"]
-                  [data-testid="stBaseButton-primaryFormSubmit"]:hover {
-                  background: #5e0820 !important;
-                  background-color: #5e0820 !important;
-                  border: none !important;
-              }
-              html body .st-key-labdash_login_card [data-testid="stForm"]
-                  [data-testid="stFormSubmitButton"] button p,
-              html body .st-key-labdash_login_card [data-testid="stForm"]
-                  [data-testid="stFormSubmitButton"] button div {
-                  color: #ffffff !important;
-                  font-weight: 500 !important;
-                  font-size: 14px !important;
-                  text-shadow: none !important;
-              }
-
-              /* Bar-chart icon + title + subtitle inside the card. */
-              .login-icon-block { text-align: center; }
-              .login-icon-block svg {
-                  display: block;
-                  margin: 0 auto 20px auto;
-                  width: 34px;
-                  height: 34px;
-              }
-              .login-icon-block .login-title {
-                  font-size: 19px;
-                  font-weight: 500;
-                  color: #1a1a1a;
-                  text-align: center;
-                  line-height: 1.3;
-                  margin: 0 0 6px 0;
-                  font-family: 'Inter', system-ui, sans-serif;
-              }
-              .login-icon-block .login-subtitle {
-                  font-size: 11px;
-                  font-weight: 500;
-                  color: #C9941A;
-                  letter-spacing: 0.12em;
-                  text-align: center;
-                  margin: 0 0 32px 0;
-                  font-family: 'Inter', system-ui, sans-serif;
-              }
-
-              /* Footer underneath the card. */
-              .login-footer {
-                  text-align: center;
-                  font-size: 12px;
-                  color: rgba(0, 0, 0, 0.45);
-                  margin-top: 32px;
-                  font-family: 'Inter', system-ui, sans-serif;
-              }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        # Relocation welcome panel — points users at the standalone
-        # LabDash web app (labdash.micbask.com) that has superseded
-        # this Streamlit app. Renders ABOVE the native password
-        # gate; the existing form below stays the working fallback
-        # for users (notably @med.usc.edu) who can't yet sign in to
-        # the new app.
-        #
-        # LAYOUT CONTRACT (read before touching widths):
-        #   • The password form lives inside
-        #     `st.container(key="labdash_login_card")`, which gives it
-        #     a real DOM wrapper element with class
-        #     `st-key-labdash_login_card`. ALL the form's card / input /
-        #     button CSS overrides above are scoped to that class
-        #     because they MUST live inside a real DOM ancestor of the
-        #     form. The earlier `<div id="login-overlay">` markdown
-        #     wrapper was a no-op: st.markdown's unsafe HTML auto-
-        #     closes within its own DeltaGenerator block and does NOT
-        #     wrap subsequent widgets. Selectors prefixed with
-        #     `#login-overlay` therefore never matched, the form
-        #     silently inherited Streamlit defaults, and any width /
-        #     padding override was dropped. st.container does wrap.
-        #   • The welcome panel renders at the top level (no column,
-        #     no container) with `width: 480px; margin: 0 auto` in its
-        #     own scope. The form ALSO renders at `width: 480px; margin:
-        #     0 auto` inside the container. Both centre on the same
-        #     page-content axis at exactly 480px.
-        from ui.labdash_notice import render_login_welcome
-        render_login_welcome()
-
-        with st.container(key="labdash_login_card"):
-            with st.form("login_form", enter_to_submit=True):
-                st.markdown(
-                    """
-                    <div class="login-icon-block">
-                      <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
-                        <rect x="14" y="36" width="8" height="18" fill="#790A26" rx="1.5"/>
-                        <rect x="26" y="28" width="8" height="26" fill="#790A26" rx="1.5"/>
-                        <rect x="38" y="20" width="8" height="34" fill="#790A26" rx="1.5"/>
-                        <rect x="50" y="10" width="8" height="44" fill="#F1AB1F" rx="1.5"/>
-                      </svg>
-                      <div class="login-title">Laboratory Productivity Dashboard</div>
-                      <div class="login-subtitle">ANALYTICS &nbsp;·&nbsp; PRE-ANALYTICS</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                password = st.text_input(
-                    "Password", type="password",
-                    label_visibility="collapsed",
-                    placeholder="Password",
-                )
-                submitted = st.form_submit_button("Sign in", width="stretch")
-                if submitted:
-                    if password == st.secrets.get("app_password", ""):
-                        st.session_state["app_authenticated"] = True
-                        _auth_now = True
-                    else:
-                        st.error("Incorrect password. Please try again.")
-
-            # Footer beneath the card (stays inside the container so
-            # its CSS selector resolves and so it centres beneath the
-            # 480px form).
-            st.markdown(
-                '<div class="login-footer">v3.2 · May 2026</div>',
-                unsafe_allow_html=True,
-            )
-    if _auth_now:
-        _login_slot.empty()  # instantly clear the overlay before rerun
-        st.rerun()
-    st.stop()
+# ═════════════════════════════════════════════════════════════════════════════
+# Everything below is unreachable while the retirement landing is active.
+# Kept in place so re-enabling the app is a one-commit revert.
+# ═════════════════════════════════════════════════════════════════════════════
 
 
 # ═════════════════════════════════════════════════════════════════════════════
