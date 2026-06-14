@@ -193,6 +193,14 @@ inject_sidebar_resize_kill()
 # keeps landing in the repo so a revert wouldn't have a data gap.
 from ui.labdash_notice import render_login_welcome
 
+# Push the panel down ~12vh from the top of the viewport so it sits
+# pleasantly mid-page on a typical laptop screen instead of flush
+# against Streamlit's header bar. vh keeps it proportional across
+# viewport sizes; 12 is enough to feel centred without scrolling.
+st.markdown(
+    '<div style="padding-top: 12vh;"></div>',
+    unsafe_allow_html=True,
+)
 _, _retire_col, _ = st.columns([1, 1.5, 1])
 with _retire_col:
     render_login_welcome()
