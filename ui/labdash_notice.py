@@ -392,7 +392,7 @@ def _welcome_panel_html() -> str:
          faster, more secure, and ready for new features. The new home is
          <span class="inline-url">labdash.micbask.com</span>.</p>
       <p>If you run into any access issues, reach out to the Ops team or me and we&rsquo;ll
-         get it sorted. Thanks!</p>
+         get you set up on the new site. Thanks!</p>
       <p class="sig">Michael</p>
     </div>
     <div class="actions">
@@ -468,7 +468,12 @@ def render_login_welcome() -> None:
     # target="_top" silently fails in some Cloud-hosted iframe
     # configurations and we need a JS fallback that always lands).
     _components_html(_open_link_navigator_html(), height=0)
-    st.markdown(_LOGIN_OR_DIVIDER_HTML, unsafe_allow_html=True)
+    # NOTE: The OR divider + "Still need this version? Enter the password
+    # to continue." lead-in used to render here. The app retirement
+    # (app.py replaces the password gate with this welcome + st.stop())
+    # made it misleading — there's no password gate below this anymore.
+    # The _LOGIN_OR_DIVIDER_HTML constant is left in the module so a
+    # revert just re-adds the markdown call below.
 
 
 # ═════════════════════════════════════════════════════════════════════════════
