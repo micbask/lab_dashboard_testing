@@ -119,10 +119,10 @@
     "size_bytes": 7403441
   },
   "2026-06": {
-    "sha": "dfd4019c16f170b6864efc2bb1136c5718b20d1d",
-    "rows": 215249,
+    "sha": "4080dd9eb6773d32188df181ab93f99a60a43afa",
+    "rows": 224622,
     "min_date": "2026-06-01",
-    "max_date": "2026-06-26",
-    "size_bytes": 6133777
+    "max_date": "2026-06-27",
+    "size_bytes": 6381498
   }
 }
