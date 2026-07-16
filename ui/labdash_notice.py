@@ -309,6 +309,12 @@ def _welcome_panel_html() -> str:
 .labdash-welcome-scope .eyebrow .dot {{
   width:6px;height:6px;border-radius:50%;background:var(--cardinal);
 }}
+.labdash-welcome-scope .eyebrow .eyebrow-sep {{
+  color:var(--soft);margin:0 4px;
+}}
+.labdash-welcome-scope .eyebrow .eyebrow-retire {{
+  color:var(--gold);
+}}
 .labdash-welcome-scope .lockup {{
   display:flex;align-items:center;gap:11px;margin-bottom:18px;
 }}
@@ -340,45 +346,56 @@ def _welcome_panel_html() -> str:
   margin-top:14px;font-family:"Fraunces",Georgia,serif;
   font-style:italic;font-weight:500;font-size:1rem;color:var(--ink);
 }}
-.labdash-welcome-scope .actions {{
-  display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:20px;
+/* Address block — the new "hero" now that the Open button is gone.
+   The address chip is a prominent, selectable pill (user-select:all
+   so one click grabs the whole address) and the Copy button is the
+   primary cardinal action beside it. This makes "grab the address
+   and bookmark it" the main call to action instead of "click to
+   launch," which was the crutch keeping people on this page. */
+.labdash-welcome-scope .address-row {{
+  display:flex;flex-wrap:wrap;gap:10px;align-items:stretch;margin-top:20px;
 }}
-.labdash-welcome-scope .cta {{
-  display:inline-flex;align-items:center;gap:9px;
+.labdash-welcome-scope .address-chip {{
+  flex:1 1 220px;min-width:0;
+  display:flex;align-items:center;gap:9px;
+  background:#FCF3F3;border:1px solid rgba(153,0,0,.18);
+  border-radius:10px;padding:12px 14px;
+}}
+.labdash-welcome-scope .address-chip svg {{ flex:none;color:var(--cardinal); }}
+.labdash-welcome-scope .address-chip .address-text {{
+  font-family:"Geist Mono",ui-monospace,monospace;
+  font-size:1rem;font-weight:500;color:var(--cardinal);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  user-select:all;-webkit-user-select:all;
+}}
+.labdash-welcome-scope .copy-primary {{
+  flex:none;display:inline-flex;align-items:center;gap:8px;
   background:var(--cardinal) !important;color:#fff !important;
-  text-decoration:none !important;
+  border:none !important;text-decoration:none !important;cursor:pointer;
   font-family:"Geist",system-ui,sans-serif;font-weight:600;font-size:.95rem;
   padding:11px 18px;border-radius:10px;
   transition:transform .15s ease,background .15s ease,box-shadow .15s ease;
   box-shadow:0 1px 2px rgba(122,10,28,.18),0 12px 24px -14px rgba(122,10,28,.5);
 }}
-.labdash-welcome-scope .cta:hover {{
+.labdash-welcome-scope .copy-primary:hover {{
   background:var(--cardinal-deep) !important;transform:translateY(-1px);
 }}
-.labdash-welcome-scope .cta .arrow {{ transition:transform .15s ease; }}
-.labdash-welcome-scope .cta:hover .arrow {{ transform:translateX(3px); }}
-.labdash-welcome-scope .copy {{
-  display:inline-flex;align-items:center;gap:8px;
-  background:#fff !important;color:var(--ink) !important;
-  border:1px solid var(--line) !important;text-decoration:none !important;
-  font-family:"Geist",system-ui,sans-serif;font-weight:600;font-size:.95rem;
-  padding:10px 16px;border-radius:10px;cursor:pointer;
-  transition:border-color .15s ease,color .15s ease,
-             background .15s ease,transform .15s ease;
+.labdash-welcome-scope .copy-primary.copied {{
+  background:var(--cardinal-deep) !important;
 }}
-.labdash-welcome-scope .copy:hover {{
-  border-color:var(--cardinal) !important;color:var(--cardinal) !important;
-  transform:translateY(-1px);
+.labdash-welcome-scope .copy-primary svg {{ flex:none; }}
+/* Retirement + bookmark footer — the gentle nudge line. */
+.labdash-welcome-scope .foot {{
+  margin-top:22px;padding-top:14px;border-top:1px solid var(--line-soft);
+  font-family:"Geist Mono",ui-monospace,monospace;
+  font-size:11px;color:var(--soft);line-height:1.65;
 }}
-.labdash-welcome-scope .copy.copied {{
-  border-color:var(--cardinal) !important;color:var(--cardinal) !important;
-  background:#FCF3F3 !important;
-}}
-.labdash-welcome-scope .copy svg {{ flex:none; }}
+.labdash-welcome-scope .foot .foot-url {{ color:var(--cardinal);font-weight:500; }}
+.labdash-welcome-scope .foot .foot-date {{ color:var(--gold);font-weight:500; }}
 </style>
 <div class="labdash-welcome-scope">
   <main class="panel" role="main">
-    <div class="eyebrow"><span class="dot"></span>We&rsquo;ve moved</div>
+    <div class="eyebrow"><span class="dot"></span>We&rsquo;ve moved<span class="eyebrow-sep">&middot;</span><span class="eyebrow-retire">Retires July 20</span></div>
     <div class="lockup">
       {_labdash_mark_svg(36, 36)}
       <div>
@@ -388,19 +405,23 @@ def _welcome_panel_html() -> str:
     </div>
     <h1>LabDash has a new home</h1>
     <div class="msg">
-      <p>Hi team, we&rsquo;ve rebuilt the dashboard as its own standalone app, so it is
-         faster, more secure, and ready for new features. The new home is
-         <span class="inline-url">labdash.micbask.com</span>.</p>
-      <p>If you run into any access issues, reach out to the Ops team or me and we&rsquo;ll
-         get you set up on the new site. Thanks!</p>
+      <p>Hi team, please bookmark <span class="inline-url">labdash.micbask.com</span>
+         and go there directly. This page is only a temporary signpost and will be
+         retired on July&nbsp;20,&nbsp;2026. Please don&rsquo;t keep using it. Update
+         your bookmark today so you don&rsquo;t lose access.</p>
       <p class="sig">Michael</p>
     </div>
-    <div class="actions">
-      <a class="cta labdash-open-link" data-labdash-href="{NEW_APP_URL}"
-         href="{NEW_APP_URL}" target="_top" rel="noopener">
-        Open the new dashboard <span class="arrow" aria-hidden="true">&rarr;</span>
-      </a>
-      <a class="copy labdash-copy-link" data-labdash-href="{NEW_APP_URL}"
+    <div class="address-row">
+      <div class="address-chip">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L11.5 4.5"
+                stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+          <path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L12.5 19.5"
+                stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+        <span class="address-text">labdash.micbask.com</span>
+      </div>
+      <a class="copy-primary labdash-copy-link" data-labdash-href="{NEW_APP_URL}"
          href="#" role="button" aria-label="Copy the new dashboard address">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <rect x="9" y="9" width="11" height="11" rx="2"
