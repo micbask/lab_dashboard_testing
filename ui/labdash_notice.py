@@ -406,11 +406,9 @@ def _welcome_panel_html() -> str:
     <h1>LabDash has a new home</h1>
     <div class="msg">
       <p>Hi team, please bookmark <span class="inline-url">labdash.micbask.com</span>
-         and go there directly from now on &mdash; that&rsquo;s the dashboard&rsquo;s
-         permanent home.</p>
-      <p>This page is only a temporary signpost and will be retired on
-         July&nbsp;20,&nbsp;2026. Please don&rsquo;t keep using it &mdash; update your
-         bookmark today so you don&rsquo;t lose access.</p>
+         and go there directly. This page is only a temporary signpost and will be
+         retired on July&nbsp;20,&nbsp;2026. Please don&rsquo;t keep using it. Update
+         your bookmark today so you don&rsquo;t lose access.</p>
       <p class="sig">Michael</p>
     </div>
     <div class="address-row">
