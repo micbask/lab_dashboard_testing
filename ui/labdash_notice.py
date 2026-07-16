@@ -405,11 +405,12 @@ def _welcome_panel_html() -> str:
     </div>
     <h1>LabDash has a new home</h1>
     <div class="msg">
-      <p>Hi team, we&rsquo;ve rebuilt the dashboard as its own standalone app, so it is
-         faster, more secure, and ready for new features. The new home is
-         <span class="inline-url">labdash.micbask.com</span>.</p>
-      <p>If you run into any access issues, reach out to the Ops team or me and we&rsquo;ll
-         get you set up on the new site. Thanks!</p>
+      <p>Hi team, please bookmark <span class="inline-url">labdash.micbask.com</span>
+         and go there directly from now on &mdash; that&rsquo;s the dashboard&rsquo;s
+         permanent home.</p>
+      <p>This page is only a temporary signpost and will be retired on
+         July&nbsp;20,&nbsp;2026. Please don&rsquo;t keep using it &mdash; update your
+         bookmark today so you don&rsquo;t lose access.</p>
       <p class="sig">Michael</p>
     </div>
     <div class="address-row">
@@ -432,11 +433,6 @@ def _welcome_panel_html() -> str:
         </svg>
         <span class="copy-label">Copy address</span>
       </a>
-    </div>
-    <div class="foot">
-      Tip: bookmark <span class="foot-url">labdash.micbask.com</span> and go there
-      directly from now on &mdash; this page will be retired
-      <span class="foot-date">July&nbsp;20,&nbsp;2026</span>.
     </div>
   </main>
 </div>
